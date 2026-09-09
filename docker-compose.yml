@@ -26,12 +26,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-erp_dev}
       # Deterministic collation, so index ordering does not depend on the host locale.
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+      # The restricted role the API connects as, created by the init script below.
+      # Contract section 7.1: the application never connects as the owner.
+      APP_DB_USER: ${APP_DB_USER:-erp_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-erp_app_local_dev}
     ports:
       # Bound to loopback, never 0.0.0.0. Section 15.6 keeps the database off the network,
       # and this matches the loopback default the API itself uses for HOST.
       - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Runs once, on first initialisation of the volume. Use `npm run db:reset` after
+      # changing anything in here.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # Lets `docker compose up --wait` block until the database actually accepts
       # connections, rather than until the container merely exists.

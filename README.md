@@ -37,6 +37,12 @@ section 15.3 allows and what keeps the edit cycle fast. `npm run db:down` stops 
 There is no application schema yet. `npm run db:up` gives you an empty database; migrations,
 tables and everything that uses them belong to the next increment.
 
+The database has two roles, which contract sections 2.4 and 7.1 require. `erp` owns the database
+and runs migrations. `erp_app` is what the API connects as: it owns nothing, has no DDL rights,
+and cannot bypass row level security, so a table owner can never be exempt from its own policies.
+The roles are created by `docker/postgres/init/01-roles.sh`, which runs only when the volume is
+first initialised. After changing it, run `npm run db:reset` rather than `npm run db:up`.
+
 ### Environment variables
 
 Nothing here is a secret. Production values come from a managed secret store and are injected at
@@ -44,10 +50,12 @@ runtime, per contract sections 14.8 and 15.5.
 
 | Variable | Default | Used by |
 |---|---|---|
-| `POSTGRES_USER` | `erp` | Compose |
+| `POSTGRES_USER` | `erp` | Compose. Owns the database and runs migrations. |
 | `POSTGRES_PASSWORD` | `erp_local_dev` | Compose |
 | `POSTGRES_DB` | `erp_dev` | Compose |
 | `POSTGRES_PORT` | `5432` | Compose, published on `127.0.0.1` only |
+| `APP_DB_USER` | `erp_app` | Compose. The restricted role the API connects as. |
+| `APP_DB_PASSWORD` | `erp_app_local_dev` | Compose |
 | `NODE_ENV` | `development` | API |
 | `PORT` | `3000` | API |
 | `HOST` | `127.0.0.1` | API. A container must set `0.0.0.0` to be reachable. |
