@@ -225,6 +225,28 @@ covers it, contradicts this clause.
 `BYPASSRLS`, or a table owner, is exempt from its own policies, so the second layer would be
 silently absent. Migrations run as a different role from the application, per section 7.1.
 
+*Added 2026-09-09, ruling on how policies learn the current tenant.*
+
+`[DEC]` The tenant and company context reaches the database as transaction local settings, set
+with `SET LOCAL` at the start of the transaction from the values resolved out of the session.
+Policies compare against those settings. Nothing about the context is ever taken from a
+statement the client influenced.
+
+`[REQ]` **Every scoped query runs inside a transaction.** This follows from the mechanism and is
+not optional: `SET LOCAL` outside a transaction does nothing, the setting would then be empty,
+and a policy comparing against an empty setting fails open unless it is written to refuse. Two
+consequences that must both hold:
+
+- The policy treats a missing or empty context as denying everything, never as matching
+  everything. This is the difference between a bug that returns nothing and a bug that returns
+  another customer's ledger.
+- A connection is never shared between requests mid-transaction, so context cannot leak from one
+  actor to the next. The pool must be used per transaction, not per process.
+
+`[REQ]` A test proves the failure mode directly: a query issued with no context set returns zero
+rows rather than all rows. Section 14.9 requires the absence of a control to be tested, and this
+is the case where getting it backwards is worst.
+
 The three options and their real trade-offs:
 
 | Option | Isolation | Cost |
@@ -300,6 +322,19 @@ else.
 `[REQ]` A company administrator may only grant capabilities from the catalogue, and may never
 grant a capability they do not themselves hold. This is the privilege escalation rule from
 section 6.6, applied inside the tenant boundary.
+
+*Added 2026-09-09, ruling on how the catalogue is stored.*
+
+`[DEC]` A granted capability is stored as its permission string, validated against the compiled
+catalogue on write. There is no `permissions` table. A seeded table with a foreign key would
+give referential integrity at the cost of a second source of truth for something the code
+already defines, which section 1.4 and the no-duplication rule both refuse.
+
+`[REQ]` Two checks replace the foreign key, and both are required because they catch different
+failures. On write, a permission absent from the catalogue is rejected, so configuration cannot
+invent a capability. At startup, every stored permission is checked against the catalogue and a
+mismatch fails loudly, so a capability removed in a release surfaces immediately instead of
+silently granting nothing to whoever still holds it.
 
 ### 2.8 Platform administration is not company administration
 
@@ -505,18 +540,40 @@ draft that was never confirmed, and even then it is recorded in the audit log.
 *Amended 2026-09-09. This was previously an assumption pending an open question. The product
 goal is now confirmed, so it is a requirement.*
 
-`[REQ]` Every business table carries `tenant_id` and `company_id` from the first migration, and
-every query is scoped by both. See section 2.4 for the isolation strategy and section 2.2 for
-why the two identifiers are distinct.
+*Amended again 2026-09-09. The original wording said every business table without exception,
+which the global identity tables cannot satisfy. The exception is now named and closed rather
+than discovered per table.*
 
-`[REQ]` The scope columns are not nullable, and they are the leading columns of the indexes that
-serve list queries, so that scoping is cheap rather than an afterthought filter.
+`[REQ]` Every **tenant-scoped** table carries `tenant_id` and `company_id` from the first
+migration, and every query against it is scoped by both. See section 2.4 for the isolation
+strategy and section 2.2 for why the two identifiers are distinct.
 
-`[REQ]` No business table is reachable by a query that does not constrain both columns. Section
-6.3 describes the mechanism; this clause states the invariant.
+`[REQ]` On a tenant-scoped table the scope columns are not nullable, and they are the leading
+columns of the indexes that serve list queries, so that scoping is cheap rather than an
+afterthought filter.
 
-Reference tables that are genuinely global, meaning currency codes and country codes, are the
-only exception, and they are read only to the application.
+`[REQ]` No tenant-scoped table is reachable by a query that does not constrain both columns.
+Section 6.3 describes the mechanism; this clause states the invariant.
+
+**The global tables, which is a closed list.** Three identity tables sit outside the tenant
+boundary because section 2.6 ratified one account per person reaching every company they belong
+to. Forcing scope columns onto them would mean a user row per tenant, which is the model that
+ruling rejected.
+
+| Table | Why it is global |
+|---|---|
+| `tenants` | It is the boundary. It cannot be inside itself. |
+| `users` | One person, one account, one credential, per section 2.6 |
+| `sessions` | Belongs to a global user. Carries the active company as state rather than as scope. |
+
+`[REQ]` This list is closed. A new global table requires an amendment naming it here and saying
+why scope cannot apply, because "it is not really tenant data" is the reasoning behind every
+cross-tenant leak. Reference tables that are genuinely universal, meaning currency codes and
+country codes, remain a separate exception and are read only to the application.
+
+`[REQ]` A global table is not unprotected. `users` and `sessions` are reachable only through the
+authenticated actor's own identity, never by listing, and never by an identifier supplied by a
+client. Absence of a tenant column is not absence of authorization.
 
 ### 4.7 Indexing and growth
 
@@ -753,6 +810,18 @@ transaction id.
 
 The actor's role is captured as it was, not looked up later. Roles change, and an audit record
 that reports today's role for last year's action is misleading.
+
+*Amended 2026-09-09. Company cannot be present on every record, and pretending otherwise would
+have made the authentication events unrecordable.*
+
+`[REQ]` `tenant_id` and `company_id` are nullable on the audit table alone, because a failed
+login happens before any company is known and criterion 18 requires it to be audited anyway.
+The gap is narrowed by a check constraint rather than left open: they may be null only for the
+authentication actions, and must be present for everything else. A missing company on a
+document event is then a constraint violation, not a silent hole.
+
+`[REQ]` The audit table is the only table permitted this exemption. It is granted because the
+alternative is not auditing authentication, which is worse.
 
 ### 7.4 Two different logs
 
@@ -1675,3 +1744,7 @@ they are open.
 | 2026-09-09 | 4.2, 8.6, 16.2, 17.4 | Corrected six references left stale by the section 2 renumbering. 4.2 also gained `tenant_id`, which it had omitted while 4.6 required it. | Bookkeeping errors in the renumbering, and a genuine contradiction between 4.2 and 4.6 that the first migration would otherwise have followed |
 | 2026-09-09 | 2.4 | Tenant isolation ratified as shared schema with row level security as a mandatory second layer. The approval callout was removed and two clauses added: neither layer may stand alone, and the application role must not bypass row level security. | Open question 5 closed by the project lead |
 | 2026-09-09 | 7.1 | Audit hardening ratified as revoked grants on a separate restricted application role, rejecting the trigger alternative. Two database roles required from the first migration, in every environment. | Open question 7 closed by the project lead |
+| 2026-09-09 | 4.6 | Scope requirement narrowed from every business table to every tenant-scoped table, with `tenants`, `users` and `sessions` named as a closed global exception and still subject to authorization. | The blanket wording contradicted the one account per person ruling in 2.6 and could not be satisfied by the first migration |
+| 2026-09-09 | 7.3 | `tenant_id` and `company_id` made nullable on the audit table alone, constrained to the authentication actions. | A failed login precedes any company, and criterion 18 requires it audited |
+| 2026-09-09 | 2.4 | Row level security context ruled to be transaction local settings via `SET LOCAL`, requiring every scoped query to run in a transaction, policies to deny on empty context, and a test proving no context returns no rows. | The mechanism was unspecified and the default failure mode is the dangerous one |
+| 2026-09-09 | 2.7 | Granted capabilities stored as permission strings with no `permissions` table, validated on write and asserted against the catalogue at startup. | A seeded table would duplicate what the code already defines |
