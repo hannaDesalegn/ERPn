@@ -28,3 +28,11 @@ dist
 # Local assistant config
 .claude/
 CLAUDE.md
+
+# Local environment files (never commit real values)
+.env
+.env.*
+!.env.example
+
+# Test coverage
+coverage
