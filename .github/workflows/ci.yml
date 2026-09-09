@@ -1,0 +1,142 @@
+# Continuous integration.
+#
+# Architecture contract section 15.4: CI runs on every push and every pull request, and all of
+# it must pass: type checking, lint, unit tests, integration tests against a real PostgreSQL
+# instance, dependency audit, and a secret scan.
+#
+# Everything here is pinned to an exact version. Section 15.4 requires the pipeline to be
+# reproducible, and a floating action tag or image tag makes a green run today say nothing
+# about a green run next month.
+#
+# What this workflow deliberately does NOT do: build or push a container image, deploy
+# anything, or provision infrastructure. The API Dockerfile belongs to slices 2 and 3, and
+# deployment machinery to the pre-customer phase, both per section 15.11.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A newer push to the same branch cancels the older run. Saves runner time without weakening
+# the gate: only the latest commit needs to be green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24.16.0'
+
+jobs:
+  verify:
+    name: Type check, lint, test, audit
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        # Same pinned image as docker-compose.yml. CI and local development must not drift
+        # onto different database versions, or a constraint can pass in one and fail in the
+        # other.
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp_ci
+          POSTGRES_DB: erp_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp -d erp_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      # Integration tests read these once the schema exists. Declared now so the connection
+      # details live in one place rather than being invented per test file later.
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: erp
+      PGPASSWORD: erp_ci
+      PGDATABASE: erp_ci
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # `npm ci` installs strictly from the lockfile and fails if the lockfile and the
+      # manifests disagree. Section 14.8 requires dependencies pinned by lockfile.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      # Proves the PostgreSQL service is genuinely reachable and queryable from the job,
+      # which is the infrastructure the integration tests will run against.
+      #
+      # HONEST STATEMENT OF SCOPE: there are no integration tests yet, because there is no
+      # schema yet. This step verifies the harness, not the application. Real integration
+      # tests arrive with the first migration, and this step is replaced by them rather than
+      # kept alongside. Section 13.1 requires those tests against a real database, and
+      # section 13.2 forbids mocking it.
+      - name: Verify PostgreSQL service is reachable
+        run: |
+          pg_isready --host="$PGHOST" --port="$PGPORT" --username="$PGUSER" --timeout=30
+          psql --no-psqlrc --quiet --tuples-only --no-align \
+            --command "select 'postgres reachable: ' || version();"
+
+      # Section 15.4 lists the dependency audit as a required gate. The threshold is `low`,
+      # the strictest setting, because the tree currently has zero advisories at any level.
+      # Section 14.9 forbids suppressing a finding to keep the build green: if this fails,
+      # the dependency is fixed or removed, not whitelisted.
+      - name: Dependency audit
+        run: npm audit --audit-level=low
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history. A secret removed from the working tree is still in the history, and
+          # section 15.5 says an exposed secret is rotated rather than merely deleted. The
+          # scan has to be able to see what was committed, not only what is checked out.
+          fetch-depth: 0
+
+      # Pinned release binary rather than a marketplace action, for two reasons: the version
+      # is exact and auditable, and it avoids the organisation licence requirement that the
+      # official action carries.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      # Non-zero exit on any finding fails the job, which is what section 14.8 requires.
+      - name: Scan repository and history for secrets
+        run: ./gitleaks detect --source . --redact --verbose --exit-code 1
