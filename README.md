@@ -12,6 +12,14 @@ npm run build    # tsc -b && vite build
 
 **Stack:** Vite · React 19 · TypeScript (strict) · Tailwind v4 · React Router · TanStack Query
 
+> **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the binding architectural contract.** It defines
+> the target production system: backend and frontend boundaries, database principles,
+> authentication, authorization, auditability, inventory and accounting rules, concurrency,
+> idempotency, document lifecycle, testing, security and deployment. Read it before proposing or
+> implementing a feature. Section 15.1 lists every temporary behaviour in this repository and what
+> removes it; section 15.2 lists what must never be faked; section 16 defines the first vertical
+> slice. What follows below describes the frontend as it stands today.
+
 ---
 
 ## The two ideas the whole codebase rests on
