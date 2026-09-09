@@ -1,0 +1,46 @@
+# Local development backing services.
+#
+# Architecture contract section 15.3: local development is reproducible through Docker
+# Compose, and Compose owns the backing services while the developer may run the application
+# natively for a faster edit cycle. That is why only PostgreSQL is here and there is no API
+# service. The API Dockerfile belongs to slices 2 and 3 per section 15.11.
+#
+# Nothing here is production infrastructure. Production topology, secrets and TLS are section
+# 15.6 and are deliberately not modelled in this file.
+
+name: erp
+
+services:
+  postgres:
+    # Pinned to an exact patch, not `17` or `latest`, so that a rebuild months from now
+    # produces the same database. Section 15.4 requires the pipeline to be reproducible.
+    image: postgres:17.11-alpine
+    container_name: erp-postgres
+    restart: unless-stopped
+    environment:
+      # Local development values only. These are not secrets and have no production
+      # counterpart: production credentials come from the secret store per section 15.5.
+      # Override any of them in a local .env file, which is gitignored.
+      POSTGRES_USER: ${POSTGRES_USER:-erp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-erp_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-erp_dev}
+      # Deterministic collation, so index ordering does not depend on the host locale.
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    ports:
+      # Bound to loopback, never 0.0.0.0. Section 15.6 keeps the database off the network,
+      # and this matches the loopback default the API itself uses for HOST.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Lets `docker compose up --wait` block until the database actually accepts
+      # connections, rather than until the container merely exists.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:
+    name: erp-postgres-data

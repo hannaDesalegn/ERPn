@@ -10,10 +10,14 @@
     "dev": "npm run dev --workspace @erp/web",
     "dev:web": "npm run dev --workspace @erp/web",
     "dev:api": "npm run dev --workspace @erp/api",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait postgres",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "audit": "npm audit --audit-level=low"
   },
   "engines": {
     "node": ">=20"
