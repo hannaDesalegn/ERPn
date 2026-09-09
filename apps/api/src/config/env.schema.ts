@@ -20,6 +20,15 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
   /** Port the HTTP server binds to. */
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  /**
+   * Interface the HTTP server binds to.
+   *
+   * Defaults to loopback, which is the safe default: a developer machine does not expose the
+   * API to its local network by accident. A container must set this to 0.0.0.0 explicitly,
+   * because Fastify binds only to the given interface and a container that binds loopback is
+   * unreachable from outside itself. Explicit opt in rather than open by default.
+   */
+  HOST: z.string().min(1).default('127.0.0.1'),
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 });
 

@@ -109,6 +109,13 @@ constraints, common table expressions for ledger queries, and row level security
 all first class concerns here, and a query builder that stays close to SQL serves them better
 than an abstraction that hides them.
 
+`[DEC]` *Ratified 2026-09-09.* The NestJS HTTP adapter is Fastify, not Express. The reason is
+the dependency audit required by sections 14.8 and 15.4: the Express platform package depends
+on multer, which carries unpatched high severity advisories that npm overrides did not resolve,
+and the product has no upload surface to justify carrying it. Removing the dependency path was
+preferred over suppressing the finding. Fastify binds only to the interface it is given, so the
+API takes a `HOST` setting defaulting to loopback, and a container must set it explicitly.
+
 `[DEC]` Redis is introduced only where it earns its place, and not in slice 1. The likely uses
 are rate limiting counters, background job queues, and caching. Sessions stay in PostgreSQL
 until measurement shows a reason to move them, because a session store that can be queried and
@@ -1647,3 +1654,4 @@ they are open.
 | 2026-09-09 | 17.2, 17.3 | Tenant and company context moved into slice 1. Six isolation acceptance criteria added, numbered 12 to 17, and the remainder renumbered. | Company context cannot be retrofitted around an identity model built without it |
 | 2026-09-09 | 15 | Retitled from Deployment environments to Infrastructure and deployment. Thirteen principles recorded, existing clauses absorbed rather than duplicated. Section 15.11 bounds what each slice pulls in. | Infrastructure principles requested by the project lead, without expanding slice 1 |
 | 2026-09-09 | 14.9 | Security assurance progression added: five stages, each mapping controls to the sections that specify them. The undated penetration test in 14.8 became stage 5. | Security must be progressively testable rather than deferred to a review at the end |
+| 2026-09-09 | 1.2 | HTTP adapter ratified as Fastify rather than Express, and a HOST setting added defaulting to loopback. | The Express platform package carries unpatched multer advisories that npm overrides did not resolve; the dependency audit in 14.8 and 15.4 must pass without suppression |

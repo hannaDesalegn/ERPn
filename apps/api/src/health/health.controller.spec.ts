@@ -1,21 +1,24 @@
-import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 
 import { AppModule } from '../app.module.js';
 
 describe('Health endpoint', () => {
-  let app: INestApplication;
+  let app: NestFastifyApplication;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
 
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     // Mirrors main.ts so the test exercises the paths the application actually serves.
     app.setGlobalPrefix('api', { exclude: ['health'] });
     await app.init();
+    // Fastify builds its router lazily. Without this the underlying server is not yet
+    // listening and every request would 404 for the wrong reason.
+    await app.getHttpAdapter().getInstance().ready();
   });
 
   afterAll(async () => {

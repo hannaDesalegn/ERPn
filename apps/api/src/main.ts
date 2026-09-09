@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 
 import { AppModule } from './app.module.js';
 import type { Env } from './config/env.schema.js';
@@ -10,12 +11,19 @@ import type { Env } from './config/env.schema.js';
 /**
  * Process entry point.
  *
+ * Fastify rather than Express. The deciding factor was not performance: the Express platform
+ * package depends on multer, which carries unpatched denial of service advisories, and npm
+ * overrides did not resolve them in this workspace. Contract section 14.8 requires the
+ * dependency audit to pass, and section 14.9 says a control for a feature that does not exist
+ * should be handled by not carrying the dependency at all. This application has no upload
+ * surface, so the correct fix was to remove the dependency path rather than patch it.
+ *
  * The global prefix is `api`, matching what the web client already expects from
  * `services/client.ts`. Health is excluded from the prefix so that container and load
  * balancer probes can use the conventional `/health` path.
  */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
   app.setGlobalPrefix('api', { exclude: ['health'] });
 
@@ -25,10 +33,11 @@ async function bootstrap(): Promise<void> {
 
   const config = app.get(ConfigService<Env, true>);
   const port = config.get('PORT', { infer: true });
+  const host = config.get('HOST', { infer: true });
 
-  await app.listen(port);
+  await app.listen(port, host);
 
-  Logger.log(`Listening on port ${port}`, 'Bootstrap');
+  Logger.log(`Listening on ${host}:${port}`, 'Bootstrap');
 }
 
 bootstrap().catch((error: unknown) => {

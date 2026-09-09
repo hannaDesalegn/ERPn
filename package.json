@@ -17,8 +17,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "overrides": {
-    "multer": "^2.3.0"
   }
 }

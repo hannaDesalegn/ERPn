@@ -6,6 +6,7 @@ describe('validateEnv', () => {
 
     expect(env.NODE_ENV).toBe('development');
     expect(env.PORT).toBe(3000);
+    expect(env.HOST).toBe('127.0.0.1');
     expect(env.LOG_LEVEL).toBe('info');
   });
 
