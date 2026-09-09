@@ -436,12 +436,13 @@ at a database prompt. Constraints cannot.
 
 ```
 id             primary key
-company_id     legal entity scope, see 3.6
+tenant_id      tenant scope, see 4.6
+company_id     legal entity scope, see 4.6
 created_at     timestamptz
 created_by     user id
 updated_at     timestamptz
 updated_by     user id
-version        integer, for optimistic locking, see 9.1
+version        integer, for optimistic locking, see 10.1
 ```
 
 `[DEC]` Primary keys are UUIDv7. They are non sequential, so identifiers are not trivially
@@ -822,7 +823,7 @@ goods sold relieves at the product's static cost price, and valuation uses the s
 figure. Three bases in one flow.
 
 `[DEC]` Moving average is implemented first, with the cost recalculated on each receipt inside
-the receipt transaction. FIFO is a later addition and the value entry model in 7.3 is what
+the receipt transaction. FIFO is a later addition and the value entry model in 8.3 is what
 makes it addable without restructuring.
 
 ### 8.7 Future
@@ -1460,7 +1461,7 @@ The following must be real from the moment they exist at all. A convincing simul
 of them is worse than their absence, because it looks finished.
 
 - authentication and session management
-- authorization enforcement, at all three levels
+- authorization enforcement, at all four dimensions
 - audit record generation
 - journal entry balancing
 - stock movement creation
@@ -1598,8 +1599,8 @@ Each maps to a negative requirement in section 2.10.
 
 ### 17.4 Definition of done
 
-All twenty two criteria pass in continuous integration. The web application runs against the
-API with no mock identity anywhere in its path. Section 15.1 is updated to strike the rows this
+All twenty eight criteria pass in continuous integration. The web application runs against the
+API with no mock identity anywhere in its path. Section 16.1 is updated to strike the rows this
 slice removed. Any decision that changed during implementation is recorded in section 18.2.
 
 ### 17.5 The two slices after it, for context
@@ -1655,3 +1656,4 @@ they are open.
 | 2026-09-09 | 15 | Retitled from Deployment environments to Infrastructure and deployment. Thirteen principles recorded, existing clauses absorbed rather than duplicated. Section 15.11 bounds what each slice pulls in. | Infrastructure principles requested by the project lead, without expanding slice 1 |
 | 2026-09-09 | 14.9 | Security assurance progression added: five stages, each mapping controls to the sections that specify them. The undated penetration test in 14.8 became stage 5. | Security must be progressively testable rather than deferred to a review at the end |
 | 2026-09-09 | 1.2 | HTTP adapter ratified as Fastify rather than Express, and a HOST setting added defaulting to loopback. | The Express platform package carries unpatched multer advisories that npm overrides did not resolve; the dependency audit in 14.8 and 15.4 must pass without suppression |
+| 2026-09-09 | 4.2, 8.6, 16.2, 17.4 | Corrected six references left stale by the section 2 renumbering. 4.2 also gained `tenant_id`, which it had omitted while 4.6 required it. | Bookkeeping errors in the renumbering, and a genuine contradiction between 4.2 and 4.6 that the first migration would otherwise have followed |
