@@ -1136,9 +1136,92 @@ continuous integration fails on a detected secret.
 `[REQ]` Logs are structured and correlated by request id, and never contain credentials,
 session identifiers, or personal data beyond what is necessary.
 
-`[FUT]` An independent penetration test before production launch.
-
 `[FUT]` Shipping security relevant events to a monitoring system.
+
+### 14.9 Security assurance progression
+
+*Added 2026-09-09 at the project lead's request.*
+
+`[DEC]` Security is built and proven in stages, and each stage leaves the application more
+testable than it was. It is not a phase before launch and it is not a review the security team
+performs on a finished system.
+
+The reason is practical rather than ideological. A penetration test against a system with no
+authorization tests finds the same defects the developers would have found, at a much higher
+cost and much later. The security team's time is worth spending on what automated tests cannot
+reach: chained abuse, business logic, and assumptions nobody wrote down. Getting there requires
+the ordinary controls to be already covered by tests we run ourselves.
+
+`[REQ]` A stage is not complete when its control exists. It is complete when a test proves the
+control works and a test proves the absence of the control fails. Both directions, because a
+test that only asserts the happy path passes equally well when the control is deleted.
+
+**Stage 1, foundation.** Concurrent with the current work.
+
+| Control | Where it is specified |
+|---|---|
+| Configuration validation, failing fast | 15.2 |
+| Dependency audit in continuous integration | 14.8, 15.4 |
+| Health endpoint | 15.11 |
+| Continuous integration foundation | 15.4, criterion 27 |
+
+**Stage 2, database and security foundation.** Slice 1 and the first migration.
+
+| Control | Where it is specified |
+|---|---|
+| Tenant isolation | 2.4, 2.5, 2.10, 4.6 |
+| Authorization, all four dimensions | 6.1 to 6.4 |
+| Database permissions and least privilege roles | 7.1, 15.6 |
+| Audit log protection, append only | 7.1 |
+| Transaction boundaries | 12.2 |
+| Input validation at the boundary | 14.2, 14.3 |
+
+**Stage 3, application.** Slices 1 to 3, as each surface appears.
+
+| Control | Where it is specified |
+|---|---|
+| Authentication and session security | 5.1 to 5.5 |
+| Role based access control and permissions | 6.2, 2.7 |
+| Object level authorization, meaning IDOR and BOLA | 6.3, 2.10 |
+| Injection protection | 14.2 |
+| CSRF, CORS and security headers | 14.4, 14.5 |
+| Rate limiting | 14.7 |
+| Business logic abuse rules | 14.7 |
+| File upload controls, only if uploads are introduced | 14.6 |
+
+`[DEC]` File upload controls are conditional. The product has no upload surface today, and the
+correct handling of a control for a feature that does not exist is to not carry the dependency
+that implements it. See the adapter decision in section 1.2.
+
+**Stage 4, before production.** Not before there is something worth deploying.
+
+| Control | Where it is specified |
+|---|---|
+| TLS and HTTPS | 15.6 |
+| Secrets management | 15.5 |
+| Logging and monitoring | 15.10 |
+| Backup and tested restore | 15.9 |
+| Production environment isolation | 15.2 |
+| Security gates in the delivery pipeline | 15.4 |
+
+**Stage 5, independent security review.** After stage 4, not before.
+
+| Activity | Note |
+|---|---|
+| Penetration testing, OWASP style | Replaces the `[FUT]` in 14.8, which is now stage 5 rather than undated |
+| Authenticated authorization testing | Our matrix test in 13.1 is the floor, not the ceiling |
+| Tenant boundary testing | The negative requirements in 2.10 are the brief |
+| API abuse testing | Business logic, sequencing, and rate limits |
+| Dependency and container scanning | Continuous, not a one off |
+| Remediation and retest | A finding is closed by a retest, never by a claim |
+
+`[REQ]` The security team is given the architecture contract, the authorization matrix, the
+tenant boundary tests and the threat notes, not just a URL. A reviewer who has to rediscover
+the intended boundaries spends their budget on discovery rather than on finding where the
+boundaries leak.
+
+`[REQ]` No stage is skipped to reach a deadline. A stage may be descoped explicitly, recorded
+in section 18.2 with what was dropped and why, but it is never quietly passed over.
 
 ---
 
@@ -1563,3 +1646,4 @@ they are open.
 | 2026-09-09 | 6.1 | Authorization went from three dimensions to four. Tenant and company scope added as the outermost, evaluated first, not grantable by any role. | Multi-tenancy makes company scope an authorization boundary rather than a data filter |
 | 2026-09-09 | 17.2, 17.3 | Tenant and company context moved into slice 1. Six isolation acceptance criteria added, numbered 12 to 17, and the remainder renumbered. | Company context cannot be retrofitted around an identity model built without it |
 | 2026-09-09 | 15 | Retitled from Deployment environments to Infrastructure and deployment. Thirteen principles recorded, existing clauses absorbed rather than duplicated. Section 15.11 bounds what each slice pulls in. | Infrastructure principles requested by the project lead, without expanding slice 1 |
+| 2026-09-09 | 14.9 | Security assurance progression added: five stages, each mapping controls to the sections that specify them. The undated penetration test in 14.8 became stage 5. | Security must be progressively testable rather than deferred to a review at the end |
