@@ -51,7 +51,7 @@ Three rules govern it.
 12. Document lifecycle
 13. Testing
 14. Security
-15. Deployment environments
+15. Infrastructure and deployment
 16. Current state: what is temporary, and what must never be faked
 17. First vertical slice
 18. Open questions and amendment log
@@ -1142,34 +1142,206 @@ session identifiers, or personal data beyond what is necessary.
 
 ---
 
-## 15. Deployment environments
+## 15. Infrastructure and deployment
+
+*Expanded 2026-09-09 from a shorter section titled Deployment environments. Thirteen principles
+were recorded at the project lead's request. The previous clauses were absorbed rather than
+duplicated, so each rule still appears exactly once.*
+
+These are principles, not a work item. Section 15.11 states the minimum each slice actually
+needs, so that infrastructure does not become a project that outruns the ERP it exists to serve.
+
+### 15.1 The principles, and where each one is stated
+
+| # | Principle | Tag | Detail |
+|---|---|---|---|
+| 1 | The application must be containerizable | `[REQ]` | 15.3 |
+| 2 | Local development is reproducible through Docker | `[DEC]` | 15.3 |
+| 3 | CI runs tests, type checks and security checks automatically | `[REQ]` | 15.4 |
+| 4 | Production deployments come from a controlled pipeline | `[REQ]` | 15.4 |
+| 5 | Production secrets are never stored in the repository | `[REQ]` | 15.5 |
+| 6 | Production PostgreSQL has automated backups | `[REQ]` | 15.9 |
+| 7 | Production and non-production environments are isolated | `[REQ]` | 15.2 |
+| 8 | HTTPS is mandatory in production | `[REQ]` | 15.6 |
+| 9 | Application logs and security and audit events are observable | `[REQ]` | 15.10 |
+| 10 | The architecture supports cloud deployment | `[DEC]` | 15.6 |
+| 11 | Kubernetes is not required initially | `[DEC]` | 15.6 |
+| 12 | The ERP core stays a modular monolith until scale proves otherwise | `[DEC]` | 15.7 |
+| 13 | Infrastructure is replaceable without changing business logic | `[DEC]` | 15.8 |
+
+### 15.2 Environments
 
 `[DEC]` Four environments: local, continuous integration, staging, production. Staging mirrors
-production topology and runs anonymised or synthetic data, never a copy of live personal data.
+production topology.
+
+`[REQ]` Production and non-production are isolated. Separate databases, separate credentials,
+separate secret stores, separate object storage, and no network path from one to the other. A
+non-production process must not be able to reach production data even by misconfiguration.
+
+`[REQ]` Non-production never holds a copy of live customer data. Staging runs synthetic or
+anonymised data. In a multi-tenant product this is sharper than usual: a staging copy of
+production is a copy of every customer's books at once.
 
 `[REQ]` Configuration comes from the environment. A single configuration module reads and
 validates it at startup and fails fast on anything missing. No environment branching scattered
 through the code.
 
-`[REQ]` Migrations run as a separate gated deployment step, never automatically at application
-start, so that a rolling restart cannot race a schema change.
+### 15.3 Containers and local development
+
+`[REQ]` Every deployable process is containerizable, building to an image from a Dockerfile in
+the repository, with no dependency on a developer's machine state.
+
+`[DEC]` Local development is reproducible through Docker Compose. One command brings up the
+dependencies a developer needs, starting with PostgreSQL.
+
+`[DEC]` Running the application itself in a container locally is optional. Compose owns the
+backing services; the developer may run the application natively for a faster edit cycle. The
+container image is what CI builds and what production runs, so the image is exercised on every
+pipeline run rather than only at release.
+
+`[REQ]` The same image, built once, is what runs in every environment. Environments differ by
+configuration, never by build.
+
+### 15.4 Delivery pipeline
+
+`[REQ]` Continuous integration runs on every push and every pull request, and all of it must
+pass: type checking, lint, unit tests, integration tests against a real PostgreSQL instance,
+dependency audit, and a secret scan.
+
+`[REQ]` Production deployments come only from the pipeline, from a reviewed commit on the main
+branch. No deployment from a developer machine, ever. The pipeline is the only credential holder
+that can reach production.
+
+`[REQ]` Migrations run as a separate gated step, never automatically at application start, so
+that a rolling restart cannot race a schema change.
 
 `[REQ]` Schema changes are backward compatible across a deployment, using expand then contract,
-so that old and new application versions can run simultaneously during a rollout.
+so old and new application versions can run simultaneously during a rollout.
 
-`[REQ]` Backups are automated, encrypted, and retained to a stated schedule. **Restores are
-tested on a schedule.** An untested backup is not a backup.
+`[REQ]` Every deployment is traceable to a commit, and rollback is a supported, rehearsed
+operation rather than an improvisation.
 
-`[REQ]` Observability covers three layers: structured logs, metrics and traces for the
-technical layer; error tracking; and business level alerts for the things that matter here,
-meaning a trial balance that does not balance, control account drift, a failed posting, and a
-stock balance that disagrees with its ledger.
+`[FUT]` Progressive delivery, meaning canary or blue and green rollouts, once uptime
+expectations justify the added machinery.
 
-`[REQ]` The database is not reachable from the public internet. TLS everywhere. Least privilege
-database roles, with the application role holding no `UPDATE` or `DELETE` on the audit table
-per section 7.1.
+### 15.5 Configuration and secrets
+
+`[REQ]` No secret is ever committed. This is stated once, in section 14.8, together with the
+requirement that continuous integration fails on a detected secret.
+
+`[REQ]` Production secrets live in a managed secret store, are injected at runtime, are
+different in every environment, and are rotatable without a code change.
+
+`[REQ]` A secret that has been exposed is rotated, not merely removed from the working tree. Git
+history keeps what was committed.
+
+### 15.6 Production platform, cloud and HTTPS
+
+`[REQ]` HTTPS is mandatory in production. TLS terminates at the edge, HTTP Strict Transport
+Security is sent, and plaintext is acceptable only on a private network segment between the edge
+and the application.
+
+`[REQ]` The database is not reachable from the public internet. Least privilege database roles,
+with the application role holding no `UPDATE` or `DELETE` on the audit table, per section 7.1.
+
+`[DEC]` The architecture supports cloud deployment, which means something specific rather than
+aspirational: application processes are stateless, all state lives in PostgreSQL, object storage
+or a cache, configuration arrives from the environment, and capacity is added by running more
+processes rather than a bigger one.
+
+`[DEC]` Kubernetes is not required initially and will not be adopted for its own sake. A managed
+container platform, or a virtual machine running Compose, is sufficient for a single deployable
+with one database. The trigger for revisiting is concrete: several independently scaled
+processes, or availability requirements a single platform's primitives cannot meet.
 
 `[FUT]` High availability replicas, and stated recovery time and recovery point objectives.
+
+### 15.7 The ERP core is a modular monolith
+
+`[DEC]` One deployable, partitioned internally by business module: identity, sales, purchasing,
+inventory, accounting. Modules are boundaries in the code, not network boundaries.
+
+The reason is stated in section 12.2 and is worth repeating here. The ERP core is one
+transactional consistency domain. Posting an invoice writes the document, the ledger entries,
+the audit record and the number allocation in a single transaction. Splitting that across
+services replaces transactions with sagas and eventual consistency, and produces books that
+cannot be reconciled. That is the failure this decision exists to prevent.
+
+`[REQ]` A module never reads or writes another module's tables directly. It calls the owning
+module's service interface. This is what makes the boundaries real rather than decorative, and
+it is enforced by an import rule in continuous integration rather than by good intentions.
+
+`[DEC]` What may be split out first, if anything ever is: work with genuinely different scaling
+or availability characteristics, meaning document rendering, bulk import, third party
+integrations, and heavy reporting. Those are peripheral. The transactional core is the last
+thing to split, not the first.
+
+`[REQ]` Any proposal to split a service states what scale or operational requirement forces it,
+and how transactional integrity is preserved across the new boundary. Without both, the answer
+is no.
+
+### 15.8 Replaceable infrastructure, and the limit of that idea
+
+`[DEC]` Infrastructure concerns sit behind interfaces owned by the application, so the provider
+can change without business logic changing. That applies to the session store, object storage,
+mail delivery, the job queue, the rate limiter, and the secret store.
+
+`[DEC]` It explicitly does **not** apply to the database. The system depends deliberately on
+PostgreSQL specifics: deferred constraints for the journal balance invariant, row level security
+for tenant isolation, `SELECT ... FOR UPDATE` for reservation, exact numeric types for money,
+and JSONB for audit diffs. Section 4.1 requires integrity to live in the database, and a
+database agnostic abstraction would forfeit exactly the guarantees that clause exists to obtain.
+
+This is worth stating plainly because the two ideas look similar and are not. Replaceable
+infrastructure means the hosting and the peripheral services are not load bearing. It does not
+mean writing a lowest common denominator data layer. Nobody should build a portability layer
+over SQL in this codebase.
+
+### 15.9 Backups and recovery
+
+`[REQ]` Production PostgreSQL has automated backups: encrypted, retained to a stated schedule,
+stored separately from the primary, with point in time recovery.
+
+`[REQ]` Restores are tested on a schedule. An untested backup is not a backup.
+
+`[REQ]` A consequence of the shared schema decision in section 2.4 must be planned for rather
+than discovered: restoring one tenant's data does not fall out of a database level restore. If a
+single customer needs their data recovered without affecting others, that is an application
+level export and import path, and it has to be built. Recording it here so the cost of section
+2.4 is visible where recovery is discussed.
+
+### 15.10 Observability
+
+`[REQ]` Observability covers three layers: structured logs, metrics and traces for the technical
+layer; error tracking; and business level alerts for what matters here, meaning a trial balance
+that does not balance, control account drift, a failed posting, and a stock balance that
+disagrees with its ledger.
+
+`[REQ]` Logs are structured, correlated by request id, and carry the tenant and company so an
+incident can be scoped to a customer. They never contain credentials, session identifiers or
+personal data beyond what is necessary, per section 14.8.
+
+`[REQ]` Security and audit events are observable as a first class stream, not by reading
+application logs. Failed authentication, lockouts, permission changes, company switches, and any
+cross tenant access by platform administration are queryable and alertable.
+
+`[FUT]` Shipping audit and security events to external monitoring or write once storage, already
+recorded in sections 7.5 and 14.8.
+
+### 15.11 What each slice actually needs
+
+`[DEC]` This section adds no acceptance criteria to slice 1. The criteria in section 17.3 are
+unchanged by it.
+
+| Slice | Infrastructure it pulls in |
+|---|---|
+| 1, identity | Docker Compose running PostgreSQL for local and CI. The CI workflow already required by criterion 27. Nothing else. |
+| 2 to 3, documents and posting | A Dockerfile for the API, built and exercised in CI. |
+| Before first customer | Staging environment, deployment pipeline, secret store, TLS, backups with a tested restore, observability and alerting. |
+
+`[DEC]` No Kubernetes, no cloud provisioning, no production pipeline and no deployment tooling
+during slice 1. Building deployment machinery before there is something worth deploying is how
+infrastructure becomes the project.
 
 ---
 
@@ -1390,3 +1562,4 @@ they are open.
 | 2026-09-09 | 4.6 | Upgraded from `[DEC]` to `[REQ]`. Now requires `tenant_id` alongside `company_id`, non nullable, leading index columns. | Tenant isolation is no longer optional |
 | 2026-09-09 | 6.1 | Authorization went from three dimensions to four. Tenant and company scope added as the outermost, evaluated first, not grantable by any role. | Multi-tenancy makes company scope an authorization boundary rather than a data filter |
 | 2026-09-09 | 17.2, 17.3 | Tenant and company context moved into slice 1. Six isolation acceptance criteria added, numbered 12 to 17, and the remainder renumbered. | Company context cannot be retrofitted around an identity model built without it |
+| 2026-09-09 | 15 | Retitled from Deployment environments to Infrastructure and deployment. Thirteen principles recorded, existing clauses absorbed rather than duplicated. Section 15.11 bounds what each slice pulls in. | Infrastructure principles requested by the project lead, without expanding slice 1 |
