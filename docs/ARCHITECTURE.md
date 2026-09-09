@@ -210,13 +210,20 @@ permission.
 
 ### 2.4 Tenant isolation strategy
 
-> **This decision requires explicit approval before the schema is written.** It is the single
-> most consequential choice in the system, and the reference systems do not agree with the
-> recommendation below.
+`[DEC]` *Ratified 2026-09-09, closing open question 5.* A shared schema, with `tenant_id` and
+`company_id` on every business table, mandatory scoping in the data access layer, and PostgreSQL
+row level security as a second, database enforced layer.
 
-`[DEC]` Recommended: a shared schema, with `tenant_id` and `company_id` on every business table,
-mandatory scoping in the data access layer, and PostgreSQL row level security as a second,
-database enforced layer.
+`[REQ]` Row level security does not replace application scoping. It is the second of two layers,
+and neither is permitted to stand alone. The full path is: request, server side session, tenant
+and company context, scoped repository, query, row level security policy, data. The repository
+layer is what makes an unscoped query unconstructible; row level security is what catches the
+case where that failed. A change that removes either layer, on the grounds that the other one
+covers it, contradicts this clause.
+
+`[REQ]` The application connects as a role that row level security applies to. A role with
+`BYPASSRLS`, or a table owner, is exempt from its own policies, so the second layer would be
+silently absent. Migrations run as a different role from the application, per section 7.1.
 
 The three options and their real trade-offs:
 
@@ -715,9 +722,18 @@ can never exist without its change.
 `[REQ]` The actor is taken from the authenticated session. Never from a request body, a
 header, or any client supplied value.
 
-`[REQ]` The audit table is append only, enforced by database grants: the application role
-holds `INSERT` and `SELECT` and nothing else. This is a grant, not a convention, so that
-application code cannot revise history even by mistake.
+`[REQ]` *Ratified 2026-09-09, closing open question 7.* The audit table is append only, enforced
+by database grants: the application role holds `INSERT` and `SELECT` on it and nothing else. This
+is a grant, not a convention, so that application code cannot revise history even by mistake. The
+trigger alternative was rejected because a trigger is application adjacent logic that a superuser
+or a migration can disable, whereas a missing grant is enforced by the database regardless of what
+the connecting code attempts.
+
+`[REQ]` This requires two database roles from the first migration: an owning role that runs
+migrations and holds DDL rights, and a restricted application role that the API connects as. The
+application role never owns a table, because an owner can always grant itself back what was
+revoked. Local development and continuous integration both use the two role setup, so that a
+grant mistake fails in development rather than in production.
 
 ### 7.2 Structured, not preformatted
 
@@ -1630,6 +1646,8 @@ they are open.
 |---|---|---|---|
 | 1 | Will the system serve more than one legal entity? | Yes, and more than one independent customer. Multi-tenancy is a core requirement. See section 2. | 2026-09-09 |
 | 3 | Server framework and query layer. | React, Vite, NestJS, PostgreSQL, Drizzle. Redis where it earns its place, not in slice 1. See section 1.2. | 2026-09-09 |
+| 5 | Tenant isolation strategy. | Shared schema with `tenant_id` and `company_id`, mandatory application scoping, and row level security as a second enforcement layer. Neither layer stands alone. See section 2.4. | 2026-09-09 |
+| 7 | Audit hardening mechanism. | A separate restricted application role whose grants do not permit `UPDATE` or `DELETE` on the audit table. Two roles from the first migration. See section 7.1. | 2026-09-09 |
 
 **Open**
 
@@ -1637,9 +1655,7 @@ they are open.
 |---|---|---|---|
 | 2 | Is single sign on a requirement, now or foreseeably? | No, but the seam exists. `external_subject_id` on the user table. | Now larger than before. In a multi-tenant product, single sign on is usually per tenant, so a customer brings their own identity provider. That makes it a tenant configuration domain rather than a global switch. |
 | 4 | Which jurisdictions issue invoices, and do any require gapless numbering? | Assume at least one does, per section 10.4. | Determines the default sequence strategy. Now per tenant configuration rather than a single global choice. |
-| 5 | **Tenant isolation strategy.** Shared schema, schema per tenant, or database per tenant? | Shared schema with `tenant_id`, mandatory scoping, and row level security as a second layer. See section 2.4. | Blocks the first migration. Everything else in slice 1 can proceed without it. |
 | 6 | Money precision and transport. | `NUMERIC(19,4)` for amounts, `NUMERIC(19,6)` for unit prices, decimal strings over the wire. See section 4.3. | Blocks the contracts package and the frontend money migration, not the identity schema. |
-| 7 | Audit hardening mechanism. | Revoked grants on a separate application role. A trigger is the simpler alternative. See section 7.1. | Determines whether local development needs two database roles. |
 | 8 | Does a tenant ever need more than one company in the first release? | No. Schema carries both identifiers; the UI exposes one company per tenant. | If yes, company switching and per company configuration surface earlier than planned. |
 
 ### 18.2 Amendment log
@@ -1657,3 +1673,5 @@ they are open.
 | 2026-09-09 | 14.9 | Security assurance progression added: five stages, each mapping controls to the sections that specify them. The undated penetration test in 14.8 became stage 5. | Security must be progressively testable rather than deferred to a review at the end |
 | 2026-09-09 | 1.2 | HTTP adapter ratified as Fastify rather than Express, and a HOST setting added defaulting to loopback. | The Express platform package carries unpatched multer advisories that npm overrides did not resolve; the dependency audit in 14.8 and 15.4 must pass without suppression |
 | 2026-09-09 | 4.2, 8.6, 16.2, 17.4 | Corrected six references left stale by the section 2 renumbering. 4.2 also gained `tenant_id`, which it had omitted while 4.6 required it. | Bookkeeping errors in the renumbering, and a genuine contradiction between 4.2 and 4.6 that the first migration would otherwise have followed |
+| 2026-09-09 | 2.4 | Tenant isolation ratified as shared schema with row level security as a mandatory second layer. The approval callout was removed and two clauses added: neither layer may stand alone, and the application role must not bypass row level security. | Open question 5 closed by the project lead |
+| 2026-09-09 | 7.1 | Audit hardening ratified as revoked grants on a separate restricted application role, rejecting the trigger alternative. Two database roles required from the first migration, in every environment. | Open question 7 closed by the project lead |
