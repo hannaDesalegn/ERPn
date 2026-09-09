@@ -88,19 +88,29 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Proves the PostgreSQL service is genuinely reachable and queryable from the job,
-      # which is the infrastructure the integration tests will run against.
-      #
-      # HONEST STATEMENT OF SCOPE: there are no integration tests yet, because there is no
-      # schema yet. This step verifies the harness, not the application. Real integration
-      # tests arrive with the first migration, and this step is replaced by them rather than
-      # kept alongside. Section 13.1 requires those tests against a real database, and
-      # section 13.2 forbids mocking it.
-      - name: Verify PostgreSQL service is reachable
-        run: |
-          pg_isready --host="$PGHOST" --port="$PGPORT" --username="$PGUSER" --timeout=30
-          psql --no-psqlrc --quiet --tuples-only --no-align \
-            --command "select 'postgres reachable: ' || version();"
+      - name: Wait for PostgreSQL
+        run: pg_isready --host="$PGHOST" --port="$PGPORT" --username="$PGUSER" --timeout=30
+
+      # Runs the same script Compose runs on first boot, against the CI service container.
+      # Reusing the script rather than repeating the SQL is deliberate: two copies of a
+      # security boundary drift, and the one that drifts is always the one nobody tests.
+      - name: Create the restricted application role
+        env:
+          # The script speaks the names the postgres image uses, so CI supplies them too
+          # rather than the script learning a second set of names for one caller.
+          POSTGRES_USER: erp
+          POSTGRES_DB: erp_ci
+          APP_DB_USER: erp_app
+          APP_DB_PASSWORD: erp_app_ci
+        run: sh ./docker/postgres/init/01-roles.sh
+
+      # Integration tests against a real PostgreSQL, as section 13.1 requires and section
+      # 13.2 insists on. They connect as the restricted application role, so they also prove
+      # the two role separation ratified in sections 2.4 and 7.1 actually holds.
+      - name: Integration tests
+        env:
+          DATABASE_URL: postgresql://erp_app:erp_app_ci@localhost:5432/erp_ci
+        run: npm run test:int
 
       # Section 15.4 lists the dependency audit as a required gate. The threshold is `low`,
       # the strictest setting, because the tree currently has zero advisories at any level.

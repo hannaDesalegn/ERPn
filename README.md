@@ -24,11 +24,14 @@ Requires Node 24 and Docker. The repository is an npm workspace: `apps/web` is t
 application, `apps/api` is the NestJS backend.
 
 ```bash
-npm install      # installs both workspaces
-npm run db:up    # starts PostgreSQL and waits until it accepts connections
-npm run dev:api  # http://localhost:3000, health at http://localhost:3000/health
-npm run dev      # http://localhost:5173
+npm install       # installs both workspaces
+npm run db:up     # starts PostgreSQL and waits until it accepts connections
+npm run dev:api   # http://localhost:3000
+npm run dev       # http://localhost:5173
 ```
+
+The API needs `DATABASE_URL`, which has no default. Copy `apps/api/.env.example` to
+`apps/api/.env` before `npm run dev:api`.
 
 Compose owns the backing services and the applications run natively, which is what contract
 section 15.3 allows and what keeps the edit cycle fast. `npm run db:down` stops the database and
@@ -42,6 +45,26 @@ and runs migrations. `erp_app` is what the API connects as: it owns nothing, has
 and cannot bypass row level security, so a table owner can never be exempt from its own policies.
 The roles are created by `docker/postgres/init/01-roles.sh`, which runs only when the volume is
 first initialised. After changing it, run `npm run db:reset` rather than `npm run db:up`.
+
+Two health endpoints, meaning different things:
+
+| Endpoint | Answers | When the database is down |
+|---|---|---|
+| `/health` | is the process alive | still 200, deliberately |
+| `/health/ready` | can it serve traffic | 503 |
+
+The split matters operationally. A liveness probe that fails during a database incident makes an
+orchestrator restart healthy processes and turns degradation into an outage.
+
+### Tests
+
+```bash
+npm run test      # unit tests, no database needed
+npm run test:int  # integration tests, requires npm run db:up first
+```
+
+Integration tests connect as the restricted role and assert it cannot issue DDL, so the two role
+separation is covered by a test rather than by intent.
 
 ### Environment variables
 
@@ -60,6 +83,8 @@ runtime, per contract sections 14.8 and 15.5.
 | `PORT` | `3000` | API |
 | `HOST` | `127.0.0.1` | API. A container must set `0.0.0.0` to be reachable. |
 | `LOG_LEVEL` | `info` | API |
+| `DATABASE_URL` | none, required | API. Connection string for the restricted role. |
+| `DATABASE_POOL_MAX` | `10` | API |
 
 Compose runs without any of these set. Copy `.env.example` to `.env` only to override a default,
 and `apps/api/.env.example` to `apps/api/.env` for the API. Both `.env` files are gitignored.
@@ -75,13 +100,12 @@ finding is fixed rather than suppressed.
 | Lint | `npm run lint` |
 | Unit tests | `npm run test` |
 | Build | `npm run build` |
-| PostgreSQL reachable | `pg_isready` and a query against a real PostgreSQL service container |
+| Integration tests | `npm run test:int` against a real PostgreSQL service container |
 | Dependency audit | `npm audit --audit-level=low` |
 | Secret scan | `gitleaks detect` over the full history |
 
-The database step currently proves the harness rather than the application, because there is no
-schema to test against yet. Real integration tests replace it when the first migration lands, as
-contract sections 13.1 and 13.2 require.
+CI creates the restricted role by running the same `docker/postgres/init/01-roles.sh` that Compose
+runs locally, so the security boundary cannot drift between the two.
 
 ---
 

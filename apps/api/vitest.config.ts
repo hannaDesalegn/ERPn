@@ -1,33 +1,26 @@
-import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
+import { swcPlugin } from './vitest.shared.js';
 
 /**
- * NestJS 12 ships as ESM, so the test runner has to be ESM native. Vitest is.
+ * Unit tests. No database, no network, no containers.
  *
- * SWC rather than the default esbuild transform, for one specific reason: esbuild supports
- * `experimentalDecorators` but does not emit decorator metadata. NestJS resolves constructor
- * injection from that metadata, so without it every provider with an injected dependency
- * fails at runtime with an unhelpful error. There is nothing injected yet, which is exactly
- * why this is worth setting up now rather than debugging later.
+ * Integration tests live in `*.int.spec.ts` and are excluded here so that `npm run test`
+ * stays runnable with nothing else started. They run under vitest.integration.config.ts,
+ * which requires a real PostgreSQL, as contract sections 13.1 and 13.2 demand.
  */
 export default defineConfig({
-  plugins: [
-    swc.vite({
-      module: { type: 'es6' },
-      jsc: {
-        target: 'es2023',
-        parser: { syntax: 'typescript', decorators: true },
-        transform: {
-          legacyDecorator: true,
-          decoratorMetadata: true,
-        },
-      },
-    }),
-  ],
+  plugins: [swcPlugin()],
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.spec.ts'],
     root: './',
+    include: ['src/**/*.spec.ts'],
+    exclude: ['**/*.int.spec.ts'],
+    env: {
+      // Unit tests build the Nest application graph, so configuration must validate. The pool
+      // is constructed lazily and never connects, so a syntactically valid URL is enough and
+      // no database is contacted.
+      DATABASE_URL: 'postgresql://unit-test:unit-test@127.0.0.1:1/unit_test',
+    },
   },
 });

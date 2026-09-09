@@ -25,7 +25,10 @@ import type { Env } from './config/env.schema.js';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
-  app.setGlobalPrefix('api', { exclude: ['health'] });
+  // Both health routes sit outside the api prefix, at the conventional paths container
+  // platforms and load balancers probe. Liveness and readiness are listed separately because
+  // the exclusion matches a path, not a prefix.
+  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
 
   // Terminates in-flight work on SIGTERM rather than dropping connections, which is what a
   // container platform sends during a rolling deploy. Contract section 15.4.

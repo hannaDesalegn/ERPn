@@ -30,6 +30,28 @@ export const envSchema = z.object({
    */
   HOST: z.string().min(1).default('127.0.0.1'),
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+
+  /**
+   * PostgreSQL connection string for the RESTRICTED APPLICATION ROLE.
+   *
+   * Contract sections 2.4 and 7.1: the API never connects as the role that owns objects.
+   * The owning role runs migrations and is configured separately, so a misconfigured API
+   * cannot issue DDL or escape row level security even if someone points it at the wrong
+   * database.
+   *
+   * No default. A database connection string is environment specific by definition, and a
+   * default here would let a deployment silently come up pointing somewhere unintended.
+   */
+  DATABASE_URL: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => value.startsWith('postgresql://') || value.startsWith('postgres://'),
+      'must be a postgresql:// connection string',
+    ),
+
+  /** Connection pool ceiling. Kept small by default; tuned against real load later. */
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;
