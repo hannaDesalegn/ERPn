@@ -4,21 +4,76 @@ A production-shaped ERP frontend for a wholesale distribution business, built to
 connected to a real backend later. Not a mockup: the domain model, service layer and
 permission seams are the deliverable, and the screens exist to prove them.
 
-```bash
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # tsc -b && vite build
-```
-
-**Stack:** Vite · React 19 · TypeScript (strict) · Tailwind v4 · React Router · TanStack Query
+**Stack:** Vite · React 19 · TypeScript (strict) · Tailwind v4 · React Router · TanStack Query ·
+NestJS · Fastify · PostgreSQL
 
 > **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the binding architectural contract.** It defines
-> the target production system: backend and frontend boundaries, database principles,
+> the target production system: multi-tenancy, backend and frontend boundaries, database principles,
 > authentication, authorization, auditability, inventory and accounting rules, concurrency,
-> idempotency, document lifecycle, testing, security and deployment. Read it before proposing or
-> implementing a feature. Section 15.1 lists every temporary behaviour in this repository and what
-> removes it; section 15.2 lists what must never be faked; section 16 defines the first vertical
-> slice. What follows below describes the frontend as it stands today.
+> idempotency, document lifecycle, testing, security and infrastructure. Read it before proposing or
+> implementing a feature. Section 16.1 lists every temporary behaviour in this repository and what
+> removes it; section 16.2 lists what must never be faked; section 17 defines the first vertical
+> slice. It is the only architectural source of truth. What follows below is how to run the
+> repository, and then a description of the frontend as it stands today.
+
+---
+
+## Local development
+
+Requires Node 24 and Docker. The repository is an npm workspace: `apps/web` is the React
+application, `apps/api` is the NestJS backend.
+
+```bash
+npm install      # installs both workspaces
+npm run db:up    # starts PostgreSQL and waits until it accepts connections
+npm run dev:api  # http://localhost:3000, health at http://localhost:3000/health
+npm run dev      # http://localhost:5173
+```
+
+Compose owns the backing services and the applications run natively, which is what contract
+section 15.3 allows and what keeps the edit cycle fast. `npm run db:down` stops the database and
+`npm run db:reset` destroys the volume and starts clean.
+
+There is no application schema yet. `npm run db:up` gives you an empty database; migrations,
+tables and everything that uses them belong to the next increment.
+
+### Environment variables
+
+Nothing here is a secret. Production values come from a managed secret store and are injected at
+runtime, per contract sections 14.8 and 15.5.
+
+| Variable | Default | Used by |
+|---|---|---|
+| `POSTGRES_USER` | `erp` | Compose |
+| `POSTGRES_PASSWORD` | `erp_local_dev` | Compose |
+| `POSTGRES_DB` | `erp_dev` | Compose |
+| `POSTGRES_PORT` | `5432` | Compose, published on `127.0.0.1` only |
+| `NODE_ENV` | `development` | API |
+| `PORT` | `3000` | API |
+| `HOST` | `127.0.0.1` | API. A container must set `0.0.0.0` to be reachable. |
+| `LOG_LEVEL` | `info` | API |
+
+Compose runs without any of these set. Copy `.env.example` to `.env` only to override a default,
+and `apps/api/.env.example` to `apps/api/.env` for the API. Both `.env` files are gitignored.
+
+## What CI runs
+
+`.github/workflows/ci.yml`, on every push and every pull request. All of it must pass, and a
+finding is fixed rather than suppressed.
+
+| Check | Command |
+|---|---|
+| Type check | `npm run typecheck` |
+| Lint | `npm run lint` |
+| Unit tests | `npm run test` |
+| Build | `npm run build` |
+| PostgreSQL reachable | `pg_isready` and a query against a real PostgreSQL service container |
+| Dependency audit | `npm audit --audit-level=low` |
+| Secret scan | `gitleaks detect` over the full history |
+
+The database step currently proves the harness rather than the application, because there is no
+schema to test against yet. Real integration tests replace it when the first migration lands, as
+contract sections 13.1 and 13.2 require.
 
 ---
 
