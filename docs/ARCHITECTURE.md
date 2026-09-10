@@ -94,6 +94,37 @@ produces wrong numbers rather than crashes, which is worse.
 `[DEC]` Schema and migrations are owned by a migration tool with versioned, reviewed,
 forward only migration files. Migrations are never generated implicitly at application start.
 
+`[DEC]` *Ratified 2026-09-10. Final ruling on migration tooling.* Migrations are handwritten SQL
+files, versioned and committed, applied by a small runner built on the existing `pg` dependency.
+`drizzle-orm` is retained for typed schema definitions and application queries. `drizzle-kit` is
+not used.
+
+Two reasons, and the second matters more than the first.
+
+The immediate one is that `drizzle-kit` depends on the deprecated `@esbuild-kit` packages, which
+carry four moderate advisories that npm overrides cannot resolve in this workspace. Sections 14.8
+and 14.9 require the audit to pass without suppression, and the precedent set with the Express
+adapter is to remove a dependency path rather than whitelist it.
+
+The structural one is that this schema needs things a schema DSL cannot express. Role creation,
+`GRANT` and `REVOKE`, row level security policies, check constraints with domain specific
+predicates, deferred constraints, and composite foreign keys that pin a child row to its parent's
+tenant. Most of every migration here would be handwritten SQL regardless, so generating the
+remainder buys little and costs a tool that must be kept clean.
+
+`[REQ]` The cost of this choice is drift between the SQL and the Drizzle definitions, and it is
+paid for by a test rather than by discipline. The schema verification required by criterion 28
+compares the **running** database against the Drizzle definitions, not against the migration
+source, so a hand edit to either side that the other does not match fails the build. Generation
+would not have caught this either, since a generated migration can still be hand edited after.
+
+`[REQ]` Migrations are forward only. An applied migration is never edited. The runner records a
+checksum per migration and refuses to start if a previously applied file has changed, so an edit
+that would have silently diverged environments becomes a failed deployment instead.
+
+`[REQ]` The runner connects as the owning role, never the application role, per section 7.1. It
+is a separate gated step and never runs at application start, per section 15.4.
+
 `[DEC]` *Ratified 2026-09-09.* The stack is React with TypeScript and Vite on the client,
 NestJS with TypeScript on the server, PostgreSQL for data, and Drizzle for schema, migrations
 and queries.
@@ -1678,13 +1709,24 @@ Each maps to a negative requirement in section 2.10.
     PostgreSQL.
 27. Continuous integration runs type checking, lint, unit tests, integration tests against a
     real PostgreSQL instance, and a secret scan. All are required to pass.
-28. Every business table created in this slice carries the standard columns from section 4.2,
-    including `tenant_id`, `company_id` and `version`. A test inspects the live schema rather
-    than the migration source, so a table added later without them fails.
+28. Every tenant-scoped table created in this slice carries the standard columns from section
+    4.2, including `tenant_id`, `company_id` and `version`, and the global tables named in 4.6
+    carry none of them. A test inspects the live schema rather than the migration source, so a
+    table added later without them fails.
+29. The running schema matches the Drizzle definitions. A test reads the live catalogue, meaning
+    tables, columns, types, nullability and keys, and compares it against the Drizzle schema, so
+    handwritten SQL and typed definitions cannot silently diverge. Section 1.2 makes this the
+    price of not generating migrations.
+30. Row level security is enabled and forced on every tenant-scoped table, proven by reading the
+    catalogue rather than the migration text.
+31. A query issued with no tenant context set returns zero rows rather than every row, proven by
+    a test. Section 2.4 requires the empty context to deny.
+32. The application role holds no `UPDATE` or `DELETE` grant on the audit table, and no `DELETE`
+    on tenants, companies or users, proven by reading the catalogue.
 
 ### 17.4 Definition of done
 
-All twenty eight criteria pass in continuous integration. The web application runs against the
+All thirty two criteria pass in continuous integration. The web application runs against the
 API with no mock identity anywhere in its path. Section 16.1 is updated to strike the rows this
 slice removed. Any decision that changed during implementation is recorded in section 18.2.
 
@@ -1748,3 +1790,5 @@ they are open.
 | 2026-09-09 | 7.3 | `tenant_id` and `company_id` made nullable on the audit table alone, constrained to the authentication actions. | A failed login precedes any company, and criterion 18 requires it audited |
 | 2026-09-09 | 2.4 | Row level security context ruled to be transaction local settings via `SET LOCAL`, requiring every scoped query to run in a transaction, policies to deny on empty context, and a test proving no context returns no rows. | The mechanism was unspecified and the default failure mode is the dangerous one |
 | 2026-09-09 | 2.7 | Granted capabilities stored as permission strings with no `permissions` table, validated on write and asserted against the catalogue at startup. | A seeded table would duplicate what the code already defines |
+| 2026-09-10 | 1.2 | Migration tooling ruled final: handwritten versioned SQL applied by a runner on `pg`, `drizzle-orm` kept for typed schema and queries, `drizzle-kit` dropped. Forward only, checksummed, run as the owning role. | `drizzle-kit` carries unpatchable moderate advisories, and grants, policies and composite tenant keys cannot be expressed in a schema DSL anyway |
+| 2026-09-10 | 17.3 | Criterion 28 narrowed to tenant-scoped tables and four criteria added, numbered 29 to 32: live schema matches the Drizzle definitions, row level security enabled and forced, empty context returns no rows, and audit grants verified from the catalogue. | Drift protection is the price of handwritten migrations, and the isolation controls need catalogue level proof rather than trust in the migration text |
