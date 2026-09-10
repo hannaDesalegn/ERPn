@@ -662,9 +662,22 @@ select policy also governed the `RETURNING` clause of the insert, so those rows 
 written either. See the ruling in section 7.3.*
 
 `[REQ]` `auth_throttle` holds only authentication throttling state: a scope kind, a scope key, a
-counter, a window, and a lock expiry. It carries no business data, no personal data beyond the
-address or address hash needed to count, and it is never joined to a tenant-scoped table. If a
-future change would put anything else in it, that change needs its own amendment.
+counter, a window, and a lock expiry. It carries no business data and is never joined to a
+tenant-scoped table. If a future change would put anything else in it, that change needs its own
+amendment.
+
+*Corrected 2026-09-10. This clause first said the table carried no personal data beyond the
+address. It carries more than that, and the correction is recorded rather than quietly made.*
+
+`[REQ]` The scope key holds a client address for the address dimension and the lowercased
+attempted email for the account dimension. An attempted email is personal data whether or not it
+matches an account, so this table is in scope for retention and erasure obligations. Section 5.2
+requires the per-account dimension, and it cannot be counted without naming what was attempted.
+
+`[FUT]` A reaper that deletes rows whose window and lockout have both elapsed. Not built. Until
+it exists, a row survives its own usefulness, which is a retention question rather than a
+security one. A stale row grants nothing: an elapsed lock is reported as no lock, and an elapsed
+window restarts the count on the next failure.
 
 `[REQ]` This is not an infrastructure exemption and must not be cited as precedent for one. The
 clause below refuses the "it is not really tenant data" argument, and that refusal stands. The
@@ -1933,3 +1946,4 @@ they are open.
 | 2026-09-10 | 4.6 | `auth_throttle` added to the closed list of global tables, with the reasoning stated and the infrastructure-exemption argument explicitly refused. | Authentication precedes tenant resolution, and per-address throttling has no user row or tenant to attribute an attempt to |
 | 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
 | 2026-09-10 | 7.3, 4.6 | Platform level audit rows ruled readable only in an empty tenant context, replacing a select policy that admitted none. The stale claim in 4.6 that such rows could be written but not read was corrected. | The policy governed the `RETURNING` clause of the insert as well, so authentication audit rows could not be written at all and criterion 18 was unimplementable |
+| 2026-09-10 | 4.6 | Corrected the claim that `auth_throttle` carries no personal data beyond an address. It carries the attempted email, which is personal data whether or not it matches an account. Retention obligation stated and the missing reaper recorded as future. | Review of 6b612f2 against the table the migration actually creates |
