@@ -71,7 +71,19 @@ export interface LoginFailure {
 export type LoginResult = LoginSuccess | LoginFailure;
 
 export type SessionValidationResult =
-  | { outcome: 'valid'; sessionId: string; userId: string }
+  | {
+      outcome: 'valid';
+      sessionId: string;
+      userId: string;
+      /**
+       * The company this session last entered, or null for a session that has not entered one.
+       *
+       * Reported, not trusted. It is an identifier the session carries, and the caller still
+       * has to check it against a live membership before treating it as context. Section 2.5:
+       * the session is where the company is held, and the membership is what makes it valid.
+       */
+      activeCompanyId: string | null;
+    }
   | { outcome: 'invalid' };
 
 @Injectable()
@@ -231,7 +243,12 @@ export class AuthenticationService {
         idleExpiresAt: extendIdleWindow(this.sessionPolicy, session, now),
       });
 
-      return { outcome: 'valid', sessionId: session.id, userId: session.userId };
+      return {
+        outcome: 'valid',
+        sessionId: session.id,
+        userId: session.userId,
+        activeCompanyId: session.activeCompanyId,
+      };
     });
   }
 
