@@ -15,17 +15,15 @@
 
 import { Global, Inject, Module, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
 import type { Env } from '../config/env.schema.js';
+import { DATABASE, DATABASE_POOL, type Database } from './tokens.js';
+import { UnitOfWork } from './unit-of-work.js';
 
-/** Injection token for the Drizzle handle. */
-export const DATABASE = Symbol('DATABASE');
-/** Injection token for the underlying pool, for shutdown and diagnostics only. */
-export const DATABASE_POOL = Symbol('DATABASE_POOL');
-
-export type Database = NodePgDatabase<Record<string, never>>;
+export { DATABASE, DATABASE_POOL } from './tokens.js';
+export type { Database } from './tokens.js';
 
 @Global()
 @Module({
@@ -48,8 +46,9 @@ export type Database = NodePgDatabase<Record<string, never>>;
       inject: [DATABASE_POOL],
       useFactory: (pool: Pool): Database => drizzle(pool),
     },
+    UnitOfWork,
   ],
-  exports: [DATABASE, DATABASE_POOL],
+  exports: [DATABASE, DATABASE_POOL, UnitOfWork],
 })
 export class DatabaseModule implements OnApplicationShutdown {
   constructor(@Inject(DATABASE_POOL) private readonly pool: Pool) {}

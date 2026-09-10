@@ -15,6 +15,7 @@
  * test will tell you if you forgot the second half.
  */
 
+import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
   char,
@@ -194,9 +195,13 @@ export const auditEvents = pgTable('audit_events', {
   userAgent: text('user_agent'),
   /**
    * The database transaction the change was written in, so an audit record ties back to the
-   * exact commit that produced it. Supplied by a default; the application never sets it.
+   * exact commit that produced it.
+   *
+   * The default is declared so Drizzle treats it as database supplied and leaves it out of the
+   * required insert fields. The application must never set this: a caller-provided transaction
+   * id would be a caller-provided provenance claim.
    */
-  txid: xid8('txid').notNull(),
+  txid: xid8('txid').notNull().default(sql`pg_current_xact_id()`),
 });
 
 /**
