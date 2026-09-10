@@ -293,6 +293,16 @@ export class DrizzleUserRepository implements UserRepository {
     return rows[0] ? toUser(rows[0]) : null;
   }
 
+  async findPasswordHash(userId: string): Promise<string | null> {
+    const rows = await this.db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    return rows[0]?.passwordHash ?? null;
+  }
+
   async create(input: {
     id: string;
     email: string;

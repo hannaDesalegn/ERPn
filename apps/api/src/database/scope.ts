@@ -29,6 +29,8 @@ export interface ActorScope {
  * searching for the literal.
  */
 export type SystemScopeReason =
+  /** Authentication, which by definition runs before any tenant is known. */
+  | 'authentication'
   | 'tenant-provisioning'
   | 'scheduled-maintenance'
   | 'integration-test';

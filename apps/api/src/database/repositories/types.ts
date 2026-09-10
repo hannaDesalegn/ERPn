@@ -99,6 +99,14 @@ export interface MembershipRepository {
 export interface UserRepository {
   findById(id: string): Promise<UserRecord | null>;
   findByEmail(email: string): Promise<UserRecord | null>;
+  /**
+   * The stored password hash, fetched narrowly.
+   *
+   * Deliberately not a field on `UserRecord`. A hash on the ordinary record would travel
+   * everywhere a user does and eventually reach a response body or a log line. Only the
+   * authentication path needs it, so only the authentication path can ask.
+   */
+  findPasswordHash(userId: string): Promise<string | null>;
   create(input: {
     id: string;
     email: string;

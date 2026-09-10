@@ -21,6 +21,11 @@ export default defineConfig({
     environment: 'node',
     root: './',
     include: ['src/**/*.int.spec.ts'],
+    // One file at a time. These share a single database, and the global tables in section 4.6
+    // are shared by definition: users, sessions and auth_throttle have no tenant column to keep
+    // two files apart. Teardown of the append-only audit table is a TRUNCATE, which would take
+    // another file's rows with it. Serial execution is the honest way to run them.
+    fileParallelism: false,
     // A connection attempt against a database that is not up should fail fast rather than
     // sit at the default timeout.
     testTimeout: 30_000,
