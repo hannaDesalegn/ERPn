@@ -515,8 +515,27 @@ created_at     timestamptz
 created_by     user id
 updated_at     timestamptz
 updated_by     user id
-version        integer, for optimistic locking, see 10.1
 ```
+
+*Amended 2026-09-10. `version` was previously listed above without qualification, which the
+first migration could not satisfy for three tables where the column would have had no reader.*
+
+`[REQ]` **Mutable** tables additionally carry `version integer`, for the optimistic locking in
+section 10.1. A table is mutable when a row can be updated after it is written, which is the
+only circumstance in which a lost update is possible.
+
+`[REQ]` Three shapes are exempt, and the exemption is by reason rather than by name, so a table
+added later inherits it only if the same reasoning applies:
+
+| Shape | Why no `version` |
+|---|---|
+| Association tables, insert and delete only | A row is created or removed, never edited, so there is no update to lose. Adding a column to hold a number nobody increments invites a future contributor to trust it. |
+| Append-only tables | Rows are never updated at all. `audit_events` goes further: section 7.1 revokes `UPDATE` and `DELETE` from the application role, so an update is refused by the database before optimistic locking could apply. |
+| Tables where `updated_at` never changes | Same argument, stated generally. |
+
+`[REQ]` A mutable table without `version` is a defect. An exempt table with an unused `version`
+is also a defect, because a column that looks like a concurrency control and is never checked is
+worse than an absent one.
 
 `[DEC]` Primary keys are UUIDv7. They are non sequential, so identifiers are not trivially
 enumerable, and they can be generated before insert, which simplifies linking within a
@@ -1721,10 +1740,11 @@ Each maps to a negative requirement in section 2.10.
     PostgreSQL.
 27. Continuous integration runs type checking, lint, unit tests, integration tests against a
     real PostgreSQL instance, and a secret scan. All are required to pass.
-28. Every tenant-scoped table created in this slice carries the standard columns from section
-    4.2, including `tenant_id`, `company_id` and `version`, and the global tables named in 4.6
-    carry none of them. A test inspects the live schema rather than the migration source, so a
-    table added later without them fails.
+28. Every tenant-scoped table created in this slice carries `tenant_id` and `company_id`, both
+    not null, and the global tables named in 4.6 carry neither. Mutable tenant-scoped tables
+    additionally carry `version`; the association and append-only tables exempted by section 4.2
+    must not carry it. A test inspects the live schema rather than the migration source, so a
+    table added later on the wrong side of either rule fails.
 29. The running schema matches the Drizzle definitions. A test reads the live catalogue, meaning
     tables, columns, types, nullability and keys, and compares it against the Drizzle schema, so
     handwritten SQL and typed definitions cannot silently diverge. Section 1.2 makes this the
@@ -1805,3 +1825,4 @@ they are open.
 | 2026-09-10 | 1.2 | Migration tooling ruled final: handwritten versioned SQL applied by a runner on `pg`, `drizzle-orm` kept for typed schema and queries, `drizzle-kit` dropped. Forward only, checksummed, run as the owning role. | `drizzle-kit` carries unpatchable moderate advisories, and grants, policies and composite tenant keys cannot be expressed in a schema DSL anyway |
 | 2026-09-10 | 17.3 | Criterion 28 narrowed to tenant-scoped tables and four criteria added, numbered 29 to 32: live schema matches the Drizzle definitions, row level security enabled and forced, empty context returns no rows, and audit grants verified from the catalogue. | Drift protection is the price of handwritten migrations, and the isolation controls need catalogue level proof rather than trust in the migration text |
 | 2026-09-10 | 7.1 | Added the requirement that neither database role is a superuser, with the owning role taking DDL rights from owning the database and schema instead. | A superuser bypasses row level security even with FORCE, which made the first isolation tests incapable of failing |
+| 2026-09-10 | 4.2, 17.3 | `version` narrowed from every business table to mutable tables only, with association tables and append-only tables exempted by reason rather than by name. Criterion 28 updated to match, and an unused `version` on an exempt table made a defect in its own right. | A version column on a table that is never updated has no reader, and a concurrency control nobody checks is worse than an absent one |
