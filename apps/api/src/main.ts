@@ -7,6 +7,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 
 import { AppModule } from './app.module.js';
 import type { Env } from './config/env.schema.js';
+import { registerHttpPlugins } from './http/plugins.js';
 
 /**
  * Process entry point.
@@ -24,6 +25,8 @@ import type { Env } from './config/env.schema.js';
  */
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
+
+  await registerHttpPlugins(app);
 
   // Both health routes sit outside the api prefix, at the conventional paths container
   // platforms and load balancers probe. Liveness and readiness are listed separately because

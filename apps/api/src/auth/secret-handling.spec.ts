@@ -1,5 +1,5 @@
 /**
- * A source level guardrail on the authentication files.
+ * A source level guardrail on the files that touch a credential.
  *
  * The integration suite proves that no secret reaches an output stream during a login, a
  * validation and a logout. That covers the paths those tests walk. This one covers the paths
@@ -9,6 +9,10 @@
  * So the rule is enforced against the text of the files rather than their behaviour. It is a
  * blunt instrument on purpose. If logging genuinely belongs in one of these files one day, the
  * change has to come here and be argued for, which is the point.
+ *
+ * It covers the HTTP files as well as the authentication ones. The cookie helper and the session
+ * guard both hold the raw token in a local variable, which makes them exactly as good a place
+ * for an accidental debug line as the service that issued it.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -16,10 +20,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const AUTH_DIR = dirname(fileURLToPath(import.meta.url));
+const HTTP_DIR = join(AUTH_DIR, '..', 'http');
 
-const sourceFiles = readdirSync(AUTH_DIR)
-  .filter((name) => name.endsWith('.ts') && !name.includes('.spec.'))
-  .map((name) => [name, readFileSync(join(AUTH_DIR, name), 'utf8')] as const);
+const sourceFiles = [AUTH_DIR, HTTP_DIR].flatMap((directory) =>
+  readdirSync(directory)
+    .filter((name) => name.endsWith('.ts') && !name.includes('.spec.'))
+    .map((name) => [name, readFileSync(join(directory, name), 'utf8')] as const),
+);
 
 /** Comments are exempt. The prohibition is on emitting, not on explaining. */
 const withoutComments = (source: string) =>
@@ -30,12 +37,16 @@ describe('Secret handling in the authentication files', () => {
     // Without this, a rename or a move turns the whole suite into a vacuous pass over an empty
     // list, and it would still be green.
     expect(sourceFiles.map(([name]) => name).sort()).toEqual([
+      'auth.controller.ts',
       'auth.module.ts',
       'authentication.service.ts',
       'password-hasher.ts',
+      'plugins.ts',
+      'session-cookie.ts',
       'session-policy.ts',
+      'session.guard.ts',
       'session-token.ts',
-    ]);
+    ].sort());
   });
 
   it.each(sourceFiles)('%s calls no logger and no console', (_name, source) => {

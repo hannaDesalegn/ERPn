@@ -106,7 +106,35 @@ export const envSchema = z.object({
 
   /** How long a scope stays locked once the limit is reached. */
   AUTH_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1_440).default(15),
+
+  // -----------------------------------------------------------------------------------
+  // Session cookie.
+  //
+  // Contract section 5.1: the client receives an opaque session identifier in an HttpOnly,
+  // Secure, SameSite cookie. Only the Secure attribute is configurable, and only because a
+  // browser will not send a Secure cookie over plain HTTP, which would make local
+  // development impossible without a certificate.
+  // -----------------------------------------------------------------------------------
+
+  /**
+   * Whether the session cookie carries the Secure attribute.
+   *
+   * Defaults to true, so the safe value is what you get by saying nothing. Setting it false
+   * is a development affordance and the refinement below refuses it in production, because a
+   * session cookie sent over plain HTTP is a session anyone on the path can take.
+   *
+   * HttpOnly and SameSite are NOT configurable. There is no deployment for which turning
+   * either off is correct, and a setting invites someone to try.
+   */
+  COOKIE_SECURE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
 })
+  .refine((env) => env.NODE_ENV !== 'production' || env.COOKIE_SECURE, {
+    message: 'COOKIE_SECURE must not be false in production',
+    path: ['COOKIE_SECURE'],
+  })
   // A session whose idle timeout exceeds its absolute lifetime has no idle timeout at all,
   // which reads as a configured control and is not one. Section 5.3 requires both to apply.
   .refine((env) => env.SESSION_IDLE_MINUTES <= env.SESSION_ABSOLUTE_MINUTES, {

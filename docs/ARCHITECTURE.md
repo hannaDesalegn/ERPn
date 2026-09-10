@@ -1754,6 +1754,9 @@ infrastructure becomes the project.
 | Artificial latency in the service layer | `services/client.ts` | real HTTP |
 | Document numbers from a JavaScript counter | `mocks/generate.ts` | slice 2 |
 | Static cost price used as the costing basis | `mocks/db.ts`, `mocks/generate.ts` | costing implementation, section 8.6 |
+| Mutating endpoints protected by `SameSite=Strict` alone, with no cross site request token | `http/session-cookie.ts`, `auth/auth.controller.ts`, `identity/me.controller.ts` | the CSRF increment, criterion 24 |
+| Session authentication applied per controller rather than as a global deny-by-default guard | `http/session.guard.ts` | the authorization increment, criterion 7 |
+| `/me` reports roles but not effective permissions | `identity/identity.service.ts` | the authorization increment, criterion 6 |
 
 ### 16.2 Production critical behaviour that must never be faked
 
@@ -1986,4 +1989,5 @@ they are open.
 | 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
 | 2026-09-10 | 7.3, 4.6 | Platform level audit rows ruled readable only in an empty tenant context, replacing a select policy that admitted none. The stale claim in 4.6 that such rows could be written but not read was corrected. | The policy governed the `RETURNING` clause of the insert as well, so authentication audit rows could not be written at all and criterion 18 was unimplementable |
 | 2026-09-10 | 4.6 | Corrected the claim that `auth_throttle` carries no personal data beyond an address. It carries the attempted email, which is personal data whether or not it matches an account. Retention obligation stated and the missing reaper recorded as future. | Review of 6b612f2 against the table the migration actually creates |
+| 2026-09-10 | 16.1 | Three temporary behaviours registered as the HTTP surface landed: SameSite as the only cross site defence, per-controller session authentication instead of a global deny-by-default guard, and `/me` reporting roles without effective permissions. | Each is a control that is deliberately partial in this increment, and an unregistered partial control is indistinguishable from a finished one |
 | 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |

@@ -5,17 +5,19 @@
  * company context and the HTTP surface are separate layers in separate increments, so nothing
  * here decides what an actor may do.
  *
- * No controller yet, deliberately. The HTTP surface brings cookies, CSRF and a session guard
- * with it, and section 17.3 places those in a later increment. The service is complete and
- * tested without one.
+ * The controller is a translation layer and nothing more. Every rule it enforces is in the
+ * service, which is testable without a web server, and the controller's own job is to keep the
+ * token out of the response body and the rejection reasons collapsed into one answer.
  */
 
 import { Module } from '@nestjs/common';
 
+import { AuthController } from './auth.controller.js';
 import { AuthenticationService } from './authentication.service.js';
 import { PasswordHasher } from './password-hasher.js';
 
 @Module({
+  controllers: [AuthController],
   providers: [PasswordHasher, AuthenticationService],
   exports: [PasswordHasher, AuthenticationService],
 })

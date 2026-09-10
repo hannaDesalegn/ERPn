@@ -12,11 +12,14 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module.js';
+import { SessionGuard } from '../http/session.guard.js';
 import { IdentityService } from './identity.service.js';
+import { MeController } from './me.controller.js';
 
 @Module({
   imports: [AuthModule],
-  providers: [IdentityService],
+  controllers: [MeController],
+  providers: [IdentityService, SessionGuard],
   exports: [IdentityService],
 })
 export class IdentityModule {}

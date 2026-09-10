@@ -318,6 +318,10 @@ describe('Authentication', () => {
         outcome: 'valid',
         sessionId: result.sessionId,
         userId: ALICE_ID,
+        // Reported, not trusted. Authentication says which company the session last entered;
+        // the identity layer is what checks it against a live membership. A session that has
+        // entered none carries null, which is the state every session starts in.
+        activeCompanyId: null,
       });
     });
 
@@ -402,6 +406,10 @@ describe('Authentication', () => {
         outcome: 'valid',
         sessionId: result.sessionId,
         userId: ALICE_ID,
+        // Reported, not trusted. Authentication says which company the session last entered;
+        // the identity layer is what checks it against a live membership. A session that has
+        // entered none carries null, which is the state every session starts in.
+        activeCompanyId: null,
       });
 
       const row = await sessionRow(result.sessionId);
