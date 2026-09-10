@@ -19,6 +19,7 @@ describe('the public surface of the data layer', () => {
       'ConcurrencyConflictError',
       'RecordNotFoundError',
       'UnitOfWork',
+      'UnknownPermissionError',
       'actorScope',
       'isActorScope',
       'principalScope',

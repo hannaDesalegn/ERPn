@@ -25,6 +25,7 @@ export type {
 export {
   ConcurrencyConflictError,
   RecordNotFoundError,
+  UnknownPermissionError,
 } from './repositories/types.js';
 export type {
   AuditEventInput,

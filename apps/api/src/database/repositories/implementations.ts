@@ -24,11 +24,13 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { isPermission } from '../../authorization/permissions.js';
 import {
   auditEvents,
   companies,
   memberships,
   membershipRoles,
+  rolePermissions,
   roles,
   sessions,
   users,
@@ -38,6 +40,7 @@ import { actingUserId, companyIdOf, tenantIdOf } from '../scope.js';
 import {
   ConcurrencyConflictError,
   RecordNotFoundError,
+  UnknownPermissionError,
   type AuditEventInput,
   type AuditEventRecord,
   type AuditRepository,
@@ -461,6 +464,160 @@ export class DrizzleRoleRepository implements RoleRepository {
       .orderBy(roles.name);
 
     return rows;
+  }
+
+  async listPermissionsForMembership(membershipId: string): Promise<string[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    // Three tables, and the scope predicate is on all three. Filtering only the membership rows
+    // and joining outward would let a role or a grant belonging to another company ride in on a
+    // join, which is the shape section 6.3 rejects.
+    const rows = await this.db
+      .selectDistinct({ permission: rolePermissions.permission })
+      .from(membershipRoles)
+      .innerJoin(
+        rolePermissions,
+        and(
+          eq(rolePermissions.roleId, membershipRoles.roleId),
+          eq(rolePermissions.tenantId, tenantId),
+          eq(rolePermissions.companyId, companyId),
+        ),
+      )
+      .where(
+        and(
+          eq(membershipRoles.membershipId, membershipId),
+          eq(membershipRoles.tenantId, tenantId),
+          eq(membershipRoles.companyId, companyId),
+        ),
+      );
+
+    return rows.map((row) => row.permission).sort();
+  }
+
+  async create(input: {
+    id: string;
+    key: string;
+    name: string;
+    description?: string | null;
+  }): Promise<RoleRecord> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .insert(roles)
+      .values({
+        id: input.id,
+        // From the scope. A role is owned by one company, per section 2.7, and the input has no
+        // field with which to claim another.
+        tenantId,
+        companyId,
+        key: input.key,
+        name: input.name,
+        description: input.description ?? null,
+        createdBy: actingUserId(this.scope),
+        updatedBy: actingUserId(this.scope),
+      })
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new Error('Insert returned no row');
+    return { id: row.id, key: row.key, name: row.name, description: row.description };
+  }
+
+  async grantPermissions(input: {
+    roleId: string;
+    permissions: readonly string[];
+  }): Promise<void> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    // Section 2.7, the write-time half of the two checks. There is no permissions table and so
+    // no foreign key to refuse an invented string; this is what refuses it instead. Every string
+    // is checked before any row is written, so a batch containing one bad value writes none of
+    // them rather than half.
+    const unknown = input.permissions.filter((permission) => !isPermission(permission));
+    if (unknown.length > 0) {
+      throw new UnknownPermissionError(unknown);
+    }
+    if (input.permissions.length === 0) return;
+
+    await this.db
+      .insert(rolePermissions)
+      .values(
+        input.permissions.map((permission) => ({
+          tenantId,
+          companyId,
+          roleId: input.roleId,
+          permission,
+          createdBy: actingUserId(this.scope),
+        })),
+      )
+      // Granting what is already granted is not an error. The pair is the primary key, so the
+      // second grant is simply a no-op rather than a duplicate row or a failure.
+      .onConflictDoNothing();
+  }
+
+  async revokePermission(input: { roleId: string; permission: string }): Promise<void> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    await this.db
+      .delete(rolePermissions)
+      .where(
+        and(
+          eq(rolePermissions.roleId, input.roleId),
+          eq(rolePermissions.permission, input.permission),
+          eq(rolePermissions.tenantId, tenantId),
+          eq(rolePermissions.companyId, companyId),
+        ),
+      );
+  }
+
+  async assignToMembership(input: { membershipId: string; roleId: string }): Promise<void> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    await this.db
+      .insert(membershipRoles)
+      .values({
+        tenantId,
+        companyId,
+        membershipId: input.membershipId,
+        roleId: input.roleId,
+        createdBy: actingUserId(this.scope),
+      })
+      .onConflictDoNothing();
+  }
+
+  async removeFromMembership(input: { membershipId: string; roleId: string }): Promise<void> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    await this.db
+      .delete(membershipRoles)
+      .where(
+        and(
+          eq(membershipRoles.membershipId, input.membershipId),
+          eq(membershipRoles.roleId, input.roleId),
+          eq(membershipRoles.tenantId, tenantId),
+          eq(membershipRoles.companyId, companyId),
+        ),
+      );
+  }
+
+  async listStoredPermissions(): Promise<string[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .selectDistinct({ permission: rolePermissions.permission })
+      .from(rolePermissions)
+      .where(
+        and(eq(rolePermissions.tenantId, tenantId), eq(rolePermissions.companyId, companyId)),
+      );
+
+    return rows.map((row) => row.permission).sort();
   }
 }
 

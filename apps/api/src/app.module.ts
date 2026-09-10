@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AppConfigModule } from './config/config.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthorizationModule } from './authorization/authorization.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
@@ -13,6 +14,13 @@ import { IdentityModule } from './identity/identity.module.js';
  * sales, purchasing, inventory and accounting each become a module as they are built.
  */
 @Module({
-  imports: [AppConfigModule, DatabaseModule, AuthModule, IdentityModule, HealthModule],
+  imports: [
+    AppConfigModule,
+    DatabaseModule,
+    AuthModule,
+    AuthorizationModule,
+    IdentityModule,
+    HealthModule,
+  ],
 })
 export class AppModule {}

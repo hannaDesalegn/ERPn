@@ -265,12 +265,45 @@ export interface RoleRecord {
  * a viewer in another. This interface cannot express "roles across companies", which is the
  * point rather than a limitation.
  *
- * READ ONLY, DELIBERATELY. This reports which roles a membership holds. It says nothing about
- * what a role permits, and there is no method here that reads `role_permissions`. Effective
- * permissions and their enforcement are the authorization increment.
+ * WRITES VALIDATE AGAINST THE CATALOGUE. Section 2.7 requires a permission absent from the
+ * catalogue to be rejected on write. The check lives in the implementation rather than only in
+ * a service, because this is the last gate before the row exists and a check one layer up is a
+ * check some future caller can go around.
  */
 export interface RoleRepository {
   listForMembership(membershipId: string): Promise<RoleRecord[]>;
+  /**
+   * The distinct permissions every role of one membership grants, unioned.
+   *
+   * The union is computed in the query rather than by loading roles and merging in memory, so
+   * the scope predicate applies to the permission rows themselves and not only to the roles
+   * that led to them.
+   */
+  listPermissionsForMembership(membershipId: string): Promise<string[]>;
+  create(input: {
+    id: string;
+    key: string;
+    name: string;
+    description?: string | null;
+  }): Promise<RoleRecord>;
+  /**
+   * Grants capabilities to a role.
+   *
+   * Rejects any string absent from the catalogue, per section 2.7. Idempotent: granting what is
+   * already granted changes nothing, because the pair is the primary key.
+   */
+  grantPermissions(input: { roleId: string; permissions: readonly string[] }): Promise<void>;
+  /** Revokes one capability from a role. The association row is deleted, never soft deleted. */
+  revokePermission(input: { roleId: string; permission: string }): Promise<void>;
+  assignToMembership(input: { membershipId: string; roleId: string }): Promise<void>;
+  removeFromMembership(input: { membershipId: string; roleId: string }): Promise<void>;
+  /**
+   * Every distinct permission stored anywhere in the acting company.
+   *
+   * Used by the startup integrity check in section 2.7, which verifies that nothing stored
+   * grants a capability the current release no longer defines.
+   */
+  listStoredPermissions(): Promise<string[]>;
 }
 
 /** What an actor scoped unit of work hands to its callback. */
@@ -316,6 +349,20 @@ export interface SystemRepositories {
   readonly roles: RoleRepository;
   readonly audit: AuditRepository;
   readonly authThrottle: AuthThrottleRepository;
+}
+
+/**
+ * Thrown when a write names a capability the catalogue does not define.
+ *
+ * Section 2.7 replaces a foreign key with two checks, and this is the first: configuration
+ * cannot invent a capability. It is an error rather than a silent skip, because a grant that
+ * quietly does nothing looks granted on the administration screen and is not.
+ */
+export class UnknownPermissionError extends Error {
+  constructor(readonly permissions: readonly string[]) {
+    super(`Not in the permission catalogue: ${permissions.join(', ')}`);
+    this.name = 'UnknownPermissionError';
+  }
 }
 
 /** Thrown when an optimistic locking check fails. Contract section 10.1. */

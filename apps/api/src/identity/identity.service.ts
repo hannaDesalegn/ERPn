@@ -26,6 +26,7 @@ import {
   UnitOfWork,
   type MembershipRecord,
 } from '../database/index.js';
+import { AuthorizationService, NO_GRANTS } from '../authorization/authorization.service.js';
 
 /** Who is asking, taken from a validated session and nothing else. */
 export interface AuthenticatedPrincipal {
@@ -55,12 +56,19 @@ export interface MeView {
   /**
    * Roles held in the active company, and empty when there is no active company.
    *
-   * Roles, not permissions. Section 2.7 makes roles per company, so this list changes when the
-   * company changes and confers nothing outside it. What a role permits, and the enforcement of
-   * it, is the authorization increment; criterion 6 is satisfied by this endpoint only once that
-   * lands.
+   * Section 2.7 makes roles per company, so this list changes when the company changes and
+   * confers nothing outside it.
    */
   roles: { key: string; name: string }[];
+  /**
+   * Effective permissions in the active company, computed server side.
+   *
+   * Section 6.2: returned for display purposes only. The client never sends its own permissions
+   * and the server never reads one from a request. Every enforcement decision is made again from
+   * the database on the request that needs it, so a client that edits this list changes what its
+   * own interface renders and nothing about what it may do.
+   */
+  permissions: string[];
 }
 
 export type SwitchCompanyResult =
@@ -76,7 +84,10 @@ export type SwitchCompanyResult =
 
 @Injectable()
 export class IdentityService {
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly authorization: AuthorizationService,
+  ) {}
 
   /**
    * Resolves the company the session is working in, if any.
@@ -114,7 +125,12 @@ export class IdentityService {
       : null;
 
     const companies = await this.namesFor(memberships);
-    const roles = context ? await this.rolesIn(context, principal.userId) : [];
+    // No company entered means no grants. Not an empty company's grants, and not the grants of
+    // whichever company happens to be first: authorization is a question about a company, and
+    // with none chosen there is nothing to answer it against.
+    const grants = context
+      ? await this.authorization.grantsFor(context, principal.userId)
+      : NO_GRANTS;
     const active = context ? companies.find((c) => c.id === context.companyId) : undefined;
 
     return {
@@ -125,7 +141,8 @@ export class IdentityService {
         isActive: company.id === context?.companyId,
       })),
       activeCompany: active ? { id: active.id, name: active.name } : null,
-      roles,
+      roles: grants.roles,
+      permissions: [...grants.permissions],
     };
   }
 
@@ -219,18 +236,6 @@ export class IdentityService {
     return found.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private rolesIn(
-    context: CompanyContext,
-    userId: string,
-  ): Promise<{ key: string; name: string }[]> {
-    return this.uow.inActorScope(
-      actorScope({ tenantId: context.tenantId, companyId: context.companyId, userId }),
-      async (repos) => {
-        const roles = await repos.roles.listForMembership(context.membershipId);
-        return roles.map((role) => ({ key: role.key, name: role.name }));
-      },
-    );
-  }
 }
 
 /**

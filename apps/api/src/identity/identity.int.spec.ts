@@ -290,6 +290,7 @@ describe('Company context', () => {
       expect(Object.keys(await identity.describe(principal())).sort()).toEqual([
         'activeCompany',
         'companies',
+        'permissions',
         'roles',
         'user',
       ]);

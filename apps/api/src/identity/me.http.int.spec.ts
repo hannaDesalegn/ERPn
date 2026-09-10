@@ -80,6 +80,7 @@ interface MeBody {
   companies: { id: string; name: string; isActive: boolean }[];
   activeCompany: { id: string; name: string } | null;
   roles: { key: string; name: string }[];
+  permissions: string[];
 }
 
 describe('Authenticated HTTP surface', () => {
