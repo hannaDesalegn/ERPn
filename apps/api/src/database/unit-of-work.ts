@@ -31,6 +31,7 @@ import {
   DrizzleMembershipRepository,
   DrizzleRoleRepository,
   DrizzleSessionRepository,
+  DrizzleTenantRepository,
   DrizzleUserRepository,
 } from './repositories/implementations.js';
 import type {
@@ -143,6 +144,7 @@ function buildRepositories(
     memberships: new DrizzleMembershipRepository(db, scope),
     roles: new DrizzleRoleRepository(db, scope),
     sessions: new DrizzleSessionRepository(db, scope),
+    tenants: new DrizzleTenantRepository(db, scope),
     users: new DrizzleUserRepository(db, scope),
     audit: new DrizzleAuditRepository(db, scope),
     authThrottle: new DrizzleAuthThrottleRepository(db),

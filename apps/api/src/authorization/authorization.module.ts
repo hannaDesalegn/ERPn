@@ -14,9 +14,11 @@
 import { Module } from '@nestjs/common';
 
 import { AuthorizationService } from './authorization.service.js';
+import { CatalogueIntegrityCheck } from './catalogue-integrity.js';
+import { RoleProvisioningService } from './role-provisioning.service.js';
 
 @Module({
-  providers: [AuthorizationService],
-  exports: [AuthorizationService],
+  providers: [AuthorizationService, RoleProvisioningService, CatalogueIntegrityCheck],
+  exports: [AuthorizationService, RoleProvisioningService],
 })
 export class AuthorizationModule {}

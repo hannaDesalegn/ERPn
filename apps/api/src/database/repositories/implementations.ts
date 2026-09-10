@@ -33,6 +33,7 @@ import {
   rolePermissions,
   roles,
   sessions,
+  tenants,
   users,
 } from '../schema/identity.js';
 import type { ActorScope, PrincipalScope, Scope, SystemScope } from '../scope.js';
@@ -50,6 +51,8 @@ import {
   type MembershipRepository,
   type RoleRecord,
   type RoleRepository,
+  type TenantRecord,
+  type TenantRepository,
   type SessionRecord,
   type SessionRepository,
   type UserRecord,
@@ -356,6 +359,39 @@ export class DrizzleMembershipRepository implements MembershipRepository {
 }
 
 // ---------------------------------------------------------------------------------------
+// Tenants. Global, and the boundary itself.
+// ---------------------------------------------------------------------------------------
+
+export class DrizzleTenantRepository implements TenantRepository {
+  /**
+   * A system scope is required, and the check is here rather than in a comment.
+   *
+   * This is the only enumeration in the data layer. An actor scope reaching it would be a
+   * request-serving code path able to learn that other tenants exist, which section 2.10 lists
+   * among the things that must never happen.
+   */
+  constructor(
+    private readonly db: Db,
+    private readonly scope: Scope,
+  ) {}
+
+  async listAll(): Promise<TenantRecord[]> {
+    if (this.scope.kind !== 'system') {
+      throw new Error(
+        `Tenant enumeration requires a system scope, received ${this.scope.kind}. Nothing that serves a request may learn that another tenant exists.`,
+      );
+    }
+
+    const rows = await this.db
+      .select({ id: tenants.id, slug: tenants.slug, name: tenants.name })
+      .from(tenants)
+      .orderBy(tenants.slug);
+
+    return rows;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
 // Users. Global, per contract section 4.6.
 // ---------------------------------------------------------------------------------------
 
@@ -464,6 +500,42 @@ export class DrizzleRoleRepository implements RoleRepository {
       .orderBy(roles.name);
 
     return rows;
+  }
+
+  async listForCompany(): Promise<RoleRecord[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .select({
+        id: roles.id,
+        key: roles.key,
+        name: roles.name,
+        description: roles.description,
+      })
+      .from(roles)
+      .where(and(eq(roles.tenantId, tenantId), eq(roles.companyId, companyId)))
+      .orderBy(roles.name);
+
+    return rows;
+  }
+
+  async listPermissionsForRole(roleId: string): Promise<string[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .select({ permission: rolePermissions.permission })
+      .from(rolePermissions)
+      .where(
+        and(
+          eq(rolePermissions.roleId, roleId),
+          eq(rolePermissions.tenantId, tenantId),
+          eq(rolePermissions.companyId, companyId),
+        ),
+      );
+
+    return rows.map((row) => row.permission).sort();
   }
 
   async listPermissionsForMembership(membershipId: string): Promise<string[]> {

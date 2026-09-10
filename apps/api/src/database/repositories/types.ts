@@ -280,6 +280,10 @@ export interface RoleRepository {
    * that led to them.
    */
   listPermissionsForMembership(membershipId: string): Promise<string[]>;
+  /** Every role defined in the acting company. Never another company's. */
+  listForCompany(): Promise<RoleRecord[]>;
+  /** What one role grants, used by the escalation check in section 6.6. */
+  listPermissionsForRole(roleId: string): Promise<string[]>;
   create(input: {
     id: string;
     key: string;
@@ -304,6 +308,24 @@ export interface RoleRepository {
    * grants a capability the current release no longer defines.
    */
   listStoredPermissions(): Promise<string[]>;
+}
+
+export interface TenantRecord {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+/**
+ * The tenant list. Global, and the boundary itself, per section 4.6.
+ *
+ * Enumeration is offered here and nowhere else, and only to a system scope. Section 2.10
+ * forbids any user-facing surface from disclosing that another tenant exists, so nothing that
+ * serves a request may reach this. It exists for operations that legitimately span the
+ * deployment, such as the startup integrity check in section 2.7.
+ */
+export interface TenantRepository {
+  listAll(): Promise<TenantRecord[]>;
 }
 
 /** What an actor scoped unit of work hands to its callback. */
@@ -342,6 +364,7 @@ export interface PrincipalRepositories {
  * nothing. Provisioning names its tenant and gets the full set.
  */
 export interface SystemRepositories {
+  readonly tenants: TenantRepository;
   readonly users: UserRepository;
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;
