@@ -12,6 +12,23 @@
  * this layer accepts a tenant or company identifier as data and then treats it as authority.
  */
 
+/**
+ * An authenticated person who has not entered a company yet.
+ *
+ * The state between authenticating and choosing a company, and the state a session sits in
+ * immediately after login. It carries identity and nothing else: no tenant, no company, and
+ * therefore no reach into any tenant-scoped table beyond the reader's own membership rows,
+ * which is what migration 0004 admits and all it admits.
+ *
+ * This is not a weaker actor scope. It cannot read a company's data, because it does not name a
+ * company for row level security to compare against. It exists so that "which companies may
+ * this person enter" has an answer that does not require already knowing the tenant.
+ */
+export interface PrincipalScope {
+  readonly kind: 'principal';
+  readonly userId: string;
+}
+
 /** A real person acting inside one company, resolved from their session. */
 export interface ActorScope {
   readonly kind: 'actor';
@@ -31,6 +48,15 @@ export interface ActorScope {
 export type SystemScopeReason =
   /** Authentication, which by definition runs before any tenant is known. */
   | 'authentication'
+  /**
+   * Reading the names of companies a principal has already been shown to belong to.
+   *
+   * Named rather than folded into the actor scope because it runs before a company is entered,
+   * and because it names the tenant it reads, so its reach is one tenant rather than none or
+   * all. The membership check that produced the identifiers happens first, under a principal
+   * scope, so this never decides who may see what.
+   */
+  | 'company-directory'
   | 'tenant-provisioning'
   | 'scheduled-maintenance'
   | 'integration-test';
@@ -52,7 +78,7 @@ export interface SystemScope {
   readonly companyId?: string;
 }
 
-export type Scope = ActorScope | SystemScope;
+export type Scope = ActorScope | PrincipalScope | SystemScope;
 
 export function actorScope(input: {
   tenantId: string;
@@ -88,13 +114,53 @@ export function systemScope(
   };
 }
 
+export function principalScope(input: { userId: string }): PrincipalScope {
+  assertUuid(input.userId, 'userId');
+
+  return { kind: 'principal', userId: input.userId };
+}
+
 export function isActorScope(scope: Scope): scope is ActorScope {
   return scope.kind === 'actor';
 }
 
+/**
+ * The tenant a scope names, if it names one.
+ *
+ * Three kinds of scope and three answers, in one place. Written out as a switch rather than a
+ * conditional so that adding a fourth kind is a compile error here instead of a silently wrong
+ * tenant somewhere else.
+ */
+export function tenantIdOf(scope: Scope): string | undefined {
+  switch (scope.kind) {
+    case 'actor':
+      return scope.tenantId;
+    case 'principal':
+      return undefined;
+    case 'system':
+      return scope.tenantId;
+  }
+}
+
+export function companyIdOf(scope: Scope): string | undefined {
+  switch (scope.kind) {
+    case 'actor':
+      return scope.companyId;
+    case 'principal':
+      return undefined;
+    case 'system':
+      return scope.companyId;
+  }
+}
+
+/** The person behind a scope, if there is one. A system scope has none. */
+export function userIdOf(scope: Scope): string | undefined {
+  return scope.kind === 'system' ? undefined : scope.userId;
+}
+
 /** Who to record as the author of a write. Null for system operations, per the schema. */
 export function actingUserId(scope: Scope): string | null {
-  return scope.kind === 'actor' ? scope.userId : null;
+  return userIdOf(scope) ?? null;
 }
 
 const UUID_PATTERN =

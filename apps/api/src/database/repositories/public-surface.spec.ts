@@ -21,6 +21,7 @@ describe('the public surface of the data layer', () => {
       'UnitOfWork',
       'actorScope',
       'isActorScope',
+      'principalScope',
       'systemScope',
     ]);
   });
@@ -48,7 +49,9 @@ describe('the public surface of the data layer', () => {
 
     for (const name of nonUnitOfWork) {
       const value = (dataLayer as Record<string, unknown>)[name];
-      const isScopeHelper = ['actorScope', 'systemScope', 'isActorScope'].includes(name);
+      const isScopeHelper = ['actorScope', 'principalScope', 'systemScope', 'isActorScope'].includes(
+        name,
+      );
       const isErrorClass = name.endsWith('Error');
 
       expect(isScopeHelper || isErrorClass).toBe(true);

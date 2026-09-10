@@ -21,18 +21,20 @@
  * still denies. Section 2.4 requires both layers and permits neither to stand alone.
  */
 
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import {
   auditEvents,
   companies,
   memberships,
+  membershipRoles,
+  roles,
   sessions,
   users,
 } from '../schema/identity.js';
-import type { ActorScope, Scope, SystemScope } from '../scope.js';
-import { actingUserId } from '../scope.js';
+import type { ActorScope, PrincipalScope, Scope, SystemScope } from '../scope.js';
+import { actingUserId, companyIdOf, tenantIdOf } from '../scope.js';
 import {
   ConcurrencyConflictError,
   RecordNotFoundError,
@@ -43,6 +45,8 @@ import {
   type CompanyRepository,
   type MembershipRecord,
   type MembershipRepository,
+  type RoleRecord,
+  type RoleRepository,
   type SessionRecord,
   type SessionRepository,
   type UserRecord,
@@ -60,7 +64,7 @@ type Db = NodePgDatabase<Record<string, never>>;
  * empty database.
  */
 function requireTenantId(scope: Scope): string {
-  const tenantId = scope.kind === 'actor' ? scope.tenantId : scope.tenantId;
+  const tenantId = tenantIdOf(scope);
   if (!tenantId) {
     throw new Error(
       `A tenant-scoped repository was used under a system scope with no tenant (${
@@ -71,8 +75,34 @@ function requireTenantId(scope: Scope): string {
   return tenantId;
 }
 
+/**
+ * The person a scope acts as, when the operation is about that person specifically.
+ *
+ * A system scope has no person, so an operation defined as "my own rows" has no meaning under
+ * one and refuses rather than guessing. An actor scope does have a person, but its tenant
+ * context confines the read to one tenant, which is the opposite of what discovery needs, so it
+ * is refused too and the caller is told which scope to use.
+ */
+function requirePrincipal(scope: Scope): PrincipalScope {
+  if (scope.kind !== 'principal') {
+    throw new Error(
+      `Own-membership discovery requires a principal scope, received ${scope.kind}. It is cross-tenant by design and a scope carrying a tenant would narrow it to one.`,
+    );
+  }
+  return scope;
+}
+
+function requireActorUserId(scope: Scope): string {
+  if (scope.kind !== 'actor') {
+    throw new Error(
+      `This method reads the acting user's own row and requires an actor scope, received ${scope.kind}.`,
+    );
+  }
+  return scope.userId;
+}
+
 function requireCompanyId(scope: Scope): string {
-  const companyId = scope.kind === 'actor' ? scope.companyId : scope.companyId;
+  const companyId = companyIdOf(scope);
   if (!companyId) {
     throw new Error(
       `A company-partitioned repository was used under a system scope with no company (${
@@ -114,6 +144,22 @@ export class DrizzleCompanyRepository implements CompanyRepository {
       .select()
       .from(companies)
       .where(eq(companies.tenantId, tenantId))
+      .orderBy(companies.name);
+
+    return rows.map(toCompany);
+  }
+
+  async listByIds(ids: string[]): Promise<CompanyRecord[]> {
+    const tenantId = requireTenantId(this.scope);
+    // An empty list is a legitimate answer, not a query. `inArray` with no values produces SQL
+    // that some drivers reject and others turn into a match-everything, and the second is the
+    // dangerous one.
+    if (ids.length === 0) return [];
+
+    const rows = await this.db
+      .select()
+      .from(companies)
+      .where(and(eq(companies.tenantId, tenantId), inArray(companies.id, ids)))
       .orderBy(companies.name);
 
     return rows.map(toCompany);
@@ -245,6 +291,45 @@ export class DrizzleMembershipRepository implements MembershipRepository {
     return rows.map((row) => row.companyId);
   }
 
+  async findOwnForActiveCompany(): Promise<MembershipRecord | null> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+    const userId = requireActorUserId(this.scope);
+
+    // All three predicates are in the query. The company context is only trustworthy because
+    // this returns nothing when the membership is absent, revoked or belongs to another tenant,
+    // rather than returning a row for the caller to inspect and possibly forget to check.
+    const rows = await this.db
+      .select()
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.tenantId, tenantId),
+          eq(memberships.companyId, companyId),
+          eq(memberships.userId, userId),
+          eq(memberships.status, 'active'),
+        ),
+      )
+      .limit(1);
+
+    return rows[0] ? toMembership(rows[0]) : null;
+  }
+
+  async listOwn(): Promise<MembershipRecord[]> {
+    const { userId } = requirePrincipal(this.scope);
+
+    // No tenant predicate, which is the one place in this file that is deliberate rather than
+    // an omission. The user predicate is the boundary here, and migration 0004 applies the same
+    // predicate again as a policy, so a mistake in this line returns nothing rather than
+    // everything.
+    const rows = await this.db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.userId, userId), eq(memberships.status, 'active')));
+
+    return rows.map(toMembership);
+  }
+
   async create(input: { id: string; userId: string }): Promise<MembershipRecord> {
     const tenantId = requireTenantId(this.scope);
     const companyId = requireCompanyId(this.scope);
@@ -330,6 +415,56 @@ export class DrizzleUserRepository implements UserRepository {
 }
 
 // ---------------------------------------------------------------------------------------
+// Roles. Company partitioned.
+// ---------------------------------------------------------------------------------------
+
+export class DrizzleRoleRepository implements RoleRepository {
+  constructor(
+    private readonly db: Db,
+    private readonly scope: Scope,
+  ) {}
+
+  /**
+   * The roles held by one membership in the acting company.
+   *
+   * Both sides of the join carry the scope predicate. A membership identifier from another
+   * company returns nothing rather than that company's roles, which is the shape section 6.3
+   * asks for: the identifier does not fail a check, it simply matches no row.
+   */
+  async listForMembership(membershipId: string): Promise<RoleRecord[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .select({
+        id: roles.id,
+        key: roles.key,
+        name: roles.name,
+        description: roles.description,
+      })
+      .from(membershipRoles)
+      .innerJoin(
+        roles,
+        and(
+          eq(roles.id, membershipRoles.roleId),
+          eq(roles.tenantId, tenantId),
+          eq(roles.companyId, companyId),
+        ),
+      )
+      .where(
+        and(
+          eq(membershipRoles.membershipId, membershipId),
+          eq(membershipRoles.tenantId, tenantId),
+          eq(membershipRoles.companyId, companyId),
+        ),
+      )
+      .orderBy(roles.name);
+
+    return rows;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
 // Audit. Append only.
 // ---------------------------------------------------------------------------------------
 
@@ -342,9 +477,8 @@ export class DrizzleAuditRepository implements AuditRepository {
   async append(event: AuditEventInput): Promise<AuditEventRecord> {
     // Scope and actor come from the context, never from the event. Contract section 7.1: the
     // actor is taken from the authenticated session, never from a request body.
-    const tenantId = this.scope.kind === 'actor' ? this.scope.tenantId : (this.scope.tenantId ?? null);
-    const companyId =
-      this.scope.kind === 'actor' ? this.scope.companyId : (this.scope.companyId ?? null);
+    const tenantId = tenantIdOf(this.scope) ?? null;
+    const companyId = companyIdOf(this.scope) ?? null;
 
     const rows = await this.db
       .insert(auditEvents)
@@ -466,8 +600,15 @@ export class DrizzleSessionRepository implements SessionRepository {
    * Section 4.6 also says a global table is not unprotected. What protects this one is that
    * every method is keyed by a value the caller must already hold: a token hash they were
    * given, or a session id they resolved from one. There is no listing.
+   *
+   * The scope arrived later and is used by exactly one method, `setActiveCompany`, which writes
+   * the acting company rather than accepting one. Every other method here ignores it, and that
+   * is stated rather than left to be inferred from reading them all.
    */
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly scope: Scope,
+  ) {}
 
   /**
    * Lookup is by token hash and nothing else.
@@ -526,6 +667,17 @@ export class DrizzleSessionRepository implements SessionRepository {
     await this.db
       .update(sessions)
       .set({ idleExpiresAt: input.idleExpiresAt, lastSeenAt: new Date() })
+      .where(and(eq(sessions.id, input.id), isNull(sessions.revokedAt)));
+  }
+
+  async setActiveCompany(input: { id: string }): Promise<void> {
+    const companyId = requireCompanyId(this.scope);
+
+    // Live sessions only. A revoked or expired session must not acquire a company context it
+    // could be replayed with if it were ever un-revoked.
+    await this.db
+      .update(sessions)
+      .set({ activeCompanyId: companyId, lastSeenAt: new Date() })
       .where(and(eq(sessions.id, input.id), isNull(sessions.revokedAt)));
   }
 

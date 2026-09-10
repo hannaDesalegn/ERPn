@@ -14,8 +14,14 @@
  */
 
 export { UnitOfWork } from './unit-of-work.js';
-export { actorScope, systemScope, isActorScope } from './scope.js';
-export type { ActorScope, Scope, SystemScope, SystemScopeReason } from './scope.js';
+export { actorScope, principalScope, systemScope, isActorScope } from './scope.js';
+export type {
+  ActorScope,
+  PrincipalScope,
+  Scope,
+  SystemScope,
+  SystemScopeReason,
+} from './scope.js';
 export {
   ConcurrencyConflictError,
   RecordNotFoundError,
@@ -28,6 +34,9 @@ export type {
   CompanyRepository,
   MembershipRecord,
   MembershipRepository,
+  PrincipalRepositories,
+  RoleRecord,
+  RoleRepository,
   ScopedRepositories,
   SystemRepositories,
   UserRecord,

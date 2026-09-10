@@ -72,6 +72,15 @@ export interface AuditEventRecord extends AuditEventInput {
 export interface CompanyRepository {
   findById(id: string): Promise<CompanyRecord | null>;
   listForTenant(): Promise<CompanyRecord[]>;
+  /**
+   * The named companies, still confined to the acting tenant.
+   *
+   * Used to put names on the companies a principal already proved membership of. The
+   * identifiers come from that person's own membership rows, never from a request, and the
+   * tenant predicate still applies, so passing a foreign identifier returns nothing rather
+   * than someone else's company.
+   */
+  listByIds(ids: string[]): Promise<CompanyRecord[]>;
   create(input: { id: string; name: string; legalName?: string | null; baseCurrency: string }): Promise<CompanyRecord>;
   /**
    * Optimistic locking per contract section 10.1. The caller supplies the version it read; a
@@ -86,6 +95,23 @@ export interface MembershipRepository {
   listForCompany(): Promise<MembershipRecord[]>;
   /** Across the tenant, which is what company switching needs. Still never across tenants. */
   listCompanyIdsForUser(userId: string): Promise<string[]>;
+  /**
+   * The acting user's own membership in the acting company, or null.
+   *
+   * Takes no user id, because the user is the one in the scope. This is the check that makes a
+   * company context trustworthy: it is re-run inside the transaction that acts on the company,
+   * so a membership revoked a moment ago cannot be used by a request already in flight.
+   */
+  findOwnForActiveCompany(): Promise<MembershipRecord | null>;
+  /**
+   * Every active membership the acting principal holds, across tenants.
+   *
+   * Available under a principal scope alone, and it takes no user id for the same reason as
+   * above: the subject is the scope, not an argument a caller chooses. Cross-tenant by
+   * necessity, because a person may work for two of our customers, per section 2.6, and asking
+   * inside one tenant cannot discover the other.
+   */
+  listOwn(): Promise<MembershipRecord[]>;
   create(input: { id: string; userId: string }): Promise<MembershipRecord>;
 }
 
@@ -161,6 +187,19 @@ export interface SessionRepository {
   }): Promise<SessionRecord>;
   /** Extends the idle window on use. Never extends the absolute lifetime. */
   touch(input: { id: string; idleExpiresAt: Date }): Promise<void>;
+  /**
+   * Records the company this session is now working in.
+   *
+   * Takes no company identifier. It writes the company the transaction is already scoped to,
+   * which means a session can only ever be pointed at a company the caller is already acting
+   * inside, with row level security enforcing that context on every other statement in the same
+   * transaction. Accepting the company as an argument was the first shape written here, and the
+   * rule that no repository method takes a tenant or company is what rejected it: an argument
+   * would let a verified membership in one company be followed by a write naming another.
+   *
+   * Requires an actor scope for that reason.
+   */
+  setActiveCompany(input: { id: string }): Promise<void>;
   /** Server side revocation. Contract section 5.3. */
   revoke(id: string): Promise<void>;
   /** Revokes every live session for a user, for password change and dismissal. */
@@ -212,14 +251,54 @@ export interface AuthThrottleRepository {
    */
   clearOnSuccess(kind: AuthThrottleScopeKind, key: string): Promise<void>;
 }
+export interface RoleRecord {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+}
+
+/**
+ * Company partitioned, like the roles themselves.
+ *
+ * Section 2.7: roles are per company, so the same person can be an approver in one company and
+ * a viewer in another. This interface cannot express "roles across companies", which is the
+ * point rather than a limitation.
+ *
+ * READ ONLY, DELIBERATELY. This reports which roles a membership holds. It says nothing about
+ * what a role permits, and there is no method here that reads `role_permissions`. Effective
+ * permissions and their enforcement are the authorization increment.
+ */
+export interface RoleRepository {
+  listForMembership(membershipId: string): Promise<RoleRecord[]>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
   readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
+  readonly roles: RoleRepository;
   readonly users: UserRepository;
   readonly audit: AuditRepository;
   readonly authThrottle: AuthThrottleRepository;
+}
+
+/**
+ * What a principal scoped unit of work hands to its callback.
+ *
+ * The narrowest set. No companies, no roles, no throttle: each of those needs a tenant or a
+ * company that a principal scope by definition does not have, and offering a method that can
+ * only throw is worse than not offering it.
+ *
+ * `memberships` here is the discovery read and nothing else. Its other methods require a tenant
+ * and refuse without one.
+ */
+export interface PrincipalRepositories {
+  readonly users: UserRepository;
+  readonly sessions: SessionRepository;
+  readonly memberships: MembershipRepository;
+  readonly audit: AuditRepository;
 }
 
 /**
@@ -234,6 +313,7 @@ export interface SystemRepositories {
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;
   readonly memberships: MembershipRepository;
+  readonly roles: RoleRepository;
   readonly audit: AuditRepository;
   readonly authThrottle: AuthThrottleRepository;
 }

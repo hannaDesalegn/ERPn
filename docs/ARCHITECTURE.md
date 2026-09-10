@@ -278,6 +278,23 @@ consequences that must both hold:
 rows rather than all rows. Section 14.9 requires the absence of a control to be tested, and this
 is the case where getting it backwards is worst.
 
+*Amended 2026-09-10, adding a third setting alongside the tenant and company ones.*
+
+`[REQ]` The acting person also reaches the database as a transaction local setting. It is set
+from the same session-derived scope, it is empty for operations that have no person behind them,
+and an empty value denies exactly as an empty tenant does.
+
+It exists because the first question company context has to answer, which companies may this
+person enter, is cross-tenant by construction. Section 2.6 lets one person belong to companies in
+more than one tenant, so the answer cannot come from inside a tenant, and the tenant is what is
+not yet known. Exactly one policy uses this setting: a person may read their own membership rows
+when no tenant context is set. It admits nothing else, to nobody else, and it is inert whenever a
+tenant context is present.
+
+`[REQ]` The person setting never widens a tenant scoped read. Any policy written against it must
+require the tenant context to be empty, so that it can only ever answer a question a tenant
+scoped context could not have been asked.
+
 The three options and their real trade-offs:
 
 | Option | Isolation | Cost |
@@ -311,6 +328,28 @@ body, a query parameter, a path segment, a client supplied header, or any fronte
 `[REQ]` Switching company is an explicit authenticated operation. The server verifies the target
 company against the user's membership rows, updates the session, writes an audit record, and
 only then serves data from the new company.
+
+*Expanded 2026-09-10, when the increment that implements this found the sequence underspecified.*
+
+`[REQ]` A session has two states, and both are legitimate. Authenticated with no company, which
+is where every session begins, and authenticated inside one company. The first can read identity
+and the person's own memberships. It can read no company's data, because it names no company for
+row level security to compare against.
+
+`[REQ]` The switch verifies membership twice, and the second time is the one that counts. The
+first read discovers which tenant the target company belongs to, because a company identifier
+alone does not say. The second runs inside the transaction that writes the change, in the scope
+of the target company, and the write is refused if it finds no active membership. Without the
+second check, a membership revoked between the two reads would still be honoured by a request
+already in flight.
+
+`[REQ]` The session records only the company. The tenant is derived from the membership on every
+request rather than stored beside it, so a stale tenant on a session cannot outlive the
+membership that justified it.
+
+`[REQ]` A session whose active company no longer has a matching active membership is treated as
+having no company, not as an error and not as its previous company. Access ends when membership
+ends, without waiting for the session to expire.
 
 `[REQ]` Every scoped query filters by the tenant and company resolved from the session. A query
 that could return rows from outside them must not be constructible through the data layer's
@@ -1947,3 +1986,4 @@ they are open.
 | 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
 | 2026-09-10 | 7.3, 4.6 | Platform level audit rows ruled readable only in an empty tenant context, replacing a select policy that admitted none. The stale claim in 4.6 that such rows could be written but not read was corrected. | The policy governed the `RETURNING` clause of the insert as well, so authentication audit rows could not be written at all and criterion 18 was unimplementable |
 | 2026-09-10 | 4.6 | Corrected the claim that `auth_throttle` carries no personal data beyond an address. It carries the attempted email, which is personal data whether or not it matches an account. Retention obligation stated and the missing reaper recorded as future. | Review of 6b612f2 against the table the migration actually creates |
+| 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |

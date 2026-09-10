@@ -29,11 +29,17 @@ import {
   DrizzleAuditRepository,
   DrizzleCompanyRepository,
   DrizzleMembershipRepository,
+  DrizzleRoleRepository,
   DrizzleSessionRepository,
   DrizzleUserRepository,
 } from './repositories/implementations.js';
-import type { ScopedRepositories, SystemRepositories } from './repositories/types.js';
-import type { ActorScope, Scope, SystemScope } from './scope.js';
+import type {
+  PrincipalRepositories,
+  ScopedRepositories,
+  SystemRepositories,
+} from './repositories/types.js';
+import { companyIdOf, tenantIdOf, userIdOf } from './scope.js';
+import type { ActorScope, PrincipalScope, Scope, SystemScope } from './scope.js';
 
 @Injectable()
 export class UnitOfWork {
@@ -53,6 +59,21 @@ export class UnitOfWork {
   }
 
   /**
+   * Runs work for an authenticated person who has not entered a company.
+   *
+   * The narrowest scope there is. It reaches the global tables and the reader's own membership
+   * rows, which is exactly what resolving company context needs and nothing more. Contract
+   * section 2.5: the answer to "which companies may I enter" is computed here, from membership
+   * rows, and never taken from the request.
+   */
+  async inPrincipalScope<T>(
+    scope: PrincipalScope,
+    work: (repositories: PrincipalRepositories) => Promise<T>,
+  ): Promise<T> {
+    return this.run(scope, work);
+  }
+
+  /**
    * Runs work that belongs to no single actor: provisioning, maintenance, tests.
    *
    * Not an escape hatch. With no tenant named, row level security denies every tenant-scoped
@@ -66,7 +87,7 @@ export class UnitOfWork {
     return this.run(scope, work);
   }
 
-  private async run<T, R extends ScopedRepositories | SystemRepositories>(
+  private async run<T, R extends ScopedRepositories | PrincipalRepositories | SystemRepositories>(
     scope: Scope,
     work: (repositories: R) => Promise<T>,
   ): Promise<T> {
@@ -89,6 +110,12 @@ export class UnitOfWork {
         'app.company_id',
         companyIdOf(scope) ?? '',
       ]);
+      // The third context setting, added by migration 0004. Empty for a system scope, which has
+      // no person behind it, and empty is a denial rather than a wildcard.
+      await client.query('SELECT set_config($1, $2, true)', [
+        'app.user_id',
+        userIdOf(scope) ?? '',
+      ]);
 
       const db = drizzle(client) as NodePgDatabase<Record<string, never>>;
       const repositories = buildRepositories(db, scope) as R;
@@ -110,24 +137,18 @@ export class UnitOfWork {
 function buildRepositories(
   db: NodePgDatabase<Record<string, never>>,
   scope: Scope,
-): ScopedRepositories & SystemRepositories {
+): ScopedRepositories & PrincipalRepositories & SystemRepositories {
   return {
     companies: new DrizzleCompanyRepository(db, scope),
     memberships: new DrizzleMembershipRepository(db, scope),
-    sessions: new DrizzleSessionRepository(db),
+    roles: new DrizzleRoleRepository(db, scope),
+    sessions: new DrizzleSessionRepository(db, scope),
     users: new DrizzleUserRepository(db, scope),
     audit: new DrizzleAuditRepository(db, scope),
     authThrottle: new DrizzleAuthThrottleRepository(db),
   };
 }
 
-function tenantIdOf(scope: Scope): string | undefined {
-  return scope.kind === 'actor' ? scope.tenantId : scope.tenantId;
-}
-
-function companyIdOf(scope: Scope): string | undefined {
-  return scope.kind === 'actor' ? scope.companyId : scope.companyId;
-}
 
 /**
  * A rollback that itself fails must not mask the error that caused it.
