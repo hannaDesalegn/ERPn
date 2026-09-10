@@ -94,12 +94,14 @@ jobs:
       # Runs the same script Compose runs on first boot, against the CI service container.
       # Reusing the script rather than repeating the SQL is deliberate: two copies of a
       # security boundary drift, and the one that drifts is always the one nobody tests.
-      - name: Create the restricted application role
+      - name: Create the owning and application roles
         env:
           # The script speaks the names the postgres image uses, so CI supplies them too
           # rather than the script learning a second set of names for one caller.
           POSTGRES_USER: erp
           POSTGRES_DB: erp_ci
+          MIGRATION_DB_USER: erp_migrator
+          MIGRATION_DB_PASSWORD: erp_migrator_ci
           APP_DB_USER: erp_app
           APP_DB_PASSWORD: erp_app_ci
         run: sh ./docker/postgres/init/01-roles.sh

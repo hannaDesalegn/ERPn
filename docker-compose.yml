@@ -26,8 +26,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-erp_dev}
       # Deterministic collation, so index ordering does not depend on the host locale.
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
-      # The restricted role the API connects as, created by the init script below.
-      # Contract section 7.1: the application never connects as the owner.
+      # Two roles created by the init script below, neither of them a superuser.
+      # Contract section 7.1: the owner runs migrations, the application connects as the
+      # restricted role, and POSTGRES_USER above is used only to provision these two.
+      MIGRATION_DB_USER: ${MIGRATION_DB_USER:-erp_migrator}
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:-erp_migrator_local_dev}
       APP_DB_USER: ${APP_DB_USER:-erp_app}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:-erp_app_local_dev}
     ports:

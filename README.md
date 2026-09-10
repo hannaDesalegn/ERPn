@@ -40,9 +40,16 @@ section 15.3 allows and what keeps the edit cycle fast. `npm run db:down` stops 
 There is no application schema yet. `npm run db:up` gives you an empty database; migrations,
 tables and everything that uses them belong to the next increment.
 
-The database has two roles, which contract sections 2.4 and 7.1 require. `erp` owns the database
-and runs migrations. `erp_app` is what the API connects as: it owns nothing, has no DDL rights,
-and cannot bypass row level security, so a table owner can never be exempt from its own policies.
+The database has two working roles, which contract sections 2.4 and 7.1 require, and **neither is
+a superuser**. `erp_migrator` owns the database and schema and runs migrations, taking its DDL
+rights from ownership rather than from superuser status. `erp_app` is what the API connects as: it
+owns nothing, has no DDL rights, and cannot bypass row level security.
+
+That distinction is load bearing. A superuser bypasses row level security even on a table with
+`FORCE`, so an owning role that was a superuser would make every isolation test pass regardless of
+whether the policies worked. The `erp` superuser the image creates is used only to provision those
+two roles.
+
 The roles are created by `docker/postgres/init/01-roles.sh`, which runs only when the volume is
 first initialised. After changing it, run `npm run db:reset` rather than `npm run db:up`.
 
@@ -73,10 +80,12 @@ runtime, per contract sections 14.8 and 15.5.
 
 | Variable | Default | Used by |
 |---|---|---|
-| `POSTGRES_USER` | `erp` | Compose. Owns the database and runs migrations. |
+| `POSTGRES_USER` | `erp` | Compose. Superuser, used only to provision the two roles below. |
 | `POSTGRES_PASSWORD` | `erp_local_dev` | Compose |
 | `POSTGRES_DB` | `erp_dev` | Compose |
 | `POSTGRES_PORT` | `5432` | Compose, published on `127.0.0.1` only |
+| `MIGRATION_DB_USER` | `erp_migrator` | Compose. Owns the schema, runs migrations, not a superuser. |
+| `MIGRATION_DB_PASSWORD` | `erp_migrator_local_dev` | Compose |
 | `APP_DB_USER` | `erp_app` | Compose. The restricted role the API connects as. |
 | `APP_DB_PASSWORD` | `erp_app_local_dev` | Compose |
 | `NODE_ENV` | `development` | API |
@@ -85,6 +94,7 @@ runtime, per contract sections 14.8 and 15.5.
 | `LOG_LEVEL` | `info` | API |
 | `DATABASE_URL` | none, required | API. Connection string for the restricted role. |
 | `DATABASE_POOL_MAX` | `10` | API |
+| `MIGRATION_DATABASE_URL` | none | Migration runner only, never the API process. |
 
 Compose runs without any of these set. Copy `.env.example` to `.env` only to override a default,
 and `apps/api/.env.example` to `apps/api/.env` for the API. Both `.env` files are gitignored.

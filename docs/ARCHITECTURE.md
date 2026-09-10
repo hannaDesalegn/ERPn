@@ -823,6 +823,18 @@ application role never owns a table, because an owner can always grant itself ba
 revoked. Local development and continuous integration both use the two role setup, so that a
 grant mistake fails in development rather than in production.
 
+`[REQ]` *Added 2026-09-10.* **Neither role is a superuser.** A superuser bypasses row level
+security entirely, including on a table with `FORCE ROW LEVEL SECURITY`. An owning role that was
+a superuser would therefore have every policy unenforced against it: seeded rows would skip
+`WITH CHECK`, and any isolation test written against that role would pass whether the policies
+worked or not. The owning role gets DDL rights by owning the database and schema, not by being a
+superuser. A superuser account may exist to provision those two roles and is used for nothing
+else.
+
+This was found in practice rather than in review. A first pass at the isolation tests ran as the
+provisioning superuser and reported that cross-tenant inserts succeeded, which looked like a
+missing policy and was in fact a test that could never have failed.
+
 ### 7.2 Structured, not preformatted
 
 `[DEC]` Field changes are stored as structured data: the field path, and typed old and new
@@ -1792,3 +1804,4 @@ they are open.
 | 2026-09-09 | 2.7 | Granted capabilities stored as permission strings with no `permissions` table, validated on write and asserted against the catalogue at startup. | A seeded table would duplicate what the code already defines |
 | 2026-09-10 | 1.2 | Migration tooling ruled final: handwritten versioned SQL applied by a runner on `pg`, `drizzle-orm` kept for typed schema and queries, `drizzle-kit` dropped. Forward only, checksummed, run as the owning role. | `drizzle-kit` carries unpatchable moderate advisories, and grants, policies and composite tenant keys cannot be expressed in a schema DSL anyway |
 | 2026-09-10 | 17.3 | Criterion 28 narrowed to tenant-scoped tables and four criteria added, numbered 29 to 32: live schema matches the Drizzle definitions, row level security enabled and forced, empty context returns no rows, and audit grants verified from the catalogue. | Drift protection is the price of handwritten migrations, and the isolation controls need catalogue level proof rather than trust in the migration text |
+| 2026-09-10 | 7.1 | Added the requirement that neither database role is a superuser, with the owning role taking DDL rights from owning the database and schema instead. | A superuser bypasses row level security even with FORCE, which made the first isolation tests incapable of failing |
