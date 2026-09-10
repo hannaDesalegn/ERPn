@@ -159,6 +159,51 @@ export interface SessionRepository {
   revokeAllForUser(userId: string): Promise<number>;
 }
 
+/** What is being counted. Contract section 5.2 requires both per address and per account. */
+export type AuthThrottleScopeKind = 'address' | 'account';
+
+export interface AuthThrottleStatus {
+  failureCount: number;
+  /** Null when not locked. A time in the future means locked until then. */
+  lockedUntil: Date | null;
+}
+
+/** Deployment level, per contract section 5.3. Never per company at authentication time. */
+export interface AuthThrottlePolicy {
+  maxAttempts: number;
+  windowMinutes: number;
+  lockoutMinutes: number;
+}
+
+/**
+ * Login throttling state. Global, per contract section 4.6 as amended 2026-09-10.
+ *
+ * Global by necessity rather than convenience: authentication precedes tenant resolution, and
+ * an attempt against an address matching no account has no user and no tenant to attribute it
+ * to. That attempt is exactly what a per-address limit exists to catch.
+ */
+export interface AuthThrottleRepository {
+  status(kind: AuthThrottleScopeKind, key: string): Promise<AuthThrottleStatus>;
+  /**
+   * Records one failure and locks if the limit is reached, in a single atomic statement.
+   *
+   * Atomic matters here more than it looks. A read, then a decision, then a write would let
+   * concurrent attempts each read the same count and each conclude they were under the limit,
+   * which is precisely the bypass a limiter exists to prevent.
+   */
+  recordFailure(
+    kind: AuthThrottleScopeKind,
+    key: string,
+    policy: AuthThrottlePolicy,
+  ): Promise<AuthThrottleStatus>;
+  /**
+   * Clears the counter after a successful authentication.
+   *
+   * Refuses while a lock is in force, so a correct password part way through a lockout cannot
+   * end it early. Earlier typos are forgiven; an active lock is not.
+   */
+  clearOnSuccess(kind: AuthThrottleScopeKind, key: string): Promise<void>;
+}
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
@@ -166,6 +211,7 @@ export interface ScopedRepositories {
   readonly memberships: MembershipRepository;
   readonly users: UserRepository;
   readonly audit: AuditRepository;
+  readonly authThrottle: AuthThrottleRepository;
 }
 
 /**
@@ -181,6 +227,7 @@ export interface SystemRepositories {
   readonly companies: CompanyRepository;
   readonly memberships: MembershipRepository;
   readonly audit: AuditRepository;
+  readonly authThrottle: AuthThrottleRepository;
 }
 
 /** Thrown when an optimistic locking check fails. Contract section 10.1. */

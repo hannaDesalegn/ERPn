@@ -24,6 +24,7 @@ import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Pool, PoolClient } from 'pg';
 
 import { DATABASE_POOL } from './tokens.js';
+import { DrizzleAuthThrottleRepository } from './repositories/auth-throttle.repository.js';
 import {
   DrizzleAuditRepository,
   DrizzleCompanyRepository,
@@ -116,6 +117,7 @@ function buildRepositories(
     sessions: new DrizzleSessionRepository(db),
     users: new DrizzleUserRepository(db, scope),
     audit: new DrizzleAuditRepository(db, scope),
+    authThrottle: new DrizzleAuthThrottleRepository(db),
   };
 }
 

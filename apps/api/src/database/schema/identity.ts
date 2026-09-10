@@ -205,6 +205,27 @@ export const auditEvents = pgTable('audit_events', {
 });
 
 /**
+ * Login throttling state. Global per contract section 4.6, amended 2026-09-10 to name it.
+ *
+ * Global by necessity: authentication precedes tenant resolution, and an attempt against an
+ * address matching no account has no user and no tenant to attribute it to. No row level
+ * security, because there is no tenant column for a policy to compare against.
+ */
+export const authThrottle = pgTable(
+  'auth_throttle',
+  {
+    scopeKind: text('scope_kind').notNull(),
+    scopeKey: text('scope_key').notNull(),
+    failureCount: integer('failure_count').notNull().default(0),
+    windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull().defaultNow(),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.scopeKind, table.scopeKey] })],
+);
+/**
  * The migration runner's own bookkeeping. Declared so the drift test accounts for every table
  * in the schema rather than ignoring the ones it does not recognise.
  */
@@ -221,7 +242,7 @@ export const schemaMigrations = pgTable('schema_migrations', {
 // ---------------------------------------------------------------------------------------
 
 /** Outside the tenant boundary. Must carry neither scope column and no row level security. */
-export const GLOBAL_TABLES = ['tenants', 'users', 'sessions'] as const;
+export const GLOBAL_TABLES = ['tenants', 'users', 'sessions', 'auth_throttle'] as const;
 
 /**
  * Inside the tenant boundary: carries `tenant_id` and has row level security enabled and
@@ -274,10 +295,23 @@ export const VERSION_EXEMPT_TABLES = [
 ] as const;
 
 /**
- * Not a business table. The migration runner's own bookkeeping, exempt from every rule above.
- * Its `version` column is a migration number and has nothing to do with optimistic locking.
+ * Not business tables, so section 4.2 does not govern them.
+ *
+ * `schema_migrations` is the migration runner's own bookkeeping. Its `version` column is a
+ * migration number and has nothing to do with optimistic locking.
+ *
+ * `auth_throttle` holds login counters. It is deliberately NOT claimed under the fourth version
+ * exemption in section 4.2: that shape requires last write wins to be the concurrency model, and
+ * this table's model is the opposite, an atomic upsert serialised on a row lock, which exists
+ * precisely so concurrent writers cannot overwrite each other. A `version` column would be a
+ * second concurrency control that nothing consults.
+ *
+ * Note what this classification does not do. It says nothing about tenant scoping, where section
+ * 4.6 refuses the infrastructure argument outright and required an explicit amendment naming this
+ * table. Being infrastructure exempts a table from the version rule and from nothing else.
  */
-export const INFRASTRUCTURE_TABLES = ['schema_migrations'] as const;
+export const INFRASTRUCTURE_TABLES = ['schema_migrations', 'auth_throttle'] as const;
+
 
 /** Scope columns are nullable on this table alone, per section 7.3. */
 export const NULLABLE_SCOPE_TABLES = ['audit_events'] as const;
@@ -292,5 +326,6 @@ export const identitySchema = {
   rolePermissions,
   membershipRoles,
   auditEvents,
+  authThrottle,
   schemaMigrations,
 };
