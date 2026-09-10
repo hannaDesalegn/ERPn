@@ -398,7 +398,9 @@ administration UI, and never a code change:
 - roles, and the capabilities each one grants
 - permission policies: approval thresholds and segregation of duties rules
 - organisation: warehouses, branches and locations
-- security policies: session lifetime, password rules, multi factor requirements
+- security policies: multi factor requirements, and any policy applied after a company is
+  resolved. Authentication-time policy, meaning session lifetime, password rules and login
+  throttling, is deployment level configuration; see section 5.3.
 - chart of accounts, and the accounts that document postings map to
 
 `[DEC]` Configuration is validated against the same rules as any other write. A company cannot
@@ -629,16 +631,41 @@ afterthought filter.
 `[REQ]` No tenant-scoped table is reachable by a query that does not constrain both columns.
 Section 6.3 describes the mechanism; this clause states the invariant.
 
-**The global tables, which is a closed list.** Three identity tables sit outside the tenant
-boundary because section 2.6 ratified one account per person reaching every company they belong
-to. Forcing scope columns onto them would mean a user row per tenant, which is the model that
-ruling rejected.
+**The global tables, which is a closed list.** These sit outside the tenant boundary because
+section 2.6 ratified one account per person reaching every company they belong to. Forcing scope
+columns onto them would mean a user row per tenant, which is the model that ruling rejected.
 
 | Table | Why it is global |
 |---|---|
 | `tenants` | It is the boundary. It cannot be inside itself. |
 | `users` | One person, one account, one credential, per section 2.6 |
 | `sessions` | Belongs to a global user. Carries the active company as state rather than as scope. |
+| `auth_throttle` | Added 2026-09-10. Authentication precedes tenant resolution. See below. |
+
+*`auth_throttle` added 2026-09-10, following the amendment procedure this section requires.*
+
+**Why `auth_throttle` is necessarily global.** Section 5.2 requires login to be rate limited per
+address and per account. Both measurements happen before any tenant is known, and the per-address
+case is sharper still: an attempt against an address matching no account has no user row and no
+tenant to attribute it to, which is exactly the attempt a per-address limit exists to catch. A
+tenant column here could only ever be null.
+
+Two alternatives were examined and rejected. Counters on `users` cover the per-account case and
+cannot cover the per-address one. Deriving the counts from `audit_events` fails for a different
+reason: its select policy compares `tenant_id` to the current context, authentication events carry
+a null tenant, and `NULL = <uuid>` is null rather than true, so the application can write those
+rows and can never read one back. That is correct under section 2.8, which reserves authentication
+records for platform administration, and it means the audit table cannot serve as throttle state.
+
+`[REQ]` `auth_throttle` holds only authentication throttling state: a scope kind, a scope key, a
+counter, a window, and a lock expiry. It carries no business data, no personal data beyond the
+address or address hash needed to count, and it is never joined to a tenant-scoped table. If a
+future change would put anything else in it, that change needs its own amendment.
+
+`[REQ]` This is not an infrastructure exemption and must not be cited as precedent for one. The
+clause below refuses the "it is not really tenant data" argument, and that refusal stands. The
+exemption here rests on a narrower fact: this table is written before a tenant exists to scope it
+to, which is true of nothing else in the system except authentication itself.
 
 `[REQ]` This list is closed. A new global table requires an amendment naming it here and saying
 why scope cannot apply, because "it is not really tenant data" is the reasoning behind every
@@ -703,6 +730,26 @@ than trusted from a cookie attribute.
 
 `[REQ]` Logout invalidates the session server side. A replayed cookie after logout is
 rejected.
+
+*Added 2026-09-10, resolving a contradiction found while implementing authentication.*
+
+`[DEC]` **Authentication-time policy is deployment level configuration, not per-company.** That
+covers session idle and absolute lifetime, password rules, and login throttling thresholds.
+
+Section 2.9 lists security policies among the domains a company configures. Taken literally that
+is impossible for these three, because authentication happens before any company is known: at the
+moment a password is checked and a session is created, there is no company whose policy could
+apply. The two clauses could not both hold as written, so this one settles it for the
+authentication path and section 2.9 now points here.
+
+`[REQ]` The values are validated at startup alongside the rest of the configuration, per section
+15.2, so a malformed security setting fails the boot rather than the first login.
+
+`[FUT]` Per company overrides, applied after company context is resolved rather than at
+authentication. A company could then shorten its own session lifetime or raise its own password
+requirements, with the deployment value as the floor. This is deliberately not built now: it needs
+company context, which belongs to a later increment, and building half of it would mean a policy
+that applies to some sessions and not others depending on when it was read.
 
 ### 5.4 Identity is separate from authorization
 
@@ -1853,3 +1900,5 @@ they are open.
 | 2026-09-10 | 7.1 | Added the requirement that neither database role is a superuser, with the owning role taking DDL rights from owning the database and schema instead. | A superuser bypasses row level security even with FORCE, which made the first isolation tests incapable of failing |
 | 2026-09-10 | 4.2, 17.3 | `version` narrowed from every business table to mutable tables only, with association tables and append-only tables exempted by reason rather than by name. Criterion 28 updated to match, and an unused `version` on an exempt table made a defect in its own right. | A version column on a table that is never updated has no reader, and a concurrency control nobody checks is worse than an absent one |
 | 2026-09-10 | 4.2, 17.3 | Added a fourth `version` exemption for ephemeral operational state under an explicit last-write-wins model, gated on four conditions that all must hold. `sessions` is the only example. Criterion 28 updated to name all four shapes. | `sessions.last_seen_at` is written by ordinary concurrent requests from one principal, where optimistic locking would produce conflicts that describe nothing real |
+| 2026-09-10 | 4.6 | `auth_throttle` added to the closed list of global tables, with the reasoning stated and the infrastructure-exemption argument explicitly refused. | Authentication precedes tenant resolution, and per-address throttling has no user row or tenant to attribute an attempt to |
+| 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
