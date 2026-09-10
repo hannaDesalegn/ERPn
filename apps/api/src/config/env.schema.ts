@@ -52,7 +52,67 @@ export const envSchema = z.object({
 
   /** Connection pool ceiling. Kept small by default; tuned against real load later. */
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
-});
+
+  // -----------------------------------------------------------------------------------
+  // Authentication policy.
+  //
+  // Contract section 5.3, ratified 2026-09-10: authentication-time policy is deployment
+  // level configuration, not per company, because authentication happens before any company
+  // is known. Per-company overrides are a recorded future consideration.
+  //
+  // Every value below is here rather than in the authentication code so that raising a cost
+  // or shortening a lifetime is a configuration change, reviewable on its own, with no
+  // application logic touched. Section 5.2 requires the Argon2 parameters to be "recorded in
+  // configuration and reviewed periodically", and this is that record.
+  // -----------------------------------------------------------------------------------
+
+  /**
+   * Argon2id memory cost in KiB. Default 65536, meaning 64 MiB.
+   *
+   * Memory is the parameter that matters most against GPU and ASIC attack, because it is the
+   * one an attacker cannot trade away. Raise this first when revisiting.
+   */
+  ARGON2_MEMORY_KIB: z.coerce.number().int().min(8_192).max(1_048_576).default(65_536),
+
+  /** Argon2id iterations. Default 3. Raise after memory when hardware improves. */
+  ARGON2_TIME_COST: z.coerce.number().int().min(2).max(10).default(3),
+
+  /**
+   * Argon2id parallelism. Default 1.
+   *
+   * One is deliberate rather than conservative: the hashing runs on a request thread, and
+   * higher parallelism buys little against an attacker while costing the server more under
+   * concurrent logins.
+   */
+  ARGON2_PARALLELISM: z.coerce.number().int().min(1).max(16).default(1),
+
+  /** Idle timeout in minutes. A session unused for this long is dead. Section 5.3. */
+  SESSION_IDLE_MINUTES: z.coerce.number().int().min(1).max(43_200).default(60),
+
+  /**
+   * Absolute lifetime in minutes, never extended by use. Section 5.3 requires both, because
+   * an idle timeout alone lets a stolen session live indefinitely as long as it is used.
+   */
+  SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(5).max(43_200).default(720),
+
+  /**
+   * Failed attempts before a scope is locked. Section 5.2 requires lockout but names no
+   * number, so this is a conservative default rather than an invented architectural rule.
+   */
+  AUTH_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(100).default(10),
+
+  /** Window in minutes over which failures accumulate toward the limit. */
+  AUTH_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1_440).default(15),
+
+  /** How long a scope stays locked once the limit is reached. */
+  AUTH_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1_440).default(15),
+})
+  // A session whose idle timeout exceeds its absolute lifetime has no idle timeout at all,
+  // which reads as a configured control and is not one. Section 5.3 requires both to apply.
+  .refine((env) => env.SESSION_IDLE_MINUTES <= env.SESSION_ABSOLUTE_MINUTES, {
+    message: 'SESSION_IDLE_MINUTES must not exceed SESSION_ABSOLUTE_MINUTES',
+    path: ['SESSION_IDLE_MINUTES'],
+  });
 
 export type Env = z.infer<typeof envSchema>;
 
