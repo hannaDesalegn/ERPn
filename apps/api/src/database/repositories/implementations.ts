@@ -21,7 +21,7 @@
  * still denies. Section 2.4 requires both layers and permits neither to stand alone.
  */
 
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { isPermission } from '../../authorization/permissions.js';
@@ -747,6 +747,22 @@ export class DrizzleAuditRepository implements AuditRepository {
         ),
       )
       .orderBy(auditEvents.occurredAt);
+
+    return rows.map(toAuditEvent);
+  }
+
+  async listForCompany(limit: number): Promise<AuditEventRecord[]> {
+    const tenantId = requireTenantId(this.scope);
+    const companyId = requireCompanyId(this.scope);
+
+    const rows = await this.db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(eq(auditEvents.tenantId, tenantId), eq(auditEvents.companyId, companyId)),
+      )
+      .orderBy(desc(auditEvents.occurredAt))
+      .limit(Math.min(Math.max(limit, 1), 200));
 
     return rows.map(toAuditEvent);
   }

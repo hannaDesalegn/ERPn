@@ -22,9 +22,22 @@ import { fileURLToPath } from 'node:url';
 const AUTH_DIR = dirname(fileURLToPath(import.meta.url));
 const HTTP_DIR = join(AUTH_DIR, '..', 'http');
 
+/**
+ * Files in those directories that hold no credential and may log.
+ *
+ * A named list rather than a pattern, and short by design. Every entry is a claim that the file
+ * never holds a password, a hash or a session token, and the assertion below pins the list so
+ * that adding to it is a visible decision in review rather than a way around the rule.
+ */
+const MAY_LOG = new Set([
+  // Walks controller metadata at startup. It never sees a request, and reporting which routes
+  // failed to declare an access rule is the whole point of it.
+  'route-declarations.ts',
+]);
+
 const sourceFiles = [AUTH_DIR, HTTP_DIR].flatMap((directory) =>
   readdirSync(directory)
-    .filter((name) => name.endsWith('.ts') && !name.includes('.spec.'))
+    .filter((name) => name.endsWith('.ts') && !name.includes('.spec.') && !MAY_LOG.has(name))
     .map((name) => [name, readFileSync(join(directory, name), 'utf8')] as const),
 );
 
@@ -36,15 +49,17 @@ describe('Secret handling in the authentication files', () => {
   it('found the files it is meant to be guarding', () => {
     // Without this, a rename or a move turns the whole suite into a vacuous pass over an empty
     // list, and it would still be green.
+    expect([...MAY_LOG]).toEqual(['route-declarations.ts']);
     expect(sourceFiles.map(([name]) => name).sort()).toEqual([
+      'access.guard.ts',
       'auth.controller.ts',
       'auth.module.ts',
       'authentication.service.ts',
       'password-hasher.ts',
       'plugins.ts',
+      'principal.ts',
       'session-cookie.ts',
       'session-policy.ts',
-      'session.guard.ts',
       'session-token.ts',
     ].sort());
   });

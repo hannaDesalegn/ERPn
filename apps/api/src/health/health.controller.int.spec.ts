@@ -1,3 +1,13 @@
+/**
+ * The health routes, booted from the real root module.
+ *
+ * An integration test rather than a unit one, and it became so on purpose. Booting the whole
+ * application now runs two startup checks that read the database: the catalogue integrity check
+ * in section 2.7 and the route declaration audit in section 6.2. Stubbing them out to keep this
+ * fast would leave nothing asserting that the real route set passes the audit, which is half of
+ * criterion 7. So it keeps the real graph and takes the database with it.
+ */
+
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';

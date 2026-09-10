@@ -152,6 +152,15 @@ export interface UserRepository {
 export interface AuditRepository {
   append(event: AuditEventInput): Promise<AuditEventRecord>;
   listForEntity(entityType: string, entityId: string): Promise<AuditEventRecord[]>;
+  /**
+   * The most recent events in the acting company, newest first.
+   *
+   * Company scoped, not merely tenant scoped. The select policy on this table compares the
+   * tenant alone, because a platform level row has no company, so filtering by company is the
+   * repository's job and a missed predicate here would show one company another's trail inside
+   * the same tenant. Section 2.10 lists that among the things that must never happen.
+   */
+  listForCompany(limit: number): Promise<AuditEventRecord[]>;
 }
 
 export interface SessionRecord {

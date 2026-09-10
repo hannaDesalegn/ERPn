@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD, DiscoveryModule } from '@nestjs/core';
 import { AppConfigModule } from './config/config.module.js';
+import { AdministrationModule } from './administration/administration.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AuthorizationModule } from './authorization/authorization.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
+import { AccessGuard } from './http/access.guard.js';
+import { RouteDeclarationAudit } from './http/route-declarations.js';
 
 /**
  * Root module.
@@ -14,13 +18,24 @@ import { IdentityModule } from './identity/identity.module.js';
  * sales, purchasing, inventory and accounting each become a module as they are built.
  */
 @Module({
+  // DiscoveryModule is what lets the startup audit walk the controllers Nest registered, so the
+  // check reads the same metadata the guard reads rather than a parallel list.
   imports: [
     AppConfigModule,
+    DiscoveryModule,
     DatabaseModule,
     AuthModule,
     AuthorizationModule,
     IdentityModule,
+    AdministrationModule,
     HealthModule,
+  ],
+  providers: [
+    // Global, per section 6.2. A guard applied per controller is a guard that will be forgotten
+    // on the two hundredth route, and the shape where forgetting produces a refusal rather than
+    // an opening is the only one worth having.
+    { provide: APP_GUARD, useClass: AccessGuard },
+    RouteDeclarationAudit,
   ],
 })
 export class AppModule {}

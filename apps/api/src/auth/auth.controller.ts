@@ -32,6 +32,7 @@ import { ConfigService } from '@nestjs/config';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { Public } from '../authorization/route-access.js';
 import type { Env } from '../config/env.schema.js';
 import {
   clearSessionCookie,
@@ -58,6 +59,7 @@ export class AuthController {
     this.cookiePolicy = { secure: config.get('COOKIE_SECURE', { infer: true }) };
   }
 
+  @Public()
   @Post('login')
   @HttpCode(204)
   async login(
@@ -88,7 +90,7 @@ export class AuthController {
   /**
    * Ends the session.
    *
-   * Not behind the session guard, and idempotent. A client holding an expired or already revoked
+   * Declared public, and idempotent. A client holding an expired or already revoked
    * cookie must still be able to clear it, and answering that with 401 would leave the browser
    * holding a dead credential with no way to be rid of it. It reveals nothing: the response is
    * identical whether the token was live, dead or never issued.
@@ -97,6 +99,7 @@ export class AuthController {
    * principle. The cookie is SameSite=Strict, so a cross site request does not carry it and the
    * call revokes nothing. The token that section 6.5 requires is a later increment.
    */
+  @Public()
   @Post('logout')
   @HttpCode(204)
   async logout(

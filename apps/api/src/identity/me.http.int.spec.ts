@@ -17,6 +17,7 @@ import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Client } from 'pg';
 
+import { AppModule } from '../app.module.js';
 import { AppConfigModule } from '../config/config.module.js';
 import { DatabaseModule } from '../database/database.module.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
@@ -96,7 +97,11 @@ describe('Authenticated HTTP surface', () => {
     }
 
     const moduleRef = await Test.createTestingModule({
-      imports: [AppConfigModule, DatabaseModule, AuthModule, IdentityModule],
+      // The root module, so the global access guard is registered exactly as it is in the
+      // running application. Assembling the feature modules alone would give a server with no
+      // guard, on which every authenticated route would answer without one and every assertion
+      // below would be about something nobody deploys.
+      imports: [AppModule, AppConfigModule, DatabaseModule, AuthModule, IdentityModule],
     })
       .overrideProvider(ConfigService)
       .useValue({ get: (key: string) => TEST_POLICY[key] })

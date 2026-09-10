@@ -17,19 +17,25 @@
  * already knows.
  */
 
-import { Body, Controller, Get, NotFoundException, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { principalOf, SessionGuard } from '../http/session.guard.js';
+import { AuthenticatedOnly } from '../authorization/route-access.js';
+import { principalOf } from '../http/principal.js';
 import { IdentityService, type MeView } from './identity.service.js';
 
 const switchBody = z.object({
   companyId: z.string().min(1).max(64),
 });
 
+/**
+ * Both routes need a session and no permission, and the reasoning is in `route-access.ts`:
+ * these are how a caller learns what they may do and how a session acquires a company, so
+ * requiring a permission would mean needing a company before you could choose one.
+ */
 @Controller('me')
-@UseGuards(SessionGuard)
+@AuthenticatedOnly()
 export class MeController {
   constructor(private readonly identity: IdentityService) {}
 

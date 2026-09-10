@@ -21,6 +21,7 @@ import { Controller, Get, Inject, ServiceUnavailableException } from '@nestjs/co
 import { sql } from 'drizzle-orm';
 
 import { DATABASE, type Database } from '../database/database.module.js';
+import { Public } from '../authorization/route-access.js';
 
 export interface ReadinessResponse {
   status: 'ready';
@@ -31,6 +32,9 @@ export interface ReadinessResponse {
 export class ReadinessController {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
+  // A probe from a container platform or a load balancer, which carries no session and
+  // must not need one. Declared rather than assumed, per section 6.2.
+  @Public()
   @Get()
   async check(): Promise<ReadinessResponse> {
     try {

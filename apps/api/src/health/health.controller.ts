@@ -15,6 +15,7 @@
  */
 
 import { Controller, Get } from '@nestjs/common';
+import { Public } from '../authorization/route-access.js';
 
 export interface HealthResponse {
   status: 'ok';
@@ -23,6 +24,9 @@ export interface HealthResponse {
 
 @Controller('health')
 export class HealthController {
+  // A probe from a container platform or a load balancer, which carries no session and
+  // must not need one. Declared rather than assumed, per section 6.2.
+  @Public()
   @Get()
   check(): HealthResponse {
     return {
