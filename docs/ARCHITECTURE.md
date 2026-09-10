@@ -960,9 +960,13 @@ ambiguous.
 
 ### 6.7 What is temporary today
 
-`[TEMP]` The application has no route level authorization. Navigation items are filtered by
-permission, but every route renders for every role, so a warehouse operator reaches the
-general ledger by typing its URL. **Removal trigger:** slice 1.
+*Discharged 2026-09-10. Every route showing business data declares the permission it needs and
+renders an explanation instead of the page when the session does not hold it.*
+
+`[REQ]` A frontend route guard is presentation, never enforcement. It reads the permissions
+`/me` reported, which is a report rather than an authority, so a user who edits them reaches the
+page and every request it makes is still refused by the server. Nothing about the system's safety
+may be argued from a hidden control or an unreachable route.
 
 `[FUT]` Delegation and temporary authority, for example an approver's rights during leave.
 
@@ -1767,8 +1771,6 @@ infrastructure becomes the project.
 
 | What | Where | Removal trigger |
 |---|---|---|
-| Mock identity and role switcher | `app/session.tsx`, `layouts/AppShell.tsx` | slice 1 |
-| No route level authorization | `app/router.tsx` | slice 1 |
 | Seeded `Account.balance` contradicting the ledger | `mocks/reference.ts`, `mocks/db.ts` | immediate |
 | Cash position read from seeded balances | `mocks/db.ts` | immediate |
 | Entire fixture layer | `src/mocks/` | per module, as endpoints land |
@@ -1780,7 +1782,7 @@ infrastructure becomes the project.
 | Document numbers from a JavaScript counter | `mocks/generate.ts` | slice 2 |
 | Static cost price used as the costing basis | `mocks/db.ts`, `mocks/generate.ts` | costing implementation, section 8.6 |
 | Mutating endpoints protected by `SameSite=Strict` alone, with no cross site request token | `http/session-cookie.ts`, `auth/auth.controller.ts`, `identity/me.controller.ts` | the CSRF increment, criterion 24 |
-| Permission catalogue and role templates duplicated in the frontend | `web/src/domain/security.ts`, `web/src/lib/permissions.ts` | the frontend consuming `/me`, criterion 21 |
+| Permission catalogue and role templates duplicated in the frontend, now only to render the roles admin screen | `web/src/domain/security.ts`, `web/src/lib/permissions.ts`, `web/src/features/admin/AdminPages.tsx` | the company administration screens, which read roles from the API |
 
 ### 16.2 Production critical behaviour that must never be faked
 
@@ -2015,4 +2017,5 @@ they are open.
 | 2026-09-10 | 4.6 | Corrected the claim that `auth_throttle` carries no personal data beyond an address. It carries the attempted email, which is personal data whether or not it matches an account. Retention obligation stated and the missing reaper recorded as future. | Review of 6b612f2 against the table the migration actually creates |
 | 2026-09-10 | 16.1 | Three temporary behaviours registered as the HTTP surface landed: SameSite as the only cross site defence, per-controller session authentication instead of a global deny-by-default guard, and `/me` reporting roles without effective permissions. | Each is a control that is deliberately partial in this increment, and an unregistered partial control is indistinguishable from a finished one |
 | 2026-09-10 | 6.2, 16.1 | Route access declared as one of three kinds, with the authenticated kind confined by rule to `/me` and the company switch. The guard ruled global, and enforcement ruled to re-derive rather than cache. Two 16.1 entries closed as the authorization layer landed, and the duplicated frontend permission vocabulary registered in their place. | "Every route declares the permission it requires" had no way to describe sign in, the health probes, or the two routes that tell a caller what they may do, and an undescribable route is one someone will leave undeclared |
+| 2026-09-10 | 6.7, 16.1 | The mock identity and route authorization temporary clauses discharged as the frontend began consuming `/me`. A clause added stating that a frontend route guard is presentation and never enforcement. | The frontend now has guards that look like access control, and the one thing worth writing down about them is that they are not |
 | 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |
