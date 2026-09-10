@@ -21,13 +21,14 @@
  * still denies. Section 2.4 requires both layers and permits neither to stand alone.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import {
   auditEvents,
   companies,
   memberships,
+  sessions,
   users,
 } from '../schema/identity.js';
 import type { ActorScope, Scope, SystemScope } from '../scope.js';
@@ -42,6 +43,8 @@ import {
   type CompanyRepository,
   type MembershipRecord,
   type MembershipRepository,
+  type SessionRecord,
+  type SessionRepository,
   type UserRecord,
   type UserRepository,
 } from './types.js';
@@ -438,3 +441,114 @@ function toAuditEvent(row: Row<typeof auditEvents.$inferSelect>): AuditEventReco
 }
 
 export type { ActorScope };
+
+// ---------------------------------------------------------------------------------------
+// Sessions. Global, per contract section 4.6.
+// ---------------------------------------------------------------------------------------
+
+export class DrizzleSessionRepository implements SessionRepository {
+  /**
+   * No scope parameter, unlike every other repository here, and the absence is deliberate
+   * rather than an oversight. Sessions are global per contract section 4.6: they belong to a
+   * global user and exist before any company is chosen. Taking a scope and then ignoring it
+   * would suggest a filter that is not applied.
+   *
+   * Section 4.6 also says a global table is not unprotected. What protects this one is that
+   * every method is keyed by a value the caller must already hold: a token hash they were
+   * given, or a session id they resolved from one. There is no listing.
+   */
+  constructor(private readonly db: Db) {}
+
+  /**
+   * Lookup is by token hash and nothing else.
+   *
+   * Expiry and revocation are evaluated by the caller rather than filtered out here, because
+   * the reasons differ and the caller needs to know which one applied: an idle session can be
+   * refused with "sign in again", a revoked one means something happened to the account.
+   */
+  async findByTokenHash(tokenHash: string): Promise<SessionRecord | null> {
+    const rows = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.tokenHash, tokenHash))
+      .limit(1);
+
+    return rows[0] ? toSession(rows[0]) : null;
+  }
+
+  async create(input: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+  }): Promise<SessionRecord> {
+    const rows = await this.db
+      .insert(sessions)
+      .values({
+        id: input.id,
+        userId: input.userId,
+        tokenHash: input.tokenHash,
+        idleExpiresAt: input.idleExpiresAt,
+        absoluteExpiresAt: input.absoluteExpiresAt,
+        ipAddress: input.ipAddress ?? null,
+        userAgent: input.userAgent ?? null,
+        // activeCompanyId stays null. Authentication establishes identity; company context is
+        // a later increment, per contract section 5.4.
+      })
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new Error('Insert returned no row');
+    return toSession(row);
+  }
+
+  /**
+   * Extends the idle window only.
+   *
+   * There is deliberately no way to move `absoluteExpiresAt`. Section 5.3 requires an absolute
+   * lifetime that use never extends, and the way that requirement usually dies is a helper
+   * that updates both because it looked symmetric.
+   */
+  async touch(input: { id: string; idleExpiresAt: Date }): Promise<void> {
+    await this.db
+      .update(sessions)
+      .set({ idleExpiresAt: input.idleExpiresAt, lastSeenAt: new Date() })
+      .where(and(eq(sessions.id, input.id), isNull(sessions.revokedAt)));
+  }
+
+  async revoke(id: string): Promise<void> {
+    // Only unrevoked rows, so the original revocation time survives a repeated logout.
+    await this.db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(sessions.id, id), isNull(sessions.revokedAt)));
+  }
+
+  async revokeAllForUser(userId: string): Promise<number> {
+    const rows = await this.db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+      .returning({ id: sessions.id });
+
+    return rows.length;
+  }
+}
+
+function toSession(row: Row<typeof sessions.$inferSelect>): SessionRecord {
+  // The token hash is deliberately not mapped through. Nothing above this layer needs it, and
+  // a field nobody needs is a field that ends up in a log line.
+  return {
+    id: row.id,
+    userId: row.userId,
+    activeCompanyId: row.activeCompanyId,
+    createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
+    idleExpiresAt: row.idleExpiresAt,
+    absoluteExpiresAt: row.absoluteExpiresAt,
+    revokedAt: row.revokedAt,
+  };
+}

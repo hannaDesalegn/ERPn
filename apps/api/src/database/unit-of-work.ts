@@ -28,6 +28,7 @@ import {
   DrizzleAuditRepository,
   DrizzleCompanyRepository,
   DrizzleMembershipRepository,
+  DrizzleSessionRepository,
   DrizzleUserRepository,
 } from './repositories/implementations.js';
 import type { ScopedRepositories, SystemRepositories } from './repositories/types.js';
@@ -112,6 +113,7 @@ function buildRepositories(
   return {
     companies: new DrizzleCompanyRepository(db, scope),
     memberships: new DrizzleMembershipRepository(db, scope),
+    sessions: new DrizzleSessionRepository(db),
     users: new DrizzleUserRepository(db, scope),
     audit: new DrizzleAuditRepository(db, scope),
   };

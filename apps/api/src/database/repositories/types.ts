@@ -120,9 +120,49 @@ export interface AuditRepository {
   listForEntity(entityType: string, entityId: string): Promise<AuditEventRecord[]>;
 }
 
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  activeCompanyId: string | null;
+  createdAt: Date;
+  lastSeenAt: Date;
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
+  revokedAt: Date | null;
+}
+
+/**
+ * Global, per contract section 4.6. A session belongs to a global user and carries the active
+ * company as state rather than as scope.
+ *
+ * NOTE WHAT IS ABSENT. There is no method that returns a token, and no field that holds one.
+ * The raw token exists only in the moment it is issued and in the cookie afterwards; the
+ * database holds a SHA-256 hash and this interface never speaks in anything else.
+ */
+export interface SessionRepository {
+  /** Looks a session up by the hash of a presented token. Never by the token itself. */
+  findByTokenHash(tokenHash: string): Promise<SessionRecord | null>;
+  create(input: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+  }): Promise<SessionRecord>;
+  /** Extends the idle window on use. Never extends the absolute lifetime. */
+  touch(input: { id: string; idleExpiresAt: Date }): Promise<void>;
+  /** Server side revocation. Contract section 5.3. */
+  revoke(id: string): Promise<void>;
+  /** Revokes every live session for a user, for password change and dismissal. */
+  revokeAllForUser(userId: string): Promise<number>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
+  readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
   readonly users: UserRepository;
   readonly audit: AuditRepository;
@@ -137,6 +177,7 @@ export interface ScopedRepositories {
  */
 export interface SystemRepositories {
   readonly users: UserRepository;
+  readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;
   readonly memberships: MembershipRepository;
   readonly audit: AuditRepository;
