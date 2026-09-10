@@ -524,7 +524,7 @@ first migration could not satisfy for three tables where the column would have h
 section 10.1. A table is mutable when a row can be updated after it is written, which is the
 only circumstance in which a lost update is possible.
 
-`[REQ]` Three shapes are exempt, and the exemption is by reason rather than by name, so a table
+`[REQ]` Four shapes are exempt, and the exemption is by reason rather than by name, so a table
 added later inherits it only if the same reasoning applies:
 
 | Shape | Why no `version` |
@@ -532,6 +532,30 @@ added later inherits it only if the same reasoning applies:
 | Association tables, insert and delete only | A row is created or removed, never edited, so there is no update to lose. Adding a column to hold a number nobody increments invites a future contributor to trust it. |
 | Append-only tables | Rows are never updated at all. `audit_events` goes further: section 7.1 revokes `UPDATE` and `DELETE` from the application role, so an update is refused by the database before optimistic locking could apply. |
 | Tables where `updated_at` never changes | Same argument, stated generally. |
+| **Ephemeral operational state where last write wins is the explicit concurrency model** | Added 2026-09-10. See the conditions below. `sessions` is the current and only example. |
+
+**The fourth shape, deliberately narrow.** `sessions.last_seen_at` is refreshed by nearly every
+request, and two parallel requests from one user updating it are both correct. Optimistic locking
+would turn ordinary concurrent traffic into `409 Conflict` responses that mean nothing to the
+user and describe no real conflict.
+
+`[REQ]` A table qualifies for the fourth exemption only if **all four** of these hold. Any one of
+them failing puts the table back under the main rule:
+
+1. It holds operational state, not a business record. Nothing in it appears on a document, in a
+   ledger, in a report, or in an audit trail as business content.
+2. It is ephemeral. Rows are expected to expire, be revoked, or be cleaned up, and losing one
+   costs a user a re-login rather than a transaction.
+3. Last write wins is the **chosen** concurrency model, written down at the table, not the
+   accidental result of nobody having thought about it.
+4. No field in it is edited by two different actors with different intent. Concurrent writers are
+   the same principal doing the same thing.
+
+`[REQ]` The exemption does not weaken the main rule. A mutable business table requires `version`,
+and "concurrent conflicts would be inconvenient" is not a reason to drop it: for business data
+that inconvenience is the control working. Claiming this exemption for a table that carries
+business meaning is a defect, and reviewers should read the four conditions above as a checklist
+rather than a description.
 
 `[REQ]` A mutable table without `version` is a defect. An exempt table with an unused `version`
 is also a defect, because a column that looks like a concurrency control and is never checked is
@@ -1741,10 +1765,12 @@ Each maps to a negative requirement in section 2.10.
 27. Continuous integration runs type checking, lint, unit tests, integration tests against a
     real PostgreSQL instance, and a secret scan. All are required to pass.
 28. Every tenant-scoped table created in this slice carries `tenant_id` and `company_id`, both
-    not null, and the global tables named in 4.6 carry neither. Mutable tenant-scoped tables
-    additionally carry `version`; the association and append-only tables exempted by section 4.2
-    must not carry it. A test inspects the live schema rather than the migration source, so a
-    table added later on the wrong side of either rule fails.
+    not null, and the global tables named in 4.6 carry neither. Mutable business tables
+    additionally carry `version`; the four exempt shapes in section 4.2, meaning association
+    tables, append-only tables, tables whose rows are never updated, and ephemeral operational
+    state under last write wins, must not carry it. The exempt set is declared as data rather
+    than restated in the test. A test inspects the live schema rather than the migration source,
+    so a table added later on the wrong side of either rule fails.
 29. The running schema matches the Drizzle definitions. A test reads the live catalogue, meaning
     tables, columns, types, nullability and keys, and compares it against the Drizzle schema, so
     handwritten SQL and typed definitions cannot silently diverge. Section 1.2 makes this the
@@ -1826,3 +1852,4 @@ they are open.
 | 2026-09-10 | 17.3 | Criterion 28 narrowed to tenant-scoped tables and four criteria added, numbered 29 to 32: live schema matches the Drizzle definitions, row level security enabled and forced, empty context returns no rows, and audit grants verified from the catalogue. | Drift protection is the price of handwritten migrations, and the isolation controls need catalogue level proof rather than trust in the migration text |
 | 2026-09-10 | 7.1 | Added the requirement that neither database role is a superuser, with the owning role taking DDL rights from owning the database and schema instead. | A superuser bypasses row level security even with FORCE, which made the first isolation tests incapable of failing |
 | 2026-09-10 | 4.2, 17.3 | `version` narrowed from every business table to mutable tables only, with association tables and append-only tables exempted by reason rather than by name. Criterion 28 updated to match, and an unused `version` on an exempt table made a defect in its own right. | A version column on a table that is never updated has no reader, and a concurrency control nobody checks is worse than an absent one |
+| 2026-09-10 | 4.2, 17.3 | Added a fourth `version` exemption for ephemeral operational state under an explicit last-write-wins model, gated on four conditions that all must hold. `sessions` is the only example. Criterion 28 updated to name all four shapes. | `sessions.last_seen_at` is written by ordinary concurrent requests from one principal, where optimistic locking would produce conflicts that describe nothing real |
