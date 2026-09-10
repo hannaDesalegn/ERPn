@@ -652,10 +652,14 @@ tenant column here could only ever be null.
 
 Two alternatives were examined and rejected. Counters on `users` cover the per-account case and
 cannot cover the per-address one. Deriving the counts from `audit_events` fails for a different
-reason: its select policy compares `tenant_id` to the current context, authentication events carry
-a null tenant, and `NULL = <uuid>` is null rather than true, so the application can write those
-rows and can never read one back. That is correct under section 2.8, which reserves authentication
-records for platform administration, and it means the audit table cannot serve as throttle state.
+reason: an audit row is written once and never revised, so a counter derived from it would be a
+scan of every prior attempt rather than a single locked row, and the atomic upsert that makes the
+limiter unbypassable under concurrency has nowhere to happen.
+
+*Corrected 2026-09-10. This paragraph previously said the application could write authentication
+audit rows and never read one back. The second half was right and the first half was wrong: the
+select policy also governed the `RETURNING` clause of the insert, so those rows could not be
+written either. See the ruling in section 7.3.*
 
 `[REQ]` `auth_throttle` holds only authentication throttling state: a scope kind, a scope key, a
 counter, a window, and a lock expiry. It carries no business data, no personal data beyond the
@@ -955,6 +959,32 @@ document event is then a constraint violation, not a silent hole.
 
 `[REQ]` The audit table is the only table permitted this exemption. It is granted because the
 alternative is not auditing authentication, which is worse.
+
+*Amended 2026-09-10, after the policy written for the clause above was found to block the writes
+it was meant to permit.*
+
+`[REQ]` A platform level audit row, meaning one whose `tenant_id` is null, is readable only in a
+transaction that has no tenant context at all. A tenant scoped transaction sees its own rows and
+no platform row; an empty context sees platform rows and no tenant's rows. Neither direction
+crosses a tenant boundary and no context ever sees two tenants.
+
+The original policy compared `tenant_id` to the current context and nothing else, on the reasoning
+that authentication records belong to platform administration under section 2.8. That reasoning
+was sound and the policy was not. PostgreSQL applies `SELECT` policies to the `RETURNING` clause of
+an `INSERT`, and the audit repository returns the row it appends, so a platform row failed the
+check and the whole insert was rejected. Every login, failed login and logout would have thrown,
+and criterion 18 was unimplementable. `FORCE ROW LEVEL SECURITY` extended the same blindness to the
+owning role, so nothing could read the rows either.
+
+An empty tenant context exists only inside an explicitly named system scope under section 6.3.
+That is the same context that already reads `users` and `sessions` in full, because section 4.6
+makes them global, and a platform audit row carries less than either. The check constraint above
+still confines platform rows to the four authentication actions, so this cannot become a route to
+tenant business events with the scope left off.
+
+`[FUT]` Platform administration as a product capability, including who may read these rows over
+HTTP, remains section 2.8 and remains unbuilt. This clause governs which database transactions may
+see them, not which people.
 
 ### 7.4 Two different logs
 
@@ -1902,3 +1932,4 @@ they are open.
 | 2026-09-10 | 4.2, 17.3 | Added a fourth `version` exemption for ephemeral operational state under an explicit last-write-wins model, gated on four conditions that all must hold. `sessions` is the only example. Criterion 28 updated to name all four shapes. | `sessions.last_seen_at` is written by ordinary concurrent requests from one principal, where optimistic locking would produce conflicts that describe nothing real |
 | 2026-09-10 | 4.6 | `auth_throttle` added to the closed list of global tables, with the reasoning stated and the infrastructure-exemption argument explicitly refused. | Authentication precedes tenant resolution, and per-address throttling has no user row or tenant to attribute an attempt to |
 | 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
+| 2026-09-10 | 7.3, 4.6 | Platform level audit rows ruled readable only in an empty tenant context, replacing a select policy that admitted none. The stale claim in 4.6 that such rows could be written but not read was corrected. | The policy governed the `RETURNING` clause of the insert as well, so authentication audit rows could not be written at all and criterion 18 was unimplementable |
