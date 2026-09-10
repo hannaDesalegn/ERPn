@@ -12,12 +12,12 @@
  * send a Secure cookie over plain HTTP, which would make local development need a certificate,
  * and the configuration refuses a false value in production.
  *
- * WHY SameSite=Strict. This increment has no CSRF token, by decision. Strict is what stands in
- * the gap: the browser does not attach the cookie to any cross site request, including a plain
- * form post or a top level navigation from another origin. It is a real mitigation rather than a
- * placeholder, and it is not a replacement for the token, which is a later increment. Strict
- * also means a link from an external site lands the user logged out until they navigate within
- * the application, which is the cost being accepted here.
+ * WHY SameSite=Strict. The browser does not attach the cookie to any cross site request,
+ * including a plain form post or a top level navigation from another origin, so a forged request
+ * arrives unauthenticated. Section 14.4 is explicit that this is defence in depth rather than
+ * the whole control, and `csrf.ts` carries the rest: a custom header a cross origin form cannot
+ * set, and a server side origin check. Strict also means a link from an external site lands the
+ * user signed out until they navigate within the application, which is the cost being accepted.
  */
 
 import type { FastifyReply, FastifyRequest } from 'fastify';

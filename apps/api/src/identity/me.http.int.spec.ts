@@ -24,6 +24,7 @@ import { systemScope, UnitOfWork } from '../database/index.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { PasswordHasher } from '../auth/password-hasher.js';
 import { registerHttpPlugins } from '../http/plugins.js';
+import { CSRF_COOKIE, CSRF_HEADER } from '../http/csrf.js';
 import { SESSION_COOKIE } from '../http/session-cookie.js';
 import { IdentityModule } from './identity.module.js';
 
@@ -219,25 +220,54 @@ describe('Authenticated HTTP surface', () => {
   // Helpers that speak HTTP and nothing else.
   // -------------------------------------------------------------------------------------
 
-  const login = async (password = PASSWORD) => {
+  const setCookieFor = (response: { headers: Record<string, unknown> }, name: string) => {
+    const raw = response.headers['set-cookie'];
+    const list = Array.isArray(raw) ? raw : raw ? [String(raw)] : [];
+    return list.find((header) => header.startsWith(`${name}=`)) ?? null;
+  };
+
+  const valueOf = (header: string | null, name: string) =>
+    header?.match(new RegExp(`${name}=([^;]*)`))?.[1] ?? null;
+
+  /**
+   * A sign in shaped the way a browser makes one.
+   *
+   * Section 14.4 requires the custom header on every mutating request, sign in included, and
+   * the page has nowhere to get one before it has loaded. So this reads first, exactly as the
+   * real page does, and posts with what that read issued.
+   */
+  const loginWith = async (payload: Record<string, unknown>) => {
+    const visit = await app.inject({ method: 'GET', url: '/api/me' });
+    const initial = valueOf(setCookieFor(visit, CSRF_COOKIE), CSRF_COOKIE) ?? '';
+
     const response = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { email: EMAIL, password },
+      headers: { cookie: `${CSRF_COOKIE}=${initial}`, [CSRF_HEADER]: initial },
+      payload,
     });
 
-    const setCookie = response.headers['set-cookie'];
-    const header = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-    const token = header?.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`))?.[1] ?? null;
+    const sessionCookie = setCookieFor(response, SESSION_COOKIE);
 
-    return { response, header: header ?? null, token };
+    return {
+      response,
+      header: sessionCookie,
+      token: valueOf(sessionCookie, SESSION_COOKIE),
+      csrf: valueOf(setCookieFor(response, CSRF_COOKIE), CSRF_COOKIE),
+    };
   };
 
+  const login = (password = PASSWORD) => loginWith({ email: EMAIL, password });
+
+  /** Both cookies, which is what the browser holds after a sign in. */
   const authenticated = async () => {
-    const { token } = await login();
+    const { token, csrf } = await login();
     if (!token) throw new Error('Login did not issue a session cookie');
-    return `${SESSION_COOKIE}=${token}`;
+    return `${SESSION_COOKIE}=${token}; ${CSRF_COOKIE}=${csrf}`;
   };
+
+  /** The header value a page sends, taken from the cookie it was given. */
+  const csrfOf = (cookie: string) => valueOf(cookie, CSRF_COOKIE) ?? '';
 
   const getMe = (cookie?: string, extra: Record<string, string> = {}) =>
     app.inject({
@@ -247,7 +277,12 @@ describe('Authenticated HTTP surface', () => {
     });
 
   const switchTo = (cookie: string, payload: Record<string, unknown>, url = '/api/me/company') =>
-    app.inject({ method: 'POST', url, headers: { cookie }, payload });
+    app.inject({
+      method: 'POST',
+      url,
+      headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
+      payload,
+    });
 
   // -------------------------------------------------------------------------------------
   // Getting in.
@@ -301,32 +336,19 @@ describe('Authenticated HTTP surface', () => {
     });
 
     it('answers a malformed body exactly as it answers a wrong password', async () => {
-      const wrong = await app.inject({
-        method: 'POST',
-        url: '/api/auth/login',
-        payload: { email: EMAIL, password: 'not the password' },
-      });
-      const malformed = await app.inject({
-        method: 'POST',
-        url: '/api/auth/login',
-        payload: { email: EMAIL },
-      });
+      const { response: wrong } = await loginWith({ email: EMAIL, password: 'not the password' });
+      const { response: malformed } = await loginWith({ email: EMAIL });
 
       expect(malformed.statusCode).toBe(wrong.statusCode);
       expect(JSON.parse(malformed.body)).toEqual(JSON.parse(wrong.body));
     });
 
     it('answers an unknown account exactly as it answers a wrong password', async () => {
-      const unknown = await app.inject({
-        method: 'POST',
-        url: '/api/auth/login',
-        payload: { email: 'nobody@context.test', password: PASSWORD },
+      const { response: unknown } = await loginWith({
+        email: 'nobody@context.test',
+        password: PASSWORD,
       });
-      const wrong = await app.inject({
-        method: 'POST',
-        url: '/api/auth/login',
-        payload: { email: EMAIL, password: 'not the password' },
-      });
+      const { response: wrong } = await loginWith({ email: EMAIL, password: 'not the password' });
 
       expect(JSON.parse(unknown.body)).toEqual(JSON.parse(wrong.body));
     });
@@ -372,7 +394,7 @@ describe('Authenticated HTTP surface', () => {
       const loggedOut = await app.inject({
         method: 'POST',
         url: '/api/auth/logout',
-        headers: { cookie },
+        headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
       });
 
       expect(loggedOut.statusCode).toBe(204);
@@ -390,7 +412,15 @@ describe('Authenticated HTTP surface', () => {
     });
 
     it('accepts a logout with no session at all, and says nothing extra', async () => {
-      const anonymous = await app.inject({ method: 'POST', url: '/api/auth/logout' });
+      // Still with the forgery protection a page would carry: signing out is a mutation, and
+      // section 14.4 does not exempt it because the caller happens to have no session.
+      const visit = await app.inject({ method: 'GET', url: '/api/me' });
+      const issued = valueOf(setCookieFor(visit, CSRF_COOKIE), CSRF_COOKIE) ?? '';
+      const anonymous = await app.inject({
+        method: 'POST',
+        url: '/api/auth/logout',
+        headers: { cookie: `${CSRF_COOKIE}=${issued}`, [CSRF_HEADER]: issued },
+      });
 
       expect(anonymous.statusCode).toBe(204);
       expect(anonymous.body).toBe('');
@@ -568,9 +598,14 @@ describe('Authenticated HTTP surface', () => {
     });
 
     it('refuses to switch without a session', async () => {
+      // With the forgery protection present, so the refusal is about the missing session
+      // rather than about the missing token.
+      const visit = await app.inject({ method: 'GET', url: '/api/me' });
+      const issued = valueOf(setCookieFor(visit, CSRF_COOKIE), CSRF_COOKIE) ?? '';
       const response = await app.inject({
         method: 'POST',
         url: '/api/me/company',
+        headers: { cookie: `${CSRF_COOKIE}=${issued}`, [CSRF_HEADER]: issued },
         payload: { companyId: HOME },
       });
 

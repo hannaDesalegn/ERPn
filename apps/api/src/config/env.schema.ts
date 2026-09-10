@@ -130,6 +130,25 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((value) => value === 'true'),
+
+  /**
+   * Origins allowed to make mutating requests, beyond the one the API is served from.
+   *
+   * Empty by default, which means same origin only. Section 14.4 requires the origin to be
+   * checked server side; this is the escape hatch for a deployment that serves the frontend
+   * from a different host, and it is a list of exact origins rather than a pattern, because a
+   * pattern is how an origin check ends up matching `evil-example.com`.
+   */
+  TRUSTED_ORIGINS: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    )
+    .pipe(z.array(z.url({ protocol: /^https?$/ }))),
 })
   .refine((env) => env.NODE_ENV !== 'production' || env.COOKIE_SECURE, {
     message: 'COOKIE_SECURE must not be false in production',

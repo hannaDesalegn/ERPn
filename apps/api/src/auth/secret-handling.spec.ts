@@ -55,6 +55,8 @@ describe('Secret handling in the authentication files', () => {
       'auth.controller.ts',
       'auth.module.ts',
       'authentication.service.ts',
+      'csrf.guard.ts',
+      'csrf.ts',
       'password-hasher.ts',
       'plugins.ts',
       'principal.ts',

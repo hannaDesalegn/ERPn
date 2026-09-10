@@ -34,6 +34,7 @@ import { z } from 'zod';
 
 import { Public } from '../authorization/route-access.js';
 import type { Env } from '../config/env.schema.js';
+import { clearCsrfCookie, csrfTokenFor, setCsrfCookie } from '../http/csrf.js';
 import {
   clearSessionCookie,
   readSessionToken,
@@ -41,6 +42,7 @@ import {
   type CookiePolicy,
 } from '../http/session-cookie.js';
 import { AuthenticationService } from './authentication.service.js';
+import { hashSessionToken } from './session-token.js';
 
 const loginBody = z.object({
   // Length bounded so a multi megabyte body cannot reach argon2. Section 14.3.
@@ -83,6 +85,10 @@ export class AuthController {
     if (result.outcome !== 'authenticated') throw signInFailed();
 
     setSessionCookie(reply, result.token, this.cookiePolicy);
+    // The forgery token for the session just created, replacing whatever unbound value this
+    // browser was carrying. Written here rather than left for the next read, because the page
+    // may mutate before it reads anything, and a stale token would refuse that first mutation.
+    setCsrfCookie(reply, csrfTokenFor(hashSessionToken(result.token)), this.cookiePolicy);
     // 204, and nothing else. The client learns who it is by calling /me, which computes the
     // answer server side rather than believing a login response.
   }
@@ -110,6 +116,9 @@ export class AuthController {
     if (token) await this.authentication.logout(token);
 
     clearSessionCookie(reply, this.cookiePolicy);
+    // Cleared with it. The value is bound to a session that no longer exists, so keeping it
+    // would only mean the next sign in on this browser starts with a token that cannot match.
+    clearCsrfCookie(reply, this.cookiePolicy);
   }
 }
 

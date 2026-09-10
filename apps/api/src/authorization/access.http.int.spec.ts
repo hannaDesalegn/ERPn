@@ -29,7 +29,9 @@ import { DatabaseModule } from '../database/database.module.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
 import { registerHttpPlugins } from '../http/plugins.js';
 import { RouteDeclarationAudit } from '../http/route-declarations.js';
+import { CSRF_HEADER } from '../http/csrf.js';
 import { SESSION_COOKIE } from '../http/session-cookie.js';
+import { signIn } from '../testing/browser-session.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { AppModule } from '../app.module.js';
 import { ROLE_KEYS, templatePermissions, type RoleKey } from './permissions.js';
@@ -239,25 +241,25 @@ describe('Deny by default', () => {
   // Helpers that only speak HTTP.
   // -------------------------------------------------------------------------------------
 
+  /**
+   * Signs in the way a browser does, cookies and forgery header included.
+   *
+   * Section 14.4 makes every mutation carry the custom header, so a helper that omits it would
+   * turn every allow cell of the matrix below into a refusal for the wrong reason.
+   */
   const login = async (): Promise<string> => {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/auth/login',
-      payload: { email: SUBJECT_EMAIL, password: PASSWORD },
-    });
-    const header = response.headers['set-cookie'];
-    const raw = Array.isArray(header) ? header[0] : header;
-    const token = raw?.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`))?.[1];
-
-    if (!token) throw new Error(`Login failed: ${response.statusCode} ${response.body}`);
-    return `${SESSION_COOKIE}=${token}`;
+    const session = await signIn(app, { email: SUBJECT_EMAIL, password: PASSWORD });
+    return session.cookie;
   };
+
+  /** The header value, taken from the cookie the server issued. */
+  const csrfOf = (cookie: string) => cookie.match(/erp_csrf=([^;]*)/)?.[1] ?? '';
 
   const enter = async (cookie: string, companyId: string) => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/me/company',
-      headers: { cookie },
+      headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
       payload: { companyId },
     });
     if (response.statusCode !== 201) {
@@ -269,7 +271,10 @@ describe('Deny by default', () => {
     app.inject({
       method: call.method,
       url: call.url,
-      headers: { ...(cookie ? { cookie } : {}), ...extra },
+      headers: {
+        ...(cookie ? { cookie, [CSRF_HEADER]: csrfOf(cookie) } : {}),
+        ...extra,
+      },
       ...(call.payload ? { payload: call.payload } : {}),
     });
 
@@ -326,17 +331,49 @@ describe('Deny by default', () => {
   // -------------------------------------------------------------------------------------
 
   describe('unauthenticated requests', () => {
-    it.each(CALLS)('refuses $label with 401', async (call) => {
+    /**
+     * A request with no cookie at all is refused by whichever guard reaches it first.
+     *
+     * For a read that is the access guard, which answers 401 because there is no session. For a
+     * mutation the forgery guard runs first and answers 403, because a request carrying neither
+     * a session nor a token is not a signed-out user, it is a request from somewhere else. That
+     * ordering is deliberate: a forgery is turned away before anything touches the database.
+     */
+    const refusalFor = (call: Call) => (call.method === 'GET' ? 401 : 403);
+
+    it.each(CALLS)('refuses $label with no credentials at all', async (call) => {
       const response = await invoke(call);
 
-      expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(refusalFor(call));
     });
 
     it.each(CALLS)('refuses $label with an invented cookie', async (call) => {
       const response = await invoke(call, `${SESSION_COOKIE}=${'a'.repeat(43)}`);
 
-      expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(refusalFor(call));
     });
+
+    it.each(CALLS.filter((call) => call.method !== 'GET'))(
+      'still refuses $label with 401 once forgery protection is present',
+      async (call) => {
+        // The same mutations, this time carrying a valid token from a signed-out visit. The
+        // forgery guard is satisfied and the access guard answers, so the refusal is about the
+        // missing session rather than about the missing token.
+        const visit = await app.inject({ method: 'GET', url: '/api/me' });
+        const raw = visit.headers['set-cookie'];
+        const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+        const issued = list.join(';').match(/erp_csrf=([^;]*)/)?.[1] ?? '';
+
+        const response = await app.inject({
+          method: call.method,
+          url: call.url,
+          headers: { cookie: `erp_csrf=${issued}`, [CSRF_HEADER]: issued },
+          ...(call.payload ? { payload: call.payload } : {}),
+        });
+
+        expect(response.statusCode).toBe(401);
+      },
+    );
   });
 
   describe('authenticated with no company entered', () => {
@@ -441,7 +478,7 @@ describe('Deny by default', () => {
       const response = await app.inject({
         method: 'POST',
         url: `/api/members/${MEMBERSHIP_HOME}/roles`,
-        headers: { cookie },
+        headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
         payload: { roleKey: 'warehouse', permissions: ['admin:users'], role: 'administrator' },
       });
 
@@ -578,7 +615,11 @@ describe('Deny by default', () => {
 
     it('stops authorizing after logout, with the same cookie', async () => {
       const cookie = await asRole('administrator');
-      await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { cookie } });
+      await app.inject({
+        method: 'POST',
+        url: '/api/auth/logout',
+        headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
+      });
 
       expect((await invoke(CALLS[0]!, cookie)).statusCode).toBe(401);
     });
@@ -610,7 +651,7 @@ describe('Deny by default', () => {
         const response = await app.inject({
           method: 'POST',
           url: `/api/members/${MEMBERSHIP_HOME}/roles`,
-          headers: { cookie },
+          headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
           payload: { roleKey: 'manager' },
         });
 
@@ -631,7 +672,7 @@ describe('Deny by default', () => {
       const response = await app.inject({
         method: 'POST',
         url: `/api/members/${MEMBERSHIP_HOME}/roles`,
-        headers: { cookie },
+        headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
         payload: { roleKey: 'sales' },
       });
       expect(response.statusCode).toBe(201);
@@ -651,7 +692,7 @@ describe('Deny by default', () => {
       const response = await app.inject({
         method: 'POST',
         url: `/api/members/${MEMBERSHIP_AWAY}/roles`,
-        headers: { cookie },
+        headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
         payload: { roleKey: 'sales' },
       });
 

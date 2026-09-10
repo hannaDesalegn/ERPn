@@ -8,6 +8,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
 import { AccessGuard } from './http/access.guard.js';
+import { CsrfGuard } from './http/csrf.guard.js';
 import { RouteDeclarationAudit } from './http/route-declarations.js';
 
 /**
@@ -31,9 +32,14 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     HealthModule,
   ],
   providers: [
-    // Global, per section 6.2. A guard applied per controller is a guard that will be forgotten
-    // on the two hundredth route, and the shape where forgetting produces a refusal rather than
-    // an opening is the only one worth having.
+    // Both global, per section 6.2. A guard applied per controller is a guard that will be
+    // forgotten on the two hundredth route, and the shape where forgetting produces a refusal
+    // rather than an opening is the only one worth having.
+    //
+    // Order matters and is the order of the questions. Did this come from our own page, section
+    // 14.4. Is there a live session, section 5. May this person do this here, section 6. A
+    // forged request is turned away before anything touches the database.
+    { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AccessGuard },
     RouteDeclarationAudit,
   ],

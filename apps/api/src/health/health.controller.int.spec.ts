@@ -13,6 +13,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import request from 'supertest';
 
 import { AppModule } from '../app.module.js';
+import { registerHttpPlugins } from '../http/plugins.js';
 
 describe('Health endpoint', () => {
   let app: NestFastifyApplication;
@@ -23,6 +24,9 @@ describe('Health endpoint', () => {
     }).compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    // The same plugin registration the entry point performs. Leaving it out gave a server
+    // whose replies could not set a cookie, which surfaced as a 500 on the health probe.
+    await registerHttpPlugins(app);
     // Mirrors main.ts so the test exercises the paths the application actually serves.
     app.setGlobalPrefix('api', { exclude: ['health'] });
     await app.init();
