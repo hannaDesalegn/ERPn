@@ -14,7 +14,6 @@ import { Icon } from '@/components/ui';
 import { useSession } from '@/app/session';
 import { useTheme } from '@/app/theme';
 import { NAV_SECTIONS } from './navigation';
-import { COMPANY } from '@/mocks/reference';
 import { cn, initials } from '@/lib/format';
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -45,7 +44,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 // ---------------------------------------------------------------------------
 
 function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
-  const { can } = useSession();
+  const { can, activeCompany } = useSession();
   const location = useLocation();
 
   return (
@@ -59,7 +58,9 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
       {/* No logo mark. Nothing to represent until the product has a real
           identity, and an invented monogram is decoration pretending to be one. */}
       <div className="flex h-12 items-center border-b border-sidebar-line px-4">
-        <span className="truncate text-sm font-semibold text-primary">{COMPANY.name}</span>
+        {/* The company this session is inside, from /me. It used to be a fixture constant,
+            which meant every tenant saw the same name at the top of their own data. */}
+        <span className="truncate text-sm font-semibold text-primary">{activeCompany.name}</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
@@ -107,7 +108,7 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
 
       <div className="border-t border-sidebar-line px-3 py-2">
         <p className="text-2xs text-sidebar-heading">
-          Frontend prototype · mock data
+          Business data is still fixtures. Identity is not.
         </p>
       </div>
     </nav>
@@ -117,8 +118,26 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
 // ---------------------------------------------------------------------------
 
 function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
-  const { user, role, availableUsers, switchUser } = useSession();
+  const { user, roles, activeCompany, companies, switchCompany, signOut } = useSession();
   const { theme, toggle } = useTheme();
+  const [busy, setBusy] = useState(false);
+
+  /**
+   * Asks the server to change company.
+   *
+   * The select is not the source of truth and is never set optimistically. It renders whatever
+   * `/me` currently says, so a switch the server refuses leaves it exactly where it was.
+   */
+  const onCompanyChange = async (companyId: string) => {
+    if (companyId === activeCompany.id) return;
+
+    setBusy(true);
+    try {
+      await switchCompany(companyId);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-3 lg:px-6">
@@ -138,6 +157,31 @@ function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
       */}
 
       <div className="flex flex-1 items-center justify-end gap-2">
+        {/*
+          COMPANY SWITCHER. Shown only when this person may enter more than one, because a
+          select with a single option is a control that cannot do anything.
+        */}
+        {companies.length > 1 && (
+          <div className="hidden items-center gap-2 rounded-md border border-line py-0.5 pr-1 pl-2 sm:flex">
+            <label className="sr-only" htmlFor="company-switcher">
+              Active company
+            </label>
+            <select
+              id="company-switcher"
+              value={activeCompany.id}
+              disabled={busy}
+              onChange={(e) => void onCompanyChange(e.target.value)}
+              className="max-w-40 cursor-pointer truncate bg-transparent text-xs font-medium text-primary focus:outline-none disabled:cursor-wait"
+            >
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <button
           type="button"
           onClick={toggle}
@@ -148,33 +192,34 @@ function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
         </button>
 
         {/*
-          ROLE SWITCHER — a development affordance, not a feature.
-          It exists so the product can be reviewed through each employee's eyes.
-          Real authentication replaces this; see @/app/session.
+          The signed-in person. Not a switcher: there is no way to become someone else from
+          here, which is the whole difference between this and what it replaced.
         */}
-        <div className="flex items-center gap-2 rounded-md border border-line py-0.5 pr-1 pl-2">
+        <div className="flex items-center gap-2 rounded-md border border-line px-2 py-1">
           <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent-soft text-2xs font-semibold text-accent-text">
             {initials(user.name)}
           </span>
           <div className="hidden min-w-0 sm:block">
-            <label className="sr-only" htmlFor="role-switcher">
-              Viewing as
-            </label>
-            <select
-              id="role-switcher"
-              value={user.id}
-              onChange={(e) => switchUser(e.target.value)}
-              className="max-w-40 cursor-pointer truncate bg-transparent text-xs font-medium text-primary focus:outline-none"
-              title={`${role.name}: ${role.description}`}
-            >
-              {availableUsers.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.name} · {candidate.jobTitle}
-                </option>
-              ))}
-            </select>
+            <p className="truncate text-xs font-medium text-primary" title={user.email}>
+              {user.name}
+            </p>
+            {roles.length > 0 && (
+              <p className="truncate text-2xs text-muted">
+                {roles.map((role) => role.name).join(', ')}
+              </p>
+            )}
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          className="rounded p-1.5 text-secondary hover:bg-hover"
+          aria-label="Sign out"
+          title="Sign out"
+        >
+          <Icon name="logout" className="size-4" />
+        </button>
 
         <Link
           to="/admin/audit"

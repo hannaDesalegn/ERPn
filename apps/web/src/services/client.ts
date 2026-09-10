@@ -36,6 +36,26 @@ export class NotFoundError extends Error {
   }
 }
 
+/**
+ * A response the server refused.
+ *
+ * The status is carried rather than folded into a message, because the two the caller has to
+ * tell apart are 401 and 403 and they mean different things. 401 is "no live session", which the
+ * session provider answers by showing the sign-in screen. 403 is "signed in and not allowed",
+ * which is a real answer about this person and must not log them out.
+ */
+export class ApiError extends Error {
+  // Declared and assigned rather than as a constructor parameter property, because this
+  // workspace compiles with erasableSyntaxOnly and that shape emits runtime code.
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // List query contract
 // ---------------------------------------------------------------------------
@@ -123,9 +143,12 @@ export function queryList<T>(
 }
 
 /**
- * Placeholder for the real transport. Left here deliberately as documentation of
- * the intended shape — auth header, error envelope, JSON parsing all live in one
- * place rather than being repeated per call.
+ * The real transport.
+ *
+ * `credentials: 'include'` is the whole authentication story on this side. The session is an
+ * HttpOnly cookie the browser attaches and script cannot read, so there is no token to hold, no
+ * header to set, and nothing to put in storage. Anything here that looked like reading a token
+ * would mean the cookie had stopped being HttpOnly.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = import.meta.env['VITE_API_URL'] ?? '/api';
@@ -139,7 +162,14 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+    throw new ApiError(response.status, `Request failed: ${response.status} ${response.statusText}`);
   }
+
+  // 204 is a success with no body, which sign in and sign out both return. Asking for JSON
+  // there throws, and the throw would surface as a failed login after a successful one.
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }

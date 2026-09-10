@@ -135,7 +135,7 @@ function ActionRow({ item }: { item: ActionItem }) {
 // ---------------------------------------------------------------------------
 
 export function DashboardPage() {
-  const { user, can } = useSession();
+  const { activeCompany, can } = useSession();
   const navigate = useNavigate();
 
   const dashboard = useQuery({ queryKey: queryKeys.dashboard, queryFn: api.dashboard.get });
@@ -162,7 +162,10 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="Dashboard"
-        subtitle={`${user.jobTitle} view`}
+        // The company being looked at, which matters in a product where one person reaches
+        // several. The job title this used to show came from a fixture user and the server
+        // does not send one, so inventing it here is exactly what this increment removes.
+        subtitle={activeCompany.name}
         meta={<span className="text-xs text-muted">As at {formatDate(todayISO())}</span>}
       />
 

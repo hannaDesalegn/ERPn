@@ -44,6 +44,7 @@ const PATHS = {
   warehouse: 'M2 20V8l10-4 10 4v12H2Zm5 0v-8h10v8M9 20v-4h6v4',
   download: 'M12 3v12m-5-5 5 5 5-5M3 21h18',
   menu: 'M3 6h18M3 12h18M3 18h18',
+  logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9',
 } as const;
 
 export type IconName = keyof typeof PATHS;

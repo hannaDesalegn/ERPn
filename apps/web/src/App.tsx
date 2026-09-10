@@ -7,6 +7,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
+import { SessionGate } from '@/app/SessionGate';
 import { SessionProvider } from '@/app/session';
 import { ThemeProvider } from '@/app/theme';
 import { AppRoutes } from '@/app/router';
@@ -33,7 +34,15 @@ export default function App() {
       <ThemeProvider>
         <SessionProvider>
           <BrowserRouter>
-            <AppRoutes />
+            {/*
+              The gate sits inside the router so the sign-in and company screens can use links,
+              and outside the routes so no application route exists for a signed-out browser to
+              reach. The server is still what refuses the requests; this is what stops the
+              browser making them.
+            */}
+            <SessionGate>
+              <AppRoutes />
+            </SessionGate>
           </BrowserRouter>
         </SessionProvider>
       </ThemeProvider>
