@@ -68,6 +68,8 @@ orchestrator restart healthy processes and turns degradation into an outage.
 ```bash
 npm run test      # unit tests, no database needed
 npm run test:int  # integration tests, requires npm run db:up first
+npm run db:migrate -- --dry-run   # report pending migrations without applying them
+npm run db:migrate                # apply pending migrations as erp_migrator
 ```
 
 Integration tests connect as the restricted role and assert it cannot issue DDL, so the two role
@@ -95,6 +97,7 @@ runtime, per contract sections 14.8 and 15.5.
 | `DATABASE_URL` | none, required | API. Connection string for the restricted role. |
 | `DATABASE_POOL_MAX` | `10` | API |
 | `MIGRATION_DATABASE_URL` | none | Migration runner only, never the API process. |
+| `APP_DB_ROLE` | none | Migration runner. Role that migrations grant to. |
 
 Compose runs without any of these set. Copy `.env.example` to `.env` only to override a default,
 and `apps/api/.env.example` to `apps/api/.env` for the API. Both `.env` files are gitignored.

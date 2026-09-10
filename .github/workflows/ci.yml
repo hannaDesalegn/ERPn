@@ -111,7 +111,12 @@ jobs:
       # the two role separation ratified in sections 2.4 and 7.1 actually holds.
       - name: Integration tests
         env:
+          # The application role, for the connection and isolation tests.
           DATABASE_URL: postgresql://erp_app:erp_app_ci@localhost:5432/erp_ci
+          # The owning role, for the migration runner tests. Separate on purpose: the runner
+          # must never be exercised through the application role.
+          MIGRATION_DATABASE_URL: postgresql://erp_migrator:erp_migrator_ci@localhost:5432/erp_ci
+          APP_DB_ROLE: erp_app
         run: npm run test:int
 
       # Section 15.4 lists the dependency audit as a required gate. The threshold is `low`,
