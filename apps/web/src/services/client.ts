@@ -143,19 +143,49 @@ export function queryList<T>(
 }
 
 /**
+ * The name of the cookie the server issues for forgery protection, and the header it expects
+ * back. Both are fixed by the API, which is the only thing that validates them.
+ */
+const CSRF_COOKIE = 'erp_csrf';
+const CSRF_HEADER = 'X-CSRF-Token';
+
+const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Reads the forgery token the server set.
+ *
+ * This is the one cookie the page is meant to read, and reading it is not a weakening. It
+ * authenticates nothing on its own; its whole purpose is to be echoed in a header, which is
+ * something a cross origin form cannot do. The session cookie beside it stays HttpOnly and is
+ * unreadable from here, which is why there is no function in this file that returns it.
+ */
+function csrfToken(): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`));
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+/**
  * The real transport.
  *
  * `credentials: 'include'` is the whole authentication story on this side. The session is an
  * HttpOnly cookie the browser attaches and script cannot read, so there is no token to hold, no
- * header to set, and nothing to put in storage. Anything here that looked like reading a token
- * would mean the cookie had stopped being HttpOnly.
+ * header to set for it, and nothing to put in storage. Anything here that looked like reading
+ * the session would mean the cookie had stopped being HttpOnly.
+ *
+ * The forgery header is different and is added to every mutating request. Contract section 14.4:
+ * a custom header a cross origin form cannot set. A read does not send it, because a read
+ * changes nothing and the server does not ask.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = import.meta.env['VITE_API_URL'] ?? '/api';
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const token = MUTATING.has(method) ? csrfToken() : null;
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { [CSRF_HEADER]: token } : {}),
       ...init?.headers,
     },
     credentials: 'include',

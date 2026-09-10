@@ -15,5 +15,19 @@ export default defineConfig({
   server: {
     port: 5173,
     open: false,
+    /**
+     * The API, served from the same origin as the page.
+     *
+     * Not a convenience. The session cookie is SameSite=Strict and the server checks the origin
+     * of every mutation, so a dev setup where the page is on one port and the API on another is
+     * a setup where nothing works and the reason looks like a bug in the security code. In
+     * production both sit behind one origin per section 15.6; this makes development match.
+     */
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: false,
+      },
+    },
   },
 })
