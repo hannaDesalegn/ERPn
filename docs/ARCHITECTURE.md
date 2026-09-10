@@ -1440,6 +1440,34 @@ only. Otherwise a crafted request sets `status`, `postedAt` or `companyId`.
 request additionally requires a custom header that a cross origin form cannot set, and the
 origin is checked server side. `SameSite` alone is defence in depth, not the whole control.
 
+*Implemented 2026-09-10. The clause above was specific enough to build from; what follows records
+the one decision it left open.*
+
+`[REQ]` The header carries a token bound to the session rather than a fixed value. A plain
+double submit, where the server only checks that the header equals the cookie, is satisfied by
+anyone who can write a cookie for the site, which includes a sibling subdomain and anything on
+plain HTTP. Binding the value to the session closes that: a planted pair does not equal what a
+given session's token must be.
+
+`[REQ]` The token is derived from the stored session hash, not stored beside it. Deriving keeps
+the session table unchanged, and a keyed derivation gives a value that is deterministic for one
+session, different for every other, and unguessable without the raw token. Anyone holding the raw
+token has the session and does not need forgery.
+
+`[REQ]` The forgery cookie is readable by script and the session cookie is not. That asymmetry
+is the mechanism rather than a compromise: the page has to read one to put it in a header, and
+the value it reads authenticates nothing on its own.
+
+`[REQ]` Sign in is a mutating request and is covered. There is no session to bind to yet, so it
+is the plain double submit case plus the origin check, used only where the stronger check cannot
+apply. Login forgery signs a victim into an account the attacker controls, which is less severe
+than acting as the victim and still refused.
+
+`[REQ]` Enforcement is one boundary, applied to every route, and it authenticates nothing and
+authorizes nothing. Three guards answer three questions in order: did this come from our own
+page, is there a live session, may this person do this here. A forged request is refused before
+anything reads the database.
+
 ### 14.5 Cross site scripting
 
 `[REQ]` React's default escaping is relied on and `dangerouslySetInnerHTML` is prohibited
@@ -1781,7 +1809,6 @@ infrastructure becomes the project.
 | Artificial latency in the service layer | `services/client.ts` | real HTTP |
 | Document numbers from a JavaScript counter | `mocks/generate.ts` | slice 2 |
 | Static cost price used as the costing basis | `mocks/db.ts`, `mocks/generate.ts` | costing implementation, section 8.6 |
-| Mutating endpoints protected by `SameSite=Strict` alone, with no cross site request token | `http/session-cookie.ts`, `auth/auth.controller.ts`, `identity/me.controller.ts` | the CSRF increment, criterion 24 |
 | Permission catalogue and role templates duplicated in the frontend, now only to render the roles admin screen | `web/src/domain/security.ts`, `web/src/lib/permissions.ts`, `web/src/features/admin/AdminPages.tsx` | the company administration screens, which read roles from the API |
 
 ### 16.2 Production critical behaviour that must never be faked
@@ -2018,4 +2045,5 @@ they are open.
 | 2026-09-10 | 16.1 | Three temporary behaviours registered as the HTTP surface landed: SameSite as the only cross site defence, per-controller session authentication instead of a global deny-by-default guard, and `/me` reporting roles without effective permissions. | Each is a control that is deliberately partial in this increment, and an unregistered partial control is indistinguishable from a finished one |
 | 2026-09-10 | 6.2, 16.1 | Route access declared as one of three kinds, with the authenticated kind confined by rule to `/me` and the company switch. The guard ruled global, and enforcement ruled to re-derive rather than cache. Two 16.1 entries closed as the authorization layer landed, and the duplicated frontend permission vocabulary registered in their place. | "Every route declares the permission it requires" had no way to describe sign in, the health probes, or the two routes that tell a caller what they may do, and an undescribable route is one someone will leave undeclared |
 | 2026-09-10 | 6.7, 16.1 | The mock identity and route authorization temporary clauses discharged as the frontend began consuming `/me`. A clause added stating that a frontend route guard is presentation and never enforcement. | The frontend now has guards that look like access control, and the one thing worth writing down about them is that they are not |
+| 2026-09-10 | 14.4, 16.1 | Cross site request forgery implemented as the section already specified, with the one open decision recorded: the header carries a token bound to the session, derived from the stored hash rather than stored beside it. The last 16.1 entry discharged. | A plain double submit is satisfied by anyone who can write a cookie for the site, and the contract named the header and the origin check without saying what the header should carry |
 | 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |
