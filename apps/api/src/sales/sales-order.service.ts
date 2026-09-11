@@ -1,0 +1,347 @@
+/**
+ * Creating a sales order draft.
+ *
+ * A draft and nothing else. Contract section 12.2 makes confirmation the irreversible moment
+ * that validates, authorizes, applies side effects, allocates a number, writes an audit record
+ * and commits, all in one transaction or none of it. None of that is here: a draft is editable
+ * and has no side effects, nothing is reserved, nothing is owed, nothing is posted.
+ *
+ * THE ONE THING THIS FILE IS REALLY ABOUT is that nothing the caller sends becomes a stored
+ * figure. Section 3.3 is explicit: the frontend is never trusted with prices, discounts, tax
+ * rates or costs sent back from a form, and the server recomputes every monetary figure from its
+ * own master data and the submitted quantities. So the input carries identifiers and quantities,
+ * and there is no field on it for a price, a name, a tax rate or a total. A caller that sends one
+ * anyway is rejected rather than ignored, per section 14.2.
+ *
+ * WHAT COMES FROM WHERE:
+ *
+ *   tenant, company        the scope, which came from the session
+ *   currency               the company's base currency
+ *   unit price             the product record
+ *   product sku and name   the product record, snapshotted per section 3.4
+ *   tax rate               the single resolver in `tax/tax-rate.ts`, snapshotted the same way
+ *   quantity, discount     the caller, and only these
+ *
+ * ONE TRANSACTION. Every validating read and every write happen inside a single unit of work, so
+ * a product that disappears between the check and the insert cannot produce a half-written
+ * order, and a failure on the fourth line leaves no header behind.
+ */
+
+import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+
+import { actorScope, UnitOfWork } from '../database/index.js';
+import type {
+  CompanyRecord,
+  NewSalesOrderLine,
+  ProductRecord,
+  SalesOrderLineRecord,
+  SalesOrderRecord,
+} from '../database/index.js';
+import type { CompanyContext } from '../identity/identity.service.js';
+import {
+  add,
+  compare,
+  multiply,
+  parseDecimal,
+  round,
+  subtract,
+  toFixed,
+  zero,
+  type Decimal,
+} from '../shared/decimal.js';
+import { resolveTaxRate } from '../tax/tax-rate.js';
+
+/** The scales the schema declares. Amounts at four, everything else at six. */
+const AMOUNT_SCALE = 4;
+const RATE_SCALE = 6;
+
+const ONE_HUNDRED = parseDecimal('100');
+
+export interface DraftLineInput {
+  productId: string;
+  /** A decimal string. The only quantity in the system the caller chooses. */
+  quantity: string;
+  /** A percentage the caller may negotiate. Zero when absent. */
+  discountPercent?: string;
+}
+
+export interface CreateDraftInput {
+  customerId: string;
+  warehouseId: string;
+  /** ISO date. The day the order was agreed, which is the caller's to state. */
+  orderDate: string;
+  expectedDeliveryDate?: string | null;
+  salesRepUserId?: string | null;
+  lines: DraftLineInput[];
+}
+
+export interface SalesOrderDraft {
+  order: SalesOrderRecord;
+  lines: SalesOrderLineRecord[];
+}
+
+/**
+ * Why a draft was refused.
+ *
+ * `not_found` covers a record that is missing, archived, in another company or in another
+ * tenant, and it covers them with one value on purpose. Section 6.1: a failure at the tenant or
+ * company dimension is indistinguishable from the record not existing, so that identifiers
+ * cannot be probed to learn what another company holds.
+ */
+export type DraftRejection =
+  | 'no_lines'
+  | 'customer_not_found'
+  | 'warehouse_not_found'
+  | 'product_not_found'
+  | 'invalid_quantity'
+  | 'invalid_discount'
+  | 'currency_mismatch';
+
+export class SalesOrderDraftError extends Error {
+  readonly reason: DraftRejection;
+  readonly subject: string | undefined;
+
+  constructor(reason: DraftRejection, message: string, subject?: string) {
+    super(message);
+    this.name = 'SalesOrderDraftError';
+    this.reason = reason;
+    this.subject = subject;
+  }
+}
+
+@Injectable()
+export class SalesOrderService {
+  constructor(private readonly uow: UnitOfWork) {}
+
+  /**
+   * Creates a draft order with its lines.
+   *
+   * Returns the rows as written, not as computed, so a caller sees what the database holds
+   * rather than what this function believed it was about to store.
+   */
+  async createDraft(
+    context: CompanyContext,
+    actorUserId: string,
+    input: CreateDraftInput,
+  ): Promise<SalesOrderDraft> {
+    if (input.lines.length === 0) {
+      // An order that promises nothing is not a draft of anything. Refused here rather than
+      // written as a header with no lines, which nothing downstream knows how to price.
+      throw new SalesOrderDraftError('no_lines', 'A sales order needs at least one line');
+    }
+
+    return this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        userId: actorUserId,
+      }),
+      async (repos) => {
+        // The company is the authority for two things the caller does not supply: the currency
+        // the order trades in, and the tax rate every line carries.
+        const company = await repos.companies.findById(context.companyId);
+        if (!company) {
+          // Unreachable through a real session, which resolved this company from a membership
+          // moments ago. Loud rather than silent, because the alternative is a null currency.
+          throw new Error('The acting company disappeared inside its own transaction');
+        }
+
+        // Section 12.2 step one: validate against current master data. Archived counts as
+        // invalid, because archiving is how a record stops being usable while staying
+        // referenced by the history that already names it.
+        const customer = await repos.customers.findById(input.customerId);
+        if (!customer || customer.status !== 'active') {
+          throw notFound('customer_not_found', 'Customer', input.customerId);
+        }
+
+        const warehouse = await repos.warehouses.findById(input.warehouseId);
+        if (!warehouse || warehouse.status !== 'active') {
+          throw notFound('warehouse_not_found', 'Warehouse', input.warehouseId);
+        }
+
+        // Every product first, before anything is written. A line that cannot be priced must
+        // not leave a header behind, and the transaction would roll one back anyway; this makes
+        // the common case fail before it has written anything at all.
+        //
+        // One at a time rather than in parallel. A unit of work is one connection, so parallel
+        // reads would be pipelined onto it, and the driver deprecates that. Sequential also
+        // makes the reported line deterministic: the first bad one, not whichever lost a race.
+        const priced = [];
+        for (const line of input.lines) {
+          priced.push(await this.price(repos, company, line));
+        }
+
+        const orderId = randomUUID();
+        const order = await repos.salesOrders.create({
+          id: orderId,
+          customerId: customer.id,
+          warehouseId: warehouse.id,
+          salesRepUserId: input.salesRepUserId ?? null,
+          orderDate: input.orderDate,
+          expectedDeliveryDate: input.expectedDeliveryDate ?? null,
+          // From the company, never from the caller. A caller-chosen currency would be a
+          // caller-chosen exchange rate one increment later.
+          currency: company.baseCurrency,
+        });
+
+        const lines: SalesOrderLineRecord[] = [];
+        for (const [index, line] of priced.entries()) {
+          lines.push(
+            await repos.salesOrderLines.create({
+              ...line,
+              id: randomUUID(),
+              salesOrderId: orderId,
+              // Assigned here, so two lines cannot collide and a caller cannot choose the order
+              // in which its own lines are numbered.
+              lineNumber: index + 1,
+              currency: company.baseCurrency,
+            }),
+          );
+        }
+
+        // The document totals are the sum of what was actually written, read back from the
+        // rows. Summing what this function computed would agree with itself even if the write
+        // had rounded differently.
+        return { order: await this.total(repos, order, lines), lines };
+      },
+    );
+  }
+
+  /**
+   * Turns one requested line into the figures that will be stored.
+   *
+   * Every value here except the quantity and the discount comes from the product record or the
+   * company. Section 3.3 recomputes from master data and the submitted quantities, and this is
+   * the sentence in code.
+   */
+  private async price(
+    repos: { products: { findById(id: string): Promise<ProductRecord | null> } },
+    company: CompanyRecord,
+    line: DraftLineInput,
+  ): Promise<Omit<NewSalesOrderLine, 'id' | 'salesOrderId' | 'lineNumber' | 'currency'>> {
+    const quantity = decimalOr(line.quantity, 'invalid_quantity', 'quantity');
+    if (compare(quantity, zero(0)) <= 0) {
+      // The schema refuses this too. Refusing it here names the line rather than surfacing a
+      // constraint violation the caller has to decode.
+      throw new SalesOrderDraftError(
+        'invalid_quantity',
+        'A line quantity must be greater than zero',
+        line.productId,
+      );
+    }
+
+    const discount = line.discountPercent
+      ? decimalOr(line.discountPercent, 'invalid_discount', 'discount')
+      : zero(RATE_SCALE);
+    if (compare(discount, zero(0)) < 0 || compare(discount, ONE_HUNDRED) > 0) {
+      throw new SalesOrderDraftError(
+        'invalid_discount',
+        'A line discount must be between nought and a hundred per cent',
+        line.productId,
+      );
+    }
+
+    const product = await repos.products.findById(line.productId);
+    if (!product || product.status !== 'active') {
+      throw notFound('product_not_found', 'Product', line.productId);
+    }
+
+    if (product.salesPriceCurrency !== company.baseCurrency) {
+      // No exchange rate exists on a sales order, and inventing one would be the guess the
+      // domain model refuses when it says cross-currency arithmetic throws rather than guesses.
+      throw new SalesOrderDraftError(
+        'currency_mismatch',
+        `Product ${product.sku} is priced in ${product.salesPriceCurrency}, and this company trades in ${company.baseCurrency}`,
+        line.productId,
+      );
+    }
+
+    const unitPrice = parseDecimal(product.salesPrice);
+    const taxRate = parseDecimal(resolveTaxRate(company));
+
+    // Gross of discount, then discounted, then rounded once to the amount scale. Rounding at
+    // the end rather than at each step is what section 4.3 means by applying it at defined
+    // points only.
+    const gross = multiply(quantity, unitPrice);
+    const keptFraction = subtract(ONE_HUNDRED, discount);
+    const discounted = divideByHundred(multiply(gross, keptFraction));
+    const lineSubtotal = round(discounted, AMOUNT_SCALE);
+
+    // Tax is computed on the rounded subtotal, which is the figure that appears on the
+    // document. Computing it on the unrounded one would produce a tax that does not follow from
+    // the numbers a customer can see.
+    const lineTax = round(divideByHundred(multiply(lineSubtotal, taxRate)), AMOUNT_SCALE);
+    const lineTotal = add(lineSubtotal, lineTax);
+
+    return {
+      productId: product.id,
+      // Snapshotted from master data, per section 3.4: a document is an immutable record of a
+      // past agreement, and a caller-supplied name would be a caller-supplied document.
+      productSku: product.sku,
+      productName: product.name,
+      quantity: toFixed(quantity, RATE_SCALE),
+      unitPrice: toFixed(unitPrice, RATE_SCALE),
+      discountPercent: toFixed(discount, RATE_SCALE),
+      taxRatePercent: toFixed(taxRate, RATE_SCALE),
+      lineSubtotal: toFixed(lineSubtotal, AMOUNT_SCALE),
+      lineTax: toFixed(lineTax, AMOUNT_SCALE),
+      lineTotal: toFixed(lineTotal, AMOUNT_SCALE),
+    };
+  }
+
+  /**
+   * Writes the document totals, summed from the stored lines.
+   *
+   * A separate write because the header is created before its lines exist. There is no rounding
+   * here: each line was already rounded to the amount scale, so the sum is exact and no
+   * difference arises for section 4.3 to allocate.
+   */
+  private async total(
+    repos: {
+      salesOrders: { setTotals(input: { id: string; subtotal: string; taxTotal: string; total: string }): Promise<SalesOrderRecord> };
+    },
+    order: SalesOrderRecord,
+    lines: SalesOrderLineRecord[],
+  ): Promise<SalesOrderRecord> {
+    let subtotal: Decimal = zero(AMOUNT_SCALE);
+    let taxTotal: Decimal = zero(AMOUNT_SCALE);
+
+    for (const line of lines) {
+      subtotal = add(subtotal, parseDecimal(line.lineSubtotal, AMOUNT_SCALE));
+      taxTotal = add(taxTotal, parseDecimal(line.lineTax, AMOUNT_SCALE));
+    }
+
+    return repos.salesOrders.setTotals({
+      id: order.id,
+      subtotal: toFixed(subtotal, AMOUNT_SCALE),
+      taxTotal: toFixed(taxTotal, AMOUNT_SCALE),
+      total: toFixed(add(subtotal, taxTotal), AMOUNT_SCALE),
+    });
+  }
+}
+
+/** Percentages are applied by dividing once, exactly, at the end of a multiplication. */
+function divideByHundred(value: Decimal): Decimal {
+  return { units: value.units, scale: value.scale + 2 };
+}
+
+function decimalOr(value: string, reason: DraftRejection, field: string): Decimal {
+  try {
+    return parseDecimal(value, RATE_SCALE);
+  } catch (error) {
+    // The parse failure carries the useful detail; the domain error carries the reason a caller
+    // can branch on. Section 14.2: rejected rather than coerced into something plausible.
+    throw new SalesOrderDraftError(
+      reason,
+      `A line ${field} must be a decimal with at most ${RATE_SCALE} places: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function notFound(reason: DraftRejection, subject: string, id: string): SalesOrderDraftError {
+  // One message whether the record is missing, archived, another company's or another tenant's.
+  return new SalesOrderDraftError(reason, `${subject} not found`, id);
+}

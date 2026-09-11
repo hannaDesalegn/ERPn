@@ -7,6 +7,7 @@ import { AuthorizationModule } from './authorization/authorization.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
+import { SalesModule } from './sales/sales.module.js';
 import { AccessGuard } from './http/access.guard.js';
 import { CsrfGuard } from './http/csrf.guard.js';
 import { RouteDeclarationAudit } from './http/route-declarations.js';
@@ -29,6 +30,7 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     AuthorizationModule,
     IdentityModule,
     AdministrationModule,
+    SalesModule,
     HealthModule,
   ],
   providers: [
