@@ -646,17 +646,46 @@ export interface SalesOrderLineRepository {
   remove(id: string): Promise<void>;
 }
 
+/** A number taken from a sequence, and the sequence it came from. */
+export interface AllocatedDocumentNumber {
+  docType: string;
+  /** The counter value consumed. A `bigint`, because a number would round past 2^53. */
+  value: bigint;
+  /** What goes on the document: the sequence prefix and the padded value. */
+  formatted: string;
+}
+
 /**
  * Document number sequences, per section 10.4.
  *
- * NOTHING HERE ALLOCATES A NUMBER. Allocation takes a row lock inside the transaction that
- * creates the document, and that transaction does not exist yet. Adding the method now would
- * mean guessing the shape of a mechanism whose whole difficulty is what surrounds it.
+ * ALLOCATION IS WHY THIS TABLE IS A TABLE. Section 10.4 rules that a gapless sequence forces a
+ * counter row locked inside the posting transaction rather than a database sequence, accepting
+ * the serialisation cost, because a sequence leaves gaps when a transaction rolls back and many
+ * jurisdictions forbid that on an invoice.
+ *
+ * THERE IS NO WAY TO ALLOCATE OUTSIDE A TRANSACTION. A repository is only ever handed to a
+ * callback that `UnitOfWork` has already wrapped in one, so every allocation is inside the
+ * caller's transaction by construction and is undone with it. That is the property that makes
+ * the sequence gapless, and it is structural rather than remembered.
  */
 export interface DocumentNumberSequenceRepository {
   findForDocType(docType: string): Promise<DocumentNumberSequenceRecord | null>;
   listForCompany(): Promise<DocumentNumberSequenceRecord[]>;
   create(input: NewDocumentNumberSequence): Promise<DocumentNumberSequenceRecord>;
+  /**
+   * Takes the next number for a document type, locking the counter row.
+   *
+   * Valid only as part of the transaction that writes the document the number goes on. Called
+   * on its own it still commits, and the number is then spent on nothing, which is the one way
+   * this mechanism can leave a gap. Nothing in the codebase calls it that way, and the sales
+   * path reaches it through `allocateSalesOrderNumber`, which takes a transaction's
+   * repositories as its argument and so cannot be invoked without one.
+   *
+   * Throws `DocumentNumberSequenceMissingError` when the company has no sequence configured
+   * for the type. Creating one here would let a misspelled document type start a second counter
+   * that looks like it has been working since the beginning.
+   */
+  allocate(docType: string): Promise<AllocatedDocumentNumber>;
 }
 
 /** What an actor scoped unit of work hands to its callback. */
@@ -750,5 +779,22 @@ export class RecordNotFoundError extends Error {
   constructor(entity: string, id: string) {
     super(`${entity} ${id} was not found`);
     this.name = 'RecordNotFoundError';
+  }
+}
+
+/**
+ * Thrown when a document number is asked of a sequence the company has not configured.
+ *
+ * Loud rather than self healing. Section 10.4 makes a sequence a per company, per document type
+ * configuration, so a missing one is a provisioning gap, and silently creating it would issue
+ * document one to a company that has been trading for a year.
+ */
+export class DocumentNumberSequenceMissingError extends Error {
+  readonly docType: string;
+
+  constructor(docType: string) {
+    super(`No ${docType} number sequence is configured for this company`);
+    this.name = 'DocumentNumberSequenceMissingError';
+    this.docType = docType;
   }
 }

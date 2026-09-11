@@ -16,13 +16,17 @@
  *      types carry no field to supply them, which is the first line of defence, and this is the
  *      second. Row level security is the third.
  *
- * WHAT IS DELIBERATELY ABSENT. No number allocation, no confirmation, no total recalculation, no
- * state transition, no reservation. Section 12.2 makes confirming one transaction that does six
- * things, and five of them are not data access. Putting any of them here would be the moment
- * this layer stopped being a data layer.
+ * WHAT IS DELIBERATELY ABSENT. No confirmation, no state transition, no reservation. Section
+ * 12.2 makes confirming one transaction that does six things, and most of them are not data
+ * access. Putting any of them here would be the moment this layer stopped being a data layer.
+ *
+ * THE ONE EXCEPTION IS NUMBER ALLOCATION, at the bottom of this file. It is step four of that
+ * same transaction and it lives here because it is a row lock and an increment, which is data
+ * access and nothing else. What surrounds it, deciding that an order may be confirmed at all,
+ * is not here.
  */
 
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import {
@@ -32,9 +36,11 @@ import {
 } from '../schema/sales.js';
 import type { Scope } from '../scope.js';
 import { actingUserId } from '../scope.js';
+import { formatDocumentNumber } from '../../shared/document-number.js';
 import { requireCompanyScope } from './company-scope.js';
-import { RecordNotFoundError } from './types.js';
+import { DocumentNumberSequenceMissingError, RecordNotFoundError } from './types.js';
 import type {
+  AllocatedDocumentNumber,
   DocumentNumberSequenceRecord,
   DocumentNumberSequenceRepository,
   NewDocumentNumberSequence,
@@ -297,6 +303,77 @@ export class DrizzleDocumentNumberSequenceRepository
     const row = rows[0];
     if (!row) throw new Error('Insert returned no row');
     return toSequence(row);
+  }
+
+  /**
+   * Takes the next number, under an explicit row lock.
+   *
+   * TWO STATEMENTS, DELIBERATELY.
+   *
+   * The first is `SELECT ... FOR UPDATE`, which is the lock section 10.4 describes. A second
+   * transaction reaching this line for the same sequence blocks here until this one commits or
+   * rolls back, so two transactions cannot read the same counter value. An `UPDATE` alone would
+   * take the same lock, but it would take it as a side effect of a write, and the thing this
+   * mechanism is for deserves to be visible rather than implied.
+   *
+   * The second increments. The new value is computed by the database from the locked row
+   * (`next_value + 1`), never from the value this process read, so even a stale read cannot
+   * produce a repeat. The allocated number is the value before the increment, which is what
+   * `RETURNING` lets us recover without a third statement.
+   *
+   * WHAT MAKES IT GAPLESS. Nothing here commits. Both statements belong to the caller's
+   * transaction, so if the document write that follows fails, the increment is rolled back with
+   * it and the number is still unissued. That is the whole reason section 10.4 accepts the
+   * serialisation cost of a locked row over a database sequence, which would have committed the
+   * increment independently and left a hole.
+   *
+   * THE `gapless` FLAG IS NOT READ. One mechanism serves both settings: a gapless sequence is a
+   * stricter promise than a gap tolerant one, so a sequence marked gap tolerant is simply
+   * getting more than it asked for. The flag stays because section 10.4 makes the choice a per
+   * sequence setting, and the faster lock free path for sequences that do not need gaplessness
+   * is an optimisation to make when one is measurably too slow, not before.
+   */
+  async allocate(docType: string): Promise<AllocatedDocumentNumber> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    // The scope is in the predicate, not checked afterwards, so this cannot lock or advance
+    // another company's counter: those rows are not among the ones the query can return. Row
+    // level security refuses them a second time.
+    const belongsHere = and(
+      eq(documentNumberSequences.docType, docType),
+      eq(documentNumberSequences.tenantId, tenantId),
+      eq(documentNumberSequences.companyId, companyId),
+    );
+
+    const locked = await this.db
+      .select()
+      .from(documentNumberSequences)
+      .where(belongsHere)
+      .limit(1)
+      .for('update');
+
+    const sequence = locked[0];
+    if (!sequence) throw new DocumentNumberSequenceMissingError(docType);
+
+    const updated = await this.db
+      .update(documentNumberSequences)
+      .set({
+        nextValue: sql`${documentNumberSequences.nextValue} + 1`,
+        // `version`, `updated_at` and `updated_by` are untouched on purpose. They record who
+        // last configured this sequence, per section 10.1's optimistic locking on edits, and
+        // allocation is not a configuration change. Bumping the version would make every
+        // allocation collide with an administrator's open edit of the prefix.
+      })
+      .where(and(eq(documentNumberSequences.id, sequence.id), belongsHere))
+      .returning();
+
+    const row = updated[0];
+    if (!row) throw new Error('The locked sequence row vanished before it could be incremented');
+
+    // The value now in the row is the next one to issue, so the one just allocated is one less.
+    const value = row.nextValue - 1n;
+
+    return { docType, value, formatted: formatDocumentNumber(row.prefix, value) };
   }
 }
 

@@ -24,10 +24,12 @@ export type {
 } from './scope.js';
 export {
   ConcurrencyConflictError,
+  DocumentNumberSequenceMissingError,
   RecordNotFoundError,
   UnknownPermissionError,
 } from './repositories/types.js';
 export type {
+  AllocatedDocumentNumber,
   AuditEventInput,
   AuditEventRecord,
   AuditRepository,

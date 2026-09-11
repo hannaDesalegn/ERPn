@@ -17,6 +17,7 @@ describe('the public surface of the data layer', () => {
   it('exports the unit of work and the scope constructors, and nothing that queries', () => {
     expect(exported).toEqual([
       'ConcurrencyConflictError',
+      'DocumentNumberSequenceMissingError',
       'RecordNotFoundError',
       'UnitOfWork',
       'UnknownPermissionError',
