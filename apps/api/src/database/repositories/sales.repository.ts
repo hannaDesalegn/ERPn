@@ -33,6 +33,7 @@ import {
 import type { Scope } from '../scope.js';
 import { actingUserId } from '../scope.js';
 import { requireCompanyScope } from './company-scope.js';
+import { RecordNotFoundError } from './types.js';
 import type {
   DocumentNumberSequenceRecord,
   DocumentNumberSequenceRepository,
@@ -43,6 +44,7 @@ import type {
   SalesOrderLineRepository,
   SalesOrderRecord,
   SalesOrderRepository,
+  SalesOrderTotals,
 } from './types.js';
 
 type Db = NodePgDatabase<Record<string, never>>;
@@ -117,6 +119,32 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
 
     const row = rows[0];
     if (!row) throw new Error('Insert returned no row');
+    return toSalesOrder(row);
+  }
+
+  async setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const rows = await this.db
+      .update(salesOrders)
+      .set({
+        subtotal: input.subtotal,
+        taxTotal: input.taxTotal,
+        total: input.total,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(salesOrders.id, input.id),
+          eq(salesOrders.tenantId, tenantId),
+          eq(salesOrders.companyId, companyId),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new RecordNotFoundError('Sales order', input.id);
     return toSalesOrder(row);
   }
 }

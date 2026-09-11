@@ -612,6 +612,26 @@ export interface SalesOrderRepository {
   findById(id: string): Promise<SalesOrderRecord | null>;
   listForCompany(): Promise<SalesOrderRecord[]>;
   create(input: NewSalesOrder): Promise<SalesOrderRecord>;
+  /**
+   * Writes the document totals, which are a projection of the lines.
+   *
+   * Separate from `create` because a header exists before its lines can reference it. Valid
+   * only inside the transaction that wrote or changed those lines, and it takes no expected
+   * version for that reason: there is no concurrent writer to lose an update to, because the
+   * rows it is summing are not visible to anyone else yet.
+   *
+   * The optimistic locking that section 10.1 requires for editing an existing draft arrives
+   * with the increment that edits one. A caller reaching for this to change a saved order is
+   * using the wrong method.
+   */
+  setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord>;
+}
+
+export interface SalesOrderTotals {
+  id: string;
+  subtotal: string;
+  taxTotal: string;
+  total: string;
 }
 
 export interface SalesOrderLineRepository {

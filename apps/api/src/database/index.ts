@@ -52,6 +52,7 @@ export type {
   ProductRecord,
   ProductRepository,
   SalesOrderRepository,
+  SalesOrderTotals,
   WarehouseRecord,
   WarehouseRepository,
   PrincipalRepositories,
