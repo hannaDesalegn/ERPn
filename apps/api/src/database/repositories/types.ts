@@ -688,6 +688,78 @@ export interface DocumentNumberSequenceRepository {
   allocate(docType: string): Promise<AllocatedDocumentNumber>;
 }
 
+
+// ---------------------------------------------------------------------------------------
+// Stock.
+// ---------------------------------------------------------------------------------------
+
+export interface StockMovementRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  productId: string;
+  warehouseId: string;
+  /** Signed. Positive increased stock, negative decreased it. In the stocking unit, per 8.4. */
+  quantity: string;
+  reason: string;
+  /** The document that caused it. Section 8.1 allows no movement without one. */
+  sourceDocType: string;
+  sourceDocId: string;
+  occurredAt: Date;
+}
+
+export interface StockBalanceRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  productId: string;
+  warehouseId: string;
+  /** What every movement for this key sums to. Section 8.2's maintained aggregate. */
+  onHand: string;
+  version: number;
+}
+
+/**
+ * A movement to record.
+ *
+ * No tenant or company: both come from the scope, so this cannot name another company's stock.
+ * No balance: the balance is what recording this does, never something a caller states.
+ */
+export interface NewStockMovement {
+  id: string;
+  productId: string;
+  warehouseId: string;
+  quantity: string;
+  reason: string;
+  sourceDocType: string;
+  sourceDocId: string;
+  /** Defaults to now. A receipt backdated to yesterday's delivery note is ordinary. */
+  occurredAt?: Date;
+}
+
+/** Both rows the write produced, so a caller sees the position rather than assuming it. */
+export interface RecordedMovement {
+  movement: StockMovementRecord;
+  balance: StockBalanceRecord;
+}
+
+/**
+ * The stock ledger of section 8.1 and the balance of section 8.2.
+ *
+ * There is no method that writes one without the other. Section 8.2 requires them maintained in
+ * one transaction, and offering an independent balance write would make the state they exist to
+ * prevent reachable through the interface.
+ *
+ * There is no update and no delete. The ledger is append only, and the application role holds no
+ * grant for either, so a correction is a compensating movement rather than an edit.
+ */
+export interface StockLedgerRepository {
+  balanceFor(productId: string, warehouseId: string): Promise<StockBalanceRecord | null>;
+  movementsFor(productId: string, warehouseId: string): Promise<StockMovementRecord[]>;
+  /** Writes the movement and moves its balance, under the row lock section 10.2 requires. */
+  record(input: NewStockMovement): Promise<RecordedMovement>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
@@ -697,6 +769,7 @@ export interface ScopedRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly stockLedger: StockLedgerRepository;
   readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
   readonly roles: RoleRepository;
@@ -737,6 +810,7 @@ export interface SystemRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly stockLedger: StockLedgerRepository;
   readonly users: UserRepository;
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;

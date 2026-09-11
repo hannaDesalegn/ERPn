@@ -30,6 +30,7 @@ import {
   DrizzleProductRepository,
   DrizzleWarehouseRepository,
 } from './repositories/master-data.repository.js';
+import { DrizzleStockLedgerRepository } from './repositories/inventory.repository.js';
 import {
   DrizzleDocumentNumberSequenceRepository,
   DrizzleSalesOrderLineRepository,
@@ -164,6 +165,7 @@ function buildRepositories(
     salesOrders: new DrizzleSalesOrderRepository(db, scope),
     salesOrderLines: new DrizzleSalesOrderLineRepository(db, scope),
     documentNumberSequences: new DrizzleDocumentNumberSequenceRepository(db, scope),
+    stockLedger: new DrizzleStockLedgerRepository(db, scope),
   };
 }
 

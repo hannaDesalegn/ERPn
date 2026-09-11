@@ -191,7 +191,15 @@ describe('Schema drift', () => {
       // The fourth shape, ephemeral operational state under last write wins, is deliberately
       // narrow. This pins the intended membership so that widening it is a visible, reviewed
       // change to this list rather than a quiet addition to the exempt array.
-      const associationOrAppendOnly = ['role_permissions', 'membership_roles', 'audit_events'];
+      // `stock_movements` joins under the second shape, not the fourth: section 8.1 makes the
+      // ledger append only, and the migration withholds UPDATE and DELETE from the application
+      // role so it is the database refusing an edit rather than a convention.
+      const associationOrAppendOnly = [
+        'role_permissions',
+        'membership_roles',
+        'audit_events',
+        'stock_movements',
+      ];
       const claimingFourthShape = VERSION_EXEMPT_TABLES.filter(
         (table) => !associationOrAppendOnly.includes(table),
       );
