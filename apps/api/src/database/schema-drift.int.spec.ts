@@ -10,7 +10,11 @@
  * would miss a hand edit made directly against a database. Reading the catalogue asks what is
  * actually there.
  *
- * These tests require the migration to have been applied: `npm run db:up && npm run db:migrate`.
+ * The lists it checks against are composed in `schema/index.ts` from each module's own
+ * declarations, so a module added without being registered there fails the first assertion
+ * rather than going unchecked.
+ *
+ * These tests require the migrations to have been applied: `npm run db:up && npm run db:migrate`.
  */
 
 import { Client } from 'pg';
@@ -18,13 +22,13 @@ import { getTableConfig } from 'drizzle-orm/pg-core';
 
 import {
   COMPANY_PARTITIONED_TABLES,
+  databaseSchema,
   GLOBAL_TABLES,
   INFRASTRUCTURE_TABLES,
   NULLABLE_SCOPE_TABLES,
   TENANT_SCOPED_TABLES,
   VERSION_EXEMPT_TABLES,
-  identitySchema,
-} from './schema/identity.js';
+} from './schema/index.js';
 
 const MIGRATION_URL = process.env['MIGRATION_DATABASE_URL'];
 const APP_ROLE = process.env['APP_DB_ROLE'] ?? 'erp_app';
@@ -77,14 +81,14 @@ describe('Schema drift', () => {
 
   describe('the running schema matches the Drizzle definitions', () => {
     it('declares every table that exists, and no table that does not', () => {
-      const declared = Object.values(identitySchema)
+      const declared = Object.values(databaseSchema)
         .map((table) => getTableConfig(table).name)
         .sort();
 
       expect(declared).toEqual(liveTables());
     });
 
-    it.each(Object.entries(identitySchema))(
+    it.each(Object.entries(databaseSchema))(
       'declares exactly the columns %s has in the database',
       (_key, table) => {
         const config = getTableConfig(table);
@@ -94,7 +98,7 @@ describe('Schema drift', () => {
       },
     );
 
-    it.each(Object.entries(identitySchema))(
+    it.each(Object.entries(databaseSchema))(
       'agrees with the database about nullability on %s',
       (_key, table) => {
         const config = getTableConfig(table);
@@ -263,9 +267,31 @@ describe('Schema drift', () => {
       expect([...(grants.get('audit_events') ?? [])].sort()).toEqual(['INSERT', 'SELECT']);
     });
 
-    it.each(['tenants', 'companies', 'users'])('holds no DELETE on %s', (table) => {
-      // Section 4.5: business records are cancelled, reversed or archived, never deleted.
-      expect([...(grants.get(table) ?? [])]).not.toContain('DELETE');
+    it.each(['tenants', 'companies', 'users', 'sales_orders'])(
+      'holds no DELETE on %s',
+      (table) => {
+        // Section 4.5: business records are cancelled, reversed or archived, never deleted. A
+        // sales order that is abandoned becomes cancelled; 4.5 permits deleting a draft that
+        // was never confirmed, and that grant is withheld until something needs it.
+        expect([...(grants.get(table) ?? [])]).not.toContain('DELETE');
+      },
+    );
+
+    it('holds DELETE on sales_order_lines, because a draft is editable', () => {
+      // Section 12.2: a draft is editable and has no side effects, so removing a line from one
+      // is ordinary editing rather than deleting a document. Whether a line may be removed
+      // after confirmation is a state machine question, not a grant question.
+      expect([...(grants.get('sales_order_lines') ?? [])]).toContain('DELETE');
+    });
+
+    it('holds no DELETE on document_number_sequences', () => {
+      // A counter that can be dropped and recreated is a counter that can be reset, which is
+      // how a gapless sequence reissues a number already printed on a document.
+      expect([...(grants.get('document_number_sequences') ?? [])].sort()).toEqual([
+        'INSERT',
+        'SELECT',
+        'UPDATE',
+      ]);
     });
 
     it('holds only SELECT on tenants, which platform administration owns', () => {

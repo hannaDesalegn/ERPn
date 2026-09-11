@@ -15,6 +15,8 @@
 
 import { Client } from 'pg';
 
+import { NULLABLE_SCOPE_TABLES, TENANT_SCOPED_TABLES } from './schema/index.js';
+
 const MIGRATION_URL = process.env['MIGRATION_DATABASE_URL'];
 const APP_URL = process.env['DATABASE_URL'];
 
@@ -97,12 +99,53 @@ describe('Tenant isolation', () => {
     expect(result.rows[0]?.superuser).toBe(false);
   });
 
-  it('returns zero rows when no tenant context is set, rather than every row', async () => {
-    // Criterion 31, and the failure direction that matters. A policy that fails open here
-    // would leak every customer's data at once.
+  /**
+   * Every tenant scoped table except the one section 7.3 exempts.
+   *
+   * `audit_events` is the single table whose scope columns are nullable, and migration 0003
+   * makes those platform level rows readable in an empty context on purpose: they are the
+   * authentication events, which happen before any tenant is known. It is not a hole. An empty
+   * context still sees no tenant's rows, which is what criterion 31 is about, and the test below
+   * states that separately rather than leaving the exception unexplained.
+   */
+  const DENY_ENTIRELY = TENANT_SCOPED_TABLES.filter(
+    (table) => !NULLABLE_SCOPE_TABLES.includes(table as never),
+  );
+
+  it.each(DENY_ENTIRELY)(
+    'returns zero rows from %s when no tenant context is set, rather than every row',
+    async (table) => {
+      // Criterion 31, and the failure direction that matters. A policy that fails open here
+      // would leak every customer's data at once.
+      //
+      // Driven by the table list rather than naming one table, so a table added to a later
+      // module inherits this check by being classified rather than by someone remembering to
+      // come back here. That is how the first version of this test was written, against
+      // `companies` alone, and it would have said nothing about the sales tables.
+      await asTenant(null);
+
+      const result = await app.query<{ count: string }>(`SELECT count(*) FROM ${table}`);
+
+      expect(result.rows[0]?.count).toBe('0');
+    },
+  );
+
+  it('covers every tenant scoped table except the one section 7.3 exempts', () => {
+    // Without this the filter above could quietly empty itself, and a suite that checks nothing
+    // passes exactly like one that checks everything.
+    expect(DENY_ENTIRELY.length).toBe(TENANT_SCOPED_TABLES.length - 1);
+    expect(DENY_ENTIRELY).not.toContain('audit_events');
+    expect(DENY_ENTIRELY).toContain('sales_orders');
+  });
+
+  it('shows an empty context no tenant audit row, which is what criterion 31 asks', async () => {
+    // The exception is narrow and worth pinning. An empty context sees the platform rows that
+    // belong to no tenant, and no row belonging to one.
     await asTenant(null);
 
-    const result = await app.query<{ count: string }>('SELECT count(*) FROM companies');
+    const result = await app.query<{ count: string }>(
+      'SELECT count(*) FROM audit_events WHERE tenant_id IS NOT NULL',
+    );
 
     expect(result.rows[0]?.count).toBe('0');
   });

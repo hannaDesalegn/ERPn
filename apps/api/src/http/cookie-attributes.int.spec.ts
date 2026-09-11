@@ -125,6 +125,11 @@ describe('Cookie attributes under the secure configuration', () => {
   async function purge(): Promise<void> {
     await owner.query('DELETE FROM sessions WHERE user_id = $1', [USER]);
     await owner.query('DELETE FROM auth_throttle');
+    // The sign in above writes a platform level audit row. Section 7.1 gives the audit table no
+    // delete policy for any role, so TRUNCATE is the only way to clear it, which is why the
+    // integration files run serially. Without this the row outlives the suite and shows up as
+    // residual data in the end-of-run check.
+    await owner.query('TRUNCATE audit_events');
     await owner.query('DELETE FROM users WHERE id = $1', [USER]);
   }
 
