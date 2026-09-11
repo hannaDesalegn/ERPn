@@ -337,9 +337,172 @@ export interface TenantRepository {
   listAll(): Promise<TenantRecord[]>;
 }
 
+/**
+ * Sales documents. Company partitioned, like everything a company owns.
+ *
+ * DECIMALS CROSS THIS BOUNDARY AS STRINGS. Section 4.3 stores money as exact `NUMERIC` and sends
+ * it over the wire as a decimal string, because a JavaScript number is an IEEE-754 double and
+ * loses precision silently. Handing back a `number` here would put that loss one layer below
+ * everything that cares about it, which is the worst place for it to happen. The caller parses
+ * with a decimal type at the point it does arithmetic.
+ */
+export interface SalesOrderRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** Null while the order is a draft. Allocated at confirmation, per section 12.2. */
+  docNumber: string | null;
+  status: string;
+  /**
+   * Master data this order points at.
+   *
+   * No foreign key backs these yet, because the tables do not exist. Section 4.1 requires an
+   * actual foreign key for every foreign key relationship, so this is a recorded gap rather than
+   * a design: the constraint is added by the migration that creates those tables.
+   */
+  customerId: string;
+  warehouseId: string;
+  salesRepUserId: string | null;
+  orderDate: string;
+  expectedDeliveryDate: string | null;
+  currency: string;
+  subtotal: string;
+  taxTotal: string;
+  total: string;
+  version: number;
+}
+
+export interface SalesOrderLineRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  salesOrderId: string;
+  lineNumber: number;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: string;
+  unitPrice: string;
+  discountPercent: string;
+  taxRatePercent: string;
+  currency: string;
+  lineSubtotal: string;
+  lineTax: string;
+  lineTotal: string;
+  deliveredQuantity: string;
+  invoicedQuantity: string;
+  version: number;
+}
+
+export interface DocumentNumberSequenceRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  docType: string;
+  prefix: string;
+  gapless: boolean;
+  /** The counter. A `bigint`, because a number would silently round past 2^53. */
+  nextValue: bigint;
+  version: number;
+}
+
+/**
+ * A new order, which is always a draft.
+ *
+ * Not a rule this interface invents: the table refuses any other status without a document
+ * number, and numbers are allocated by the confirming transaction under section 12.2. There is
+ * nothing else an order can be created as.
+ *
+ * No status, no document number and no totals. Totals are computed from the lines by whatever
+ * calculates them, which is not the data layer.
+ */
+export interface NewSalesOrder {
+  id: string;
+  customerId: string;
+  warehouseId: string;
+  salesRepUserId?: string | null;
+  orderDate: string;
+  expectedDeliveryDate?: string | null;
+  currency: string;
+}
+
+/**
+ * A new line.
+ *
+ * The currency is supplied rather than read from the order, and the database refuses a mismatch
+ * through the composite key. Deriving it here would be a query per line to re-establish
+ * something the schema already guarantees.
+ *
+ * The money fields are the caller's arithmetic. This layer stores what it is given.
+ */
+export interface NewSalesOrderLine {
+  id: string;
+  salesOrderId: string;
+  lineNumber: number;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: string;
+  unitPrice: string;
+  currency: string;
+  discountPercent?: string;
+  taxRatePercent?: string;
+  lineSubtotal?: string;
+  lineTax?: string;
+  lineTotal?: string;
+}
+
+export interface NewDocumentNumberSequence {
+  id: string;
+  docType: string;
+  prefix?: string;
+  gapless?: boolean;
+}
+
+/**
+ * Sales orders, confined to the acting company.
+ *
+ * READS AND WRITES ONLY. There is no confirm, no number allocation, no total recalculation and
+ * no state transition here. Section 12.2 makes confirmation one transaction doing six things,
+ * and five of them are not data access.
+ */
+export interface SalesOrderRepository {
+  findById(id: string): Promise<SalesOrderRecord | null>;
+  listForCompany(): Promise<SalesOrderRecord[]>;
+  create(input: NewSalesOrder): Promise<SalesOrderRecord>;
+}
+
+export interface SalesOrderLineRepository {
+  listForOrder(salesOrderId: string): Promise<SalesOrderLineRecord[]>;
+  create(input: NewSalesOrderLine): Promise<SalesOrderLineRecord>;
+  /**
+   * Removes a line.
+   *
+   * Whether the order is still a draft is a state machine question under section 12.2 and is
+   * not asked here. The grant exists because editing a draft removes lines.
+   */
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * Document number sequences, per section 10.4.
+ *
+ * NOTHING HERE ALLOCATES A NUMBER. Allocation takes a row lock inside the transaction that
+ * creates the document, and that transaction does not exist yet. Adding the method now would
+ * mean guessing the shape of a mechanism whose whole difficulty is what surrounds it.
+ */
+export interface DocumentNumberSequenceRepository {
+  findForDocType(docType: string): Promise<DocumentNumberSequenceRecord | null>;
+  listForCompany(): Promise<DocumentNumberSequenceRecord[]>;
+  create(input: NewDocumentNumberSequence): Promise<DocumentNumberSequenceRecord>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
+  readonly salesOrders: SalesOrderRepository;
+  readonly salesOrderLines: SalesOrderLineRepository;
+  readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
   readonly roles: RoleRepository;
@@ -374,6 +537,9 @@ export interface PrincipalRepositories {
  */
 export interface SystemRepositories {
   readonly tenants: TenantRepository;
+  readonly salesOrders: SalesOrderRepository;
+  readonly salesOrderLines: SalesOrderLineRepository;
+  readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly users: UserRepository;
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;

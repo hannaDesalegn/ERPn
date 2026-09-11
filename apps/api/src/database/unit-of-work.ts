@@ -26,6 +26,11 @@ import type { Pool, PoolClient } from 'pg';
 import { DATABASE_POOL } from './tokens.js';
 import { DrizzleAuthThrottleRepository } from './repositories/auth-throttle.repository.js';
 import {
+  DrizzleDocumentNumberSequenceRepository,
+  DrizzleSalesOrderLineRepository,
+  DrizzleSalesOrderRepository,
+} from './repositories/sales.repository.js';
+import {
   DrizzleAuditRepository,
   DrizzleCompanyRepository,
   DrizzleMembershipRepository,
@@ -148,6 +153,9 @@ function buildRepositories(
     users: new DrizzleUserRepository(db, scope),
     audit: new DrizzleAuditRepository(db, scope),
     authThrottle: new DrizzleAuthThrottleRepository(db),
+    salesOrders: new DrizzleSalesOrderRepository(db, scope),
+    salesOrderLines: new DrizzleSalesOrderLineRepository(db, scope),
+    documentNumberSequences: new DrizzleDocumentNumberSequenceRepository(db, scope),
   };
 }
 
