@@ -165,6 +165,25 @@ export class DrizzleSalesOrderLineRepository implements SalesOrderLineRepository
     private readonly scope: Scope,
   ) {}
 
+  async findById(id: string): Promise<SalesOrderLineRecord | null> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const rows = await this.db
+      .select()
+      .from(salesOrderLines)
+      .where(
+        and(
+          eq(salesOrderLines.id, id),
+          eq(salesOrderLines.tenantId, tenantId),
+          eq(salesOrderLines.companyId, companyId),
+        ),
+      )
+      .limit(1);
+
+    const row = rows[0];
+    return row ? toSalesOrderLine(row) : null;
+  }
+
   async listForOrder(salesOrderId: string): Promise<SalesOrderLineRecord[]> {
     const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 

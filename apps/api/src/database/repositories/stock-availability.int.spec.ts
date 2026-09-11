@@ -294,7 +294,7 @@ describe('Stock availability', () => {
     where: { productId?: string; warehouseId?: string; salesOrderLineId?: string } = {},
   ) =>
     uow.inActorScope(scope, (repositories) =>
-      repositories.stockReservations.create({
+      repositories.stockReservations.createUnderBalanceLock({
         id: nextId('d8'),
         salesOrderLineId: where.salesOrderLineId ?? LINE[scope.companyId]!,
         productId: where.productId ?? PRODUCT[scope.companyId]!,
@@ -590,7 +590,7 @@ describe('Stock availability', () => {
           PRODUCT[COMPANY_A1]!,
           WAREHOUSE[COMPANY_A1]!,
         );
-        await repositories.stockReservations.create({
+        await repositories.stockReservations.createUnderBalanceLock({
           id: nextId('d8'),
           salesOrderLineId: LINE[COMPANY_A1]!,
           productId: PRODUCT[COMPANY_A1]!,

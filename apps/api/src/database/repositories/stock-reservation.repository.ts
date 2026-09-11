@@ -1,12 +1,13 @@
 /**
  * Reading and recording reservations against stock.
  *
- * WHAT IS DELIBERATELY NOT HERE IS THE RESERVATION OPERATION. `create` writes a row and makes no
- * claim that the stock was there to be held. Section 8.5 requires an order that would oversell
- * to fail inside the transaction, and section 10.2 requires the balance row to be locked while
- * that decision is made, so reserving is a read of availability under a lock followed by this
- * write, not this write alone. It belongs to the increment that owns the operation, and offering
- * a method called `reserve` here would be offering the dangerous half of it.
+ * WHAT IS DELIBERATELY NOT HERE IS THE RESERVATION OPERATION. `createUnderBalanceLock` writes a
+ * row and makes no claim that the stock was there to be held. Section 8.5 requires an order that
+ * would oversell to fail inside the transaction, and section 10.2 requires the balance row to be
+ * locked while that decision is made, so reserving is a read of availability under a lock
+ * followed by this write, not this write alone. That operation is `reserveForOrderLine` in
+ * `src/inventory/reservations.ts`, and the method here is named for the precondition it cannot
+ * check so that a call from anywhere else fails review on the name.
  *
  * NO RELEASE AND NO UPDATE. The application role holds neither grant. Section 12.3 has not ruled
  * whether cancelling releases reserved stock, and partial delivery might reduce a reservation or
@@ -76,7 +77,7 @@ export class DrizzleStockReservationRepository implements StockReservationReposi
     return rows.map(toReservation);
   }
 
-  async create(input: NewStockReservation): Promise<StockReservationRecord> {
+  async createUnderBalanceLock(input: NewStockReservation): Promise<StockReservationRecord> {
     const { tenantId, companyId } = requireCompanyScope(this.scope, 'Stock reservations');
 
     const rows = await this.db

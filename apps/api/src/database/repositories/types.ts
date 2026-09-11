@@ -635,6 +635,8 @@ export interface SalesOrderTotals {
 }
 
 export interface SalesOrderLineRepository {
+  /** One line, in the acting company. The authority for what a reservation is allowed to hold. */
+  findById(id: string): Promise<SalesOrderLineRecord | null>;
   listForOrder(salesOrderId: string): Promise<SalesOrderLineRecord[]>;
   create(input: NewSalesOrderLine): Promise<SalesOrderLineRecord>;
   /**
@@ -838,8 +840,16 @@ export interface StockReservationRepository {
   listForBalanceKey(productId: string, warehouseId: string): Promise<StockReservationRecord[]>;
   /** Everything one order line holds. What releasing it will need to find. */
   listForOrderLine(salesOrderLineId: string): Promise<StockReservationRecord[]>;
-  /** Records one reservation. Says nothing about whether the stock was available. */
-  create(input: NewStockReservation): Promise<StockReservationRecord>;
+  /**
+   * Writes one reservation row, checking nothing.
+   *
+   * NAMED FOR ITS PRECONDITION BECAUSE IT CANNOT ENFORCE IT. This says nothing about whether the
+   * stock was there, and calling it without first locking the balance row for the same key is how
+   * two transactions both reserve the last unit. The only correct caller is
+   * `reserveForOrderLine`, which takes that lock through `availabilityForUpdate` and makes the
+   * decision this write records. A call anywhere else should fail review on the name alone.
+   */
+  createUnderBalanceLock(input: NewStockReservation): Promise<StockReservationRecord>;
 }
 
 /** What an actor scoped unit of work hands to its callback. */

@@ -239,7 +239,7 @@ describe('Stock reservations', () => {
     }> = {},
   ) =>
     uow.inActorScope(scope, (repositories) =>
-      repositories.stockReservations.create({
+      repositories.stockReservations.createUnderBalanceLock({
         id: reservationId(),
         salesOrderLineId: overrides.salesOrderLineId ?? LINE[scope.companyId]!,
         productId: overrides.productId ?? PRODUCT[scope.companyId]!,
@@ -298,8 +298,8 @@ describe('Stock reservations', () => {
       };
 
       const reservation = await uow.inActorScope(IN_A1, (repositories) =>
-        repositories.stockReservations.create(
-          smuggled as unknown as Parameters<typeof repositories.stockReservations.create>[0],
+        repositories.stockReservations.createUnderBalanceLock(
+          smuggled as unknown as Parameters<typeof repositories.stockReservations.createUnderBalanceLock>[0],
         ),
       );
 
@@ -504,12 +504,14 @@ describe('Stock reservations', () => {
 
     it('offers no reserve or release operation through the repository', async () => {
       // Reserving is an availability check under a lock followed by this write, per sections 8.5
-      // and 10.2. A method called `reserve` here would be the dangerous half of it on its own.
+      // and 10.2. A method called `reserve` here would be the dangerous half of it on its own,
+      // and the write that does exist is named for the precondition it cannot check.
       const methods = await uow.inActorScope(IN_A1, async (repositories) =>
         Object.getOwnPropertyNames(Object.getPrototypeOf(repositories.stockReservations)),
       );
 
-      expect(methods).toContain('create');
+      expect(methods).toContain('createUnderBalanceLock');
+      expect(methods).not.toContain('create');
       expect(methods).not.toContain('reserve');
       expect(methods).not.toContain('release');
       expect(methods).not.toContain('available');
