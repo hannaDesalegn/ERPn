@@ -4,6 +4,7 @@ import { AppConfigModule } from './config/config.module.js';
 import { AdministrationModule } from './administration/administration.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { AuthorizationModule } from './authorization/authorization.module.js';
+import { CompaniesModule } from './companies/companies.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
@@ -30,6 +31,7 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     AuthorizationModule,
     IdentityModule,
     AdministrationModule,
+    CompaniesModule,
     SalesModule,
     HealthModule,
   ],
