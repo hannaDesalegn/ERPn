@@ -86,6 +86,15 @@ export const ROLE_KEYS = [
 
 export type RoleKey = (typeof ROLE_KEYS)[number];
 
+/**
+ * The template that carries company administration authority.
+ *
+ * Named once because company provisioning has to find this company's own copy of it among the
+ * roles it just seeded. A literal at that call site would be a string nothing checks, and a
+ * typo would leave a new company's first member holding no role at all.
+ */
+export const ADMINISTRATOR_ROLE_KEY: RoleKey = 'administrator';
+
 export interface RoleTemplate {
   key: RoleKey;
   name: string;

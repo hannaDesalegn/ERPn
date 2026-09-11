@@ -126,6 +126,8 @@ describe('Company provisioning', () => {
         'DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE company_id = $1)',
         [companyId],
       );
+      await owner.query('DELETE FROM membership_roles WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM memberships WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM roles WHERE company_id = $1', [companyId]);
     }
     await ownerContext();
@@ -182,12 +184,39 @@ describe('Company provisioning', () => {
     return rows.rows;
   };
 
+  /** Every membership a company holds, with the role keys each one carries. */
+  const membersOf = async (tenantId: string, companyId: string) => {
+    await ownerContext(tenantId, companyId);
+    const rows = await owner.query<{
+      id: string;
+      tenant_id: string;
+      company_id: string;
+      user_id: string;
+      status: string;
+      role_keys: string[] | null;
+    }>(
+      `SELECT m.id, m.tenant_id, m.company_id, m.user_id, m.status,
+              array_remove(array_agg(r.key), NULL) AS role_keys
+         FROM memberships m
+         LEFT JOIN membership_roles mr ON mr.membership_id = m.id
+         LEFT JOIN roles r ON r.id = mr.role_id
+        WHERE m.company_id = $1
+        GROUP BY m.id, m.tenant_id, m.company_id, m.user_id, m.status`,
+      // Named explicitly, because the memberships policy is tenant-only by design: company
+      // switching reads a person's memberships across the companies of their tenant. Relying on
+      // row level security here would return every company's members and quietly pass.
+      [companyId],
+    );
+    return rows.rows;
+  };
+
   const provisionA1 = () =>
     provisioning.provision({
       tenantId: TENANT_A,
       id: COMPANY_A1,
       name: 'A One',
       baseCurrency: 'USD',
+      administratorUserId: USER,
     });
 
   // -------------------------------------------------------------------------------------
@@ -431,6 +460,7 @@ describe('Company provisioning', () => {
         id: COMPANY_A2,
         name: 'A Two',
         baseCurrency: 'USD',
+        administratorUserId: USER,
       });
 
       const first = await sequencesOf(TENANT_A, COMPANY_A1);
@@ -448,6 +478,7 @@ describe('Company provisioning', () => {
         id: COMPANY_A2,
         name: 'A Two',
         baseCurrency: 'USD',
+        administratorUserId: USER,
       });
 
       await uow.inActorScope(
@@ -466,6 +497,7 @@ describe('Company provisioning', () => {
         id: COMPANY_B1,
         name: 'B One',
         baseCurrency: 'EUR',
+        administratorUserId: USER,
       });
 
       const here = await uow.inActorScope(
@@ -666,6 +698,7 @@ describe('Company provisioning', () => {
         id: COMPANY_A2,
         name: 'A Two',
         baseCurrency: 'USD',
+        administratorUserId: USER,
       });
 
       // Roles are per company, per section 2.7, so the same six keys exist twice over as
@@ -698,4 +731,237 @@ describe('Company provisioning', () => {
       expect(events.rows[0]?.xmin).toBe(company.rows[0]?.xmin);
     });
   });
+
+  // -------------------------------------------------------------------------------------
+  // 9. The company's first member.
+  // -------------------------------------------------------------------------------------
+
+  describe('the first administrator', () => {
+    it('is admitted as a member of the new company', async () => {
+      const { administrator } = await provisionA1();
+
+      expect(administrator.membership.userId).toBe(USER);
+
+      const members = await membersOf(TENANT_A, COMPANY_A1);
+      expect(members).toHaveLength(1);
+      expect(members[0]?.user_id).toBe(USER);
+      expect(members[0]?.status).toBe('active');
+    });
+
+    it('belongs to the tenant and company being provisioned', async () => {
+      await provisionA1();
+
+      const member = (await membersOf(TENANT_A, COMPANY_A1))[0];
+      expect(member?.tenant_id).toBe(TENANT_A);
+      expect(member?.company_id).toBe(COMPANY_A1);
+    });
+
+    it('holds the administrator role, and only that one', async () => {
+      await provisionA1();
+
+      const member = (await membersOf(TENANT_A, COMPANY_A1))[0];
+      expect(member?.role_keys).toEqual(['administrator']);
+    });
+
+    it('holds this company\'s own copy of the role, not another company\'s', async () => {
+      // Section 2.7 makes roles the company's own from the moment they are seeded. Pointing a
+      // membership at a role row belonging to a sibling company would be the one way to make
+      // authority travel between companies.
+      const { administrator } = await provisionA1();
+
+      const roles = await rolesOf(TENANT_A, COMPANY_A1);
+      const administratorRole = roles.find((role) => role.key === 'administrator');
+
+      expect(administrator.roleId).toBe(administratorRole?.id);
+      expect(administratorRole?.company_id).toBe(COMPANY_A1);
+    });
+
+    it('takes its permissions from the template rather than from anything set here', async () => {
+      // Provisioning grants no permission of its own. Whatever the administrator can do is what
+      // the catalogue's template says, read back through the role the membership points at.
+      await provisionA1();
+
+      const granted = await uow.inActorScope(
+        actorScope({ tenantId: TENANT_A, companyId: COMPANY_A1, userId: USER }),
+        async (repositories) => {
+          const membership = await repositories.memberships.findOwnForActiveCompany();
+          return repositories.roles.listPermissionsForMembership(membership!.id);
+        },
+      );
+
+      expect(granted.length).toBeGreaterThan(0);
+      expect(granted).toContain('admin:users');
+    });
+
+    it('is reachable as an ordinary member, with no founder flag anywhere', async () => {
+      // The membership carries nothing marking it as the first. If it did, every later
+      // authorization decision would have a second thing to consult.
+      await provisionA1();
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const columns = await owner.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'memberships'`,
+      );
+      const names = columns.rows.map((row) => row.column_name);
+
+      expect(names).not.toContain('is_admin');
+      expect(names).not.toContain('is_owner');
+      expect(names).not.toContain('is_founder');
+    });
+  });
+
+  // -------------------------------------------------------------------------------------
+  // 10. All four, or none.
+  // -------------------------------------------------------------------------------------
+
+  describe('company, roles, sequence and membership together', () => {
+    it('writes all four in a single transaction', async () => {
+      await provisionA1();
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const written = await owner.query<{ xmin: string }>(
+        `SELECT xmin::text AS xmin FROM companies WHERE id = $1
+         UNION
+         SELECT xmin::text FROM roles WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM document_number_sequences WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM memberships WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM membership_roles WHERE company_id = $1`,
+        [COMPANY_A1],
+      );
+
+      expect(written.rows).toHaveLength(1);
+    });
+
+    it('leaves nothing behind when admitting the administrator fails', async () => {
+      // The membership is written last, so by the time this fails the company, its roles and its
+      // sequence are all in the transaction. Every one of them must go.
+      await expect(
+        provisioning.provision({
+          tenantId: TENANT_A,
+          id: COMPANY_DOOMED,
+          name: 'Doomed',
+          baseCurrency: 'USD',
+          // No such user, which the membership's foreign key refuses.
+          administratorUserId: 'a3900000-0000-4000-8000-00000000000f',
+        }),
+      ).rejects.toThrow();
+
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await rolesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await sequencesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await membersOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('leaves no membership when an earlier step is what fails', async () => {
+      await provisionA1();
+
+      await expect(
+        uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_DOOMED }),
+          async (repositories) => {
+            await repositories.companies.create({
+              id: COMPANY_DOOMED,
+              name: 'Doomed',
+              baseCurrency: 'USD',
+            });
+            await repositories.memberships.create({
+              id: 'a3800000-0000-4000-8000-00000000000e',
+              userId: USER,
+            });
+            // Reusing the sequence id provisioned above, which the primary key refuses.
+            await repositories.documentNumberSequences.create({
+              id: (await sequencesOf(TENANT_A, COMPANY_A1))[0]!.id,
+              docType: SALES_ORDER_DOC_TYPE,
+            });
+          },
+        ),
+      ).rejects.toThrow();
+
+      expect(await membersOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('cannot admit the same person to one company twice', async () => {
+      await provisionA1();
+
+      const refusal = await uow
+        .inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_A1 }),
+          (repositories) =>
+            repositories.memberships.create({
+              id: 'a3700000-0000-4000-8000-00000000000d',
+              userId: USER,
+            }),
+        )
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+
+      // The constraint name lives in the driver error, which the query layer wraps, so the
+      // assertion walks the cause chain rather than reading the outermost message.
+      expect(causeChain(refusal)).toMatch(/memberships_company_user_key/);
+      expect(await membersOf(TENANT_A, COMPANY_A1)).toHaveLength(1);
+    });
+
+    it('leaves membership untouched when provisioning is retried', async () => {
+      const first = await provisionA1();
+
+      await expect(provisionA1()).rejects.toThrow();
+
+      const members = await membersOf(TENANT_A, COMPANY_A1);
+      expect(members).toHaveLength(1);
+      expect(members[0]?.id).toBe(first.administrator.membership.id);
+      expect(members[0]?.role_keys).toEqual(['administrator']);
+    });
+
+    it('gives two companies in a tenant separate memberships for the same person', async () => {
+      // Section 2.6: one account reaches every company the person belongs to, through a separate
+      // membership in each. The same user in two companies is two rows, not one shared one.
+      const first = await provisionA1();
+      const second = await provisioning.provision({
+        tenantId: TENANT_A,
+        id: COMPANY_A2,
+        name: 'A Two',
+        baseCurrency: 'USD',
+        administratorUserId: USER,
+      });
+
+      expect(first.administrator.membership.id).not.toBe(second.administrator.membership.id);
+      expect(first.administrator.roleId).not.toBe(second.administrator.roleId);
+
+      const here = await membersOf(TENANT_A, COMPANY_A1);
+      const there = await membersOf(TENANT_A, COMPANY_A2);
+      expect(here).toHaveLength(1);
+      expect(there).toHaveLength(1);
+      expect(here[0]?.company_id).toBe(COMPANY_A1);
+      expect(there[0]?.company_id).toBe(COMPANY_A2);
+    });
+
+    it('does not make the administrator of one company a member of its sibling', async () => {
+      await provisionA1();
+
+      // Reading company A2 as the same user, who has no membership there at all.
+      const seen = await uow.inActorScope(
+        actorScope({ tenantId: TENANT_A, companyId: COMPANY_A2, userId: USER }),
+        (repositories) => repositories.memberships.findOwnForActiveCompany(),
+      );
+
+      expect(seen).toBeNull();
+    });
+  });
 });
+
+/** Every message in an error's cause chain, because the query layer wraps driver errors. */
+function causeChain(error: unknown): string {
+  const messages: string[] = [];
+
+  for (let current = error; current instanceof Error; current = current.cause) {
+    messages.push(current.message);
+  }
+
+  return messages.join(' | ');
+}
