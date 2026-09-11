@@ -31,7 +31,8 @@ import {
   salesOrders,
 } from '../schema/sales.js';
 import type { Scope } from '../scope.js';
-import { actingUserId, companyIdOf, tenantIdOf } from '../scope.js';
+import { actingUserId } from '../scope.js';
+import { requireCompanyScope } from './company-scope.js';
 import type {
   DocumentNumberSequenceRecord,
   DocumentNumberSequenceRepository,
@@ -46,28 +47,6 @@ import type {
 
 type Db = NodePgDatabase<Record<string, never>>;
 
-/**
- * The tenant and company a scope acts within, or a refusal.
- *
- * Every table in this file is company partitioned, so both halves are required and neither has a
- * meaningful default. A scope missing either has a bug rather than an empty database, and saying
- * so here is better than returning nothing and letting a caller conclude the company is empty.
- */
-function requireScope(scope: Scope): { tenantId: string; companyId: string } {
-  const tenantId = tenantIdOf(scope);
-  const companyId = companyIdOf(scope);
-
-  if (!tenantId || !companyId) {
-    throw new Error(
-      `A company-partitioned sales repository was used under a ${scope.kind} scope naming ${
-        tenantId ? 'no company' : 'no tenant'
-      }. Sales documents belong to exactly one company.`,
-    );
-  }
-
-  return { tenantId, companyId };
-}
-
 // ---------------------------------------------------------------------------------------
 // Sales orders.
 // ---------------------------------------------------------------------------------------
@@ -79,7 +58,7 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
   ) {}
 
   async findById(id: string): Promise<SalesOrderRecord | null> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .select()
@@ -97,7 +76,7 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
   }
 
   async listForCompany(): Promise<SalesOrderRecord[]> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .select()
@@ -116,7 +95,7 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
    * `docNumber` are not parameters: they are what the schema already says a new order is.
    */
   async create(input: NewSalesOrder): Promise<SalesOrderRecord> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .insert(salesOrders)
@@ -153,7 +132,7 @@ export class DrizzleSalesOrderLineRepository implements SalesOrderLineRepository
   ) {}
 
   async listForOrder(salesOrderId: string): Promise<SalesOrderLineRecord[]> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     // Scoped as well as filtered by order. An order identifier from another company matches no
     // line rather than returning that company's lines, which is the shape section 6.3 asks for
@@ -174,7 +153,7 @@ export class DrizzleSalesOrderLineRepository implements SalesOrderLineRepository
   }
 
   async create(input: NewSalesOrderLine): Promise<SalesOrderLineRecord> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .insert(salesOrderLines)
@@ -206,7 +185,7 @@ export class DrizzleSalesOrderLineRepository implements SalesOrderLineRepository
   }
 
   async remove(id: string): Promise<void> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     await this.db
       .delete(salesOrderLines)
@@ -233,7 +212,7 @@ export class DrizzleDocumentNumberSequenceRepository
   ) {}
 
   async findForDocType(docType: string): Promise<DocumentNumberSequenceRecord | null> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     // A plain read, with no lock. Allocation takes the lock inside the transaction that creates
     // the document, and that is not this increment. A reader that took the lock here would
@@ -254,7 +233,7 @@ export class DrizzleDocumentNumberSequenceRepository
   }
 
   async listForCompany(): Promise<DocumentNumberSequenceRecord[]> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .select()
@@ -271,7 +250,7 @@ export class DrizzleDocumentNumberSequenceRepository
   }
 
   async create(input: NewDocumentNumberSequence): Promise<DocumentNumberSequenceRecord> {
-    const { tenantId, companyId } = requireScope(this.scope);
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     const rows = await this.db
       .insert(documentNumberSequences)

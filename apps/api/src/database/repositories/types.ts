@@ -338,6 +338,87 @@ export interface TenantRepository {
 }
 
 /**
+ * Master data: the records documents point at.
+ *
+ * Company scoped, all of them. Section 2.2 describes companies that may share a product
+ * catalogue and settles it with a `[FUT]`: shared master data between companies inside one
+ * tenant is recorded and not built until asked.
+ *
+ * ARCHIVED, NEVER DELETED. Section 4.5, and the grants enforce it: the application role holds no
+ * `DELETE` on any of these tables. A customer with orders against it must not be removable, and
+ * the status column is what replaces removal.
+ */
+export interface CustomerRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** The code humans use. Unique within the company that owns the record, never globally. */
+  code: string;
+  name: string;
+  status: string;
+  version: number;
+}
+
+export interface WarehouseRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  code: string;
+  name: string;
+  status: string;
+  /** The default source for sales and destination for purchases. At most one per company. */
+  isDefault: boolean;
+  /** Section 8.5: negative stock is a policy per warehouse, defaulting to deny. */
+  allowNegativeStock: boolean;
+  version: number;
+}
+
+export interface NewCustomer {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface NewWarehouse {
+  id: string;
+  code: string;
+  name: string;
+  isDefault?: boolean;
+  allowNegativeStock?: boolean;
+}
+
+/**
+ * Archiving a master data record.
+ *
+ * The version the caller read, per the optimistic locking in section 10.1. A stale value is a
+ * conflict rather than a silent overwrite, which is the same shape `CompanyRepository.rename`
+ * established in slice 1.
+ */
+export interface ArchiveRequest {
+  id: string;
+  expectedVersion: number;
+}
+
+export interface CustomerRepository {
+  findById(id: string): Promise<CustomerRecord | null>;
+  findByCode(code: string): Promise<CustomerRecord | null>;
+  listForCompany(): Promise<CustomerRecord[]>;
+  create(input: NewCustomer): Promise<CustomerRecord>;
+  /** Section 4.5. There is deliberately no delete, and the grant would refuse one anyway. */
+  archive(input: ArchiveRequest): Promise<CustomerRecord>;
+}
+
+export interface WarehouseRepository {
+  findById(id: string): Promise<WarehouseRecord | null>;
+  findByCode(code: string): Promise<WarehouseRecord | null>;
+  /** The company's default, which is what a sales order uses when none is chosen. */
+  findDefault(): Promise<WarehouseRecord | null>;
+  listForCompany(): Promise<WarehouseRecord[]>;
+  create(input: NewWarehouse): Promise<WarehouseRecord>;
+  archive(input: ArchiveRequest): Promise<WarehouseRecord>;
+}
+
+/**
  * Sales documents. Company partitioned, like everything a company owns.
  *
  * DECIMALS CROSS THIS BOUNDARY AS STRINGS. Section 4.3 stores money as exact `NUMERIC` and sends
@@ -500,6 +581,8 @@ export interface DocumentNumberSequenceRepository {
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
+  readonly customers: CustomerRepository;
+  readonly warehouses: WarehouseRepository;
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
@@ -537,6 +620,8 @@ export interface PrincipalRepositories {
  */
 export interface SystemRepositories {
   readonly tenants: TenantRepository;
+  readonly customers: CustomerRepository;
+  readonly warehouses: WarehouseRepository;
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
