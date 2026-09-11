@@ -760,6 +760,55 @@ export interface StockLedgerRepository {
   record(input: NewStockMovement): Promise<RecordedMovement>;
 }
 
+
+export interface StockReservationRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  salesOrderLineId: string;
+  productId: string;
+  warehouseId: string;
+  /** Positive, in the product's stocking unit. Subtracted from on hand to give available. */
+  quantity: string;
+  reservedAt: Date;
+}
+
+/**
+ * A reservation to record.
+ *
+ * No tenant or company: both come from the scope. No status: section 12.3 has not ruled what
+ * cancelling does to reserved stock, and a lifecycle invented here would be that unwritten rule
+ * guessed at in a type.
+ */
+export interface NewStockReservation {
+  id: string;
+  salesOrderLineId: string;
+  productId: string;
+  warehouseId: string;
+  quantity: string;
+}
+
+/**
+ * Reservations against stock, per section 8.5.
+ *
+ * READS AND ONE WRITE, AND DELIBERATELY NOT THE OPERATION. There is no `reserve` here, because
+ * reserving is not an insert: section 8.5 requires an order that would oversell to fail inside
+ * the transaction, and section 10.2 requires the balance row to be locked while it happens. That
+ * belongs to the reservation operation, in the increment that owns it, alongside the availability
+ * check it has to make first. What is here is the record and the ability to read it.
+ *
+ * No release and no update. The application role holds neither grant, because whether release
+ * removes a reservation or reduces it is exactly what section 12.3 leaves open.
+ */
+export interface StockReservationRepository {
+  /** Everything currently held against one balance key, which is what reserved is summed from. */
+  listForBalanceKey(productId: string, warehouseId: string): Promise<StockReservationRecord[]>;
+  /** Everything one order line holds. What releasing it will need to find. */
+  listForOrderLine(salesOrderLineId: string): Promise<StockReservationRecord[]>;
+  /** Records one reservation. Says nothing about whether the stock was available. */
+  create(input: NewStockReservation): Promise<StockReservationRecord>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
@@ -770,6 +819,7 @@ export interface ScopedRepositories {
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly stockLedger: StockLedgerRepository;
+  readonly stockReservations: StockReservationRepository;
   readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
   readonly roles: RoleRepository;
@@ -811,6 +861,7 @@ export interface SystemRepositories {
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly stockLedger: StockLedgerRepository;
+  readonly stockReservations: StockReservationRepository;
   readonly users: UserRepository;
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;

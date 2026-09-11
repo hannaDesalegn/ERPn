@@ -194,11 +194,18 @@ describe('Schema drift', () => {
       // `stock_movements` joins under the second shape, not the fourth: section 8.1 makes the
       // ledger append only, and the migration withholds UPDATE and DELETE from the application
       // role so it is the database refusing an edit rather than a convention.
+      //
+      // `stock_reservations` claims the same shape for now, and its claim is the weaker one.
+      // Nothing updates a reservation today and the migration withholds both grants, but that is
+      // because section 12.3 has not ruled what releasing reserved stock does. If release reduces
+      // a reservation in place, the table becomes mutable and moves out of this list in the same
+      // migration that grants the UPDATE.
       const associationOrAppendOnly = [
         'role_permissions',
         'membership_roles',
         'audit_events',
         'stock_movements',
+        'stock_reservations',
       ];
       const claimingFourthShape = VERSION_EXEMPT_TABLES.filter(
         (table) => !associationOrAppendOnly.includes(table),

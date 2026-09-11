@@ -1,14 +1,16 @@
 /**
- * Drizzle definitions for the stock ledger.
+ * Drizzle definitions for the stock ledger, its balance, and reservations against it.
  *
- * These describe what `migrations/0008_stock_ledger.sql` creates. They do not create it:
+ * These describe what `migrations/0008_stock_ledger.sql` and `0009_stock_reservations.sql`
+ * create. They do not create it:
  * contract section 1.2 ratified handwritten SQL as the only thing that changes the database, and
  * `schema-drift.int.spec.ts` compares these against the live catalogue.
  *
  * Section 8.1 makes the ledger the truth and section 8.2 makes the balance a maintained
- * aggregate above it. Both are here because neither is usable without the other: a ledger
+ * aggregate above it. They share a file because neither is usable without the other: a ledger
  * nobody can read a position from, and a position with nothing underneath it, are each half a
- * model.
+ * model. Reservations sit beside them because section 8.5's availability is read from all three
+ * at once.
  */
 
 import { integer, numeric, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
@@ -88,21 +90,61 @@ export const stockBalances = pgTable('stock_balances', {
   version: integer('version').notNull().default(1),
 });
 
-export const inventorySchema = { stockMovements, stockBalances };
+/**
+ * Stock set aside for one sales order line.
+ *
+ * The source of truth for reserved, per the decision recorded in migration 0009: section 8.2's
+ * balance is a projection of the movement ledger, and a reservation is not a movement, so
+ * reserved lives here and is derived from these rows rather than held as a counter beside
+ * `onHand`.
+ *
+ * No status, because section 12.3 has not ruled what cancelling does to reserved stock. No
+ * `version`, because nothing updates a row here yet, which is section 4.2's second exempt
+ * shape. Quantity is positive rather than signed: a movement records a direction, a reservation
+ * records an amount set aside, and it is subtracted wherever availability is computed.
+ */
+export const stockReservations = pgTable('stock_reservations', {
+  id: uuid('id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  companyId: uuid('company_id').notNull(),
+  /** The line the stock is held for. Pinned to this reservation's company by composite key. */
+  salesOrderLineId: uuid('sales_order_line_id').notNull(),
+  /** Copied from the line, and pinned to it, so the two cannot disagree. */
+  productId: uuid('product_id').notNull(),
+  warehouseId: uuid('warehouse_id').notNull(),
+  /** Positive, in the product's stocking unit per section 8.4. */
+  quantity: numeric('quantity', { precision: 19, scale: 6 }).notNull(),
+  reservedAt: timestamp('reserved_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by'),
+});
 
-/** Both carry `tenant_id` with row level security enabled and forced. */
-export const INVENTORY_TENANT_SCOPED_TABLES = ['stock_movements', 'stock_balances'] as const;
+export const inventorySchema = { stockMovements, stockBalances, stockReservations };
 
-/** Both belong to exactly one company, so both carry `company_id`. */
+/** All carry `tenant_id` with row level security enabled and forced. */
+export const INVENTORY_TENANT_SCOPED_TABLES = [
+  'stock_movements',
+  'stock_balances',
+  'stock_reservations',
+] as const;
+
+/** Each belongs to exactly one company, so each carries `company_id`. */
 export const INVENTORY_COMPANY_PARTITIONED_TABLES = [
   'stock_movements',
   'stock_balances',
+  'stock_reservations',
 ] as const;
 
 /**
  * The ledger is append only, which is section 4.2's second exempt shape.
  *
+ * `stock_reservations` joins it for now: this increment only inserts rows, and the migration
+ * withholds UPDATE and DELETE from the application role to match. If release turns out to reduce
+ * a reservation in place, the table becomes mutable and gains `version` in that migration.
+ *
  * `stock_balances` is not here. It is mutable business data, so it carries `version` under the
  * main rule, and the balance write checks it.
  */
-export const INVENTORY_VERSION_EXEMPT_TABLES = ['stock_movements'] as const;
+export const INVENTORY_VERSION_EXEMPT_TABLES = ['stock_movements', 'stock_reservations'] as const;
