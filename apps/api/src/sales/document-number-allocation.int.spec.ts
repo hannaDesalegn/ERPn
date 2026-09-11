@@ -15,6 +15,7 @@
  */
 
 import { Test } from '@nestjs/testing';
+import * as fs from 'node:fs';
 import { Client } from 'pg';
 
 import { AppConfigModule } from '../config/config.module.js';
@@ -61,6 +62,14 @@ const scopeFor = (tenantId: string, companyId: string): ActorScope =>
 const IN_A1 = scopeFor(TENANT_A, COMPANY_A1);
 const IN_A2 = scopeFor(TENANT_A, COMPANY_A2);
 const IN_B1 = scopeFor(TENANT_B, COMPANY_B1);
+
+/**
+ * An import reaching the frontend fixture layer, which backend document creation must never do.
+ *
+ * Matches the module specifier rather than the word anywhere in the file, so a comment
+ * explaining why the fixtures are absent does not count as using them.
+ */
+const FIXTURE_IMPORT = /from\s+'[^']*(?:mocks|apps\/web)/;
 
 /** A promise with its resolver, for holding a transaction open from outside it. */
 function gate(): { promise: Promise<void>; open: () => void } {
@@ -588,6 +597,78 @@ describe('Document number allocation', () => {
 
       expect(Object.keys(dataLayer)).not.toContain('DrizzleDocumentNumberSequenceRepository');
       expect(Object.keys(dataLayer)).not.toContain('documentNumberSequences');
+    });
+  });
+
+  // -------------------------------------------------------------------------------------
+  // 11. The fixture counter is not what is running.
+  // -------------------------------------------------------------------------------------
+
+  describe('the JavaScript fixture counter is gone from this path', () => {
+    it('continues the sequence in a freshly built application', async () => {
+      // The sharpest available proof that the counter lives in the database rather than in a
+      // module-level variable. A JavaScript counter is process state: rebuild the module graph
+      // and it starts again at one. This builds a second application with its own connection
+      // pool and its own unit of work, and asks it for a number.
+      const first = await allocate(IN_A1);
+      expect(first.value).toBe(1n);
+
+      const second = await Test.createTestingModule({
+        imports: [AppConfigModule, DatabaseModule, SalesModule],
+      }).compile();
+      await second.init();
+
+      try {
+        const fresh = second.get(UnitOfWork);
+        // Otherwise this would be the first application answering again, and the test would
+        // prove only that one counter counts.
+        expect(fresh).not.toBe(uow);
+
+        const allocated = await fresh.inActorScope(IN_A1, (repositories) =>
+          allocateSalesOrderNumber(repositories),
+        );
+
+        // Two, not one. A restarted counter would answer SO-0001 and reissue a spent number.
+        expect(allocated.value).toBe(2n);
+        expect(allocated.formatted).toBe('SO-0002');
+      } finally {
+        await second.close();
+      }
+
+      expect(await counterFor(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE)).toBe('3');
+    });
+
+    it('has no path from the API to the fixture layer at all', () => {
+      // The fixture generator lives in the web workspace, so backend document creation reaching
+      // it would need a dependency and an import. Neither exists, and this fails if one appears.
+      const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies });
+
+      expect(declared).not.toContain('@erp/web');
+
+      const offenders: string[] = [];
+      let scanned = 0;
+      const walk = (dir: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = `${dir}/${entry.name}`;
+          if (entry.isDirectory()) walk(full);
+          else if (entry.name.endsWith('.ts')) {
+            scanned += 1;
+            const source = fs.readFileSync(full, 'utf8');
+            if (FIXTURE_IMPORT.test(source)) offenders.push(full);
+          }
+        }
+      };
+      walk('src');
+
+      // An empty result has two explanations: nothing reaches the fixtures, or the walk read
+      // nothing. This is what tells the two apart, and the same omission has made assertions in
+      // this repository vacuous before.
+      expect(scanned).toBeGreaterThan(50);
+      expect(offenders).toEqual([]);
     });
   });
 });
