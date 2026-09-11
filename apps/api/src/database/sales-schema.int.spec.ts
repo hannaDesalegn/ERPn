@@ -31,10 +31,28 @@ const ORDER_A1 = 'c5100000-0000-4000-8000-00000000000a';
 const ORDER_A2 = 'c5200000-0000-4000-8000-00000000000b';
 const ORDER_B1 = 'c5300000-0000-4000-8000-00000000000c';
 
-/** Master data identifiers. No tables to point at yet, which is this increment's open decision. */
-const CUSTOMER = 'd5100000-0000-4000-8000-00000000000a';
-const WAREHOUSE = 'd5200000-0000-4000-8000-00000000000b';
-const PRODUCT = 'd5300000-0000-4000-8000-00000000000c';
+/**
+ * Master data, one row of each per company.
+ *
+ * Migration 0006 made these real foreign keys, so an order can no longer point at an identifier
+ * that names nothing. Seeded per company rather than once, because the keys name the tenant and
+ * the company as well as the row, which is what makes a cross-company pairing unrepresentable.
+ */
+const CUSTOMER: Record<string, string> = {
+  [COMPANY_A1]: 'd5110000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd5120000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd5130000-0000-4000-8000-00000000000c',
+};
+const WAREHOUSE: Record<string, string> = {
+  [COMPANY_A1]: 'd5210000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd5220000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd5230000-0000-4000-8000-00000000000c',
+};
+const PRODUCT: Record<string, string> = {
+  [COMPANY_A1]: 'd5310000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd5320000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd5330000-0000-4000-8000-00000000000c',
+};
 
 const TENANTS = [TENANT_A, TENANT_B];
 const SCOPES: [string, string][] = [
@@ -94,6 +112,19 @@ describe('The sales schema', () => {
         'INSERT INTO companies (id, tenant_id, name, base_currency) VALUES ($1,$2,$3,$4)',
         [companyId, tenantId, `Company ${companyId.slice(0, 4)}`, 'USD'],
       );
+      await owner.query(
+        'INSERT INTO customers (id, tenant_id, company_id, code, name) VALUES ($1,$2,$3,$4,$5)',
+        [CUSTOMER[companyId], tenantId, companyId, 'CUST-1', 'A Customer'],
+      );
+      await owner.query(
+        'INSERT INTO warehouses (id, tenant_id, company_id, code, name) VALUES ($1,$2,$3,$4,$5)',
+        [WAREHOUSE[companyId], tenantId, companyId, 'WH-1', 'Main'],
+      );
+      await owner.query(
+        `INSERT INTO products (id, tenant_id, company_id, sku, name, stocking_uom, sales_price_currency)
+         VALUES ($1,$2,$3,$4,$5,'unit','USD')`,
+        [PRODUCT[companyId], tenantId, companyId, 'SKU-1', 'Widget'],
+      );
     }
 
     // One confirmed order per company, with the same document number in two of them, which is
@@ -110,7 +141,7 @@ describe('The sales schema', () => {
            (id, tenant_id, company_id, doc_number, status, customer_id, warehouse_id,
             order_date, currency)
          VALUES ($1,$2,$3,$4,'confirmed',$5,$6,current_date,'USD')`,
-        [id, tenantId, companyId, docNumber, CUSTOMER, WAREHOUSE],
+        [id, tenantId, companyId, docNumber, CUSTOMER[companyId], WAREHOUSE[companyId]],
       );
     }
   }
@@ -121,6 +152,9 @@ describe('The sales schema', () => {
       await owner.query('DELETE FROM sales_order_lines WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM sales_orders WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM document_number_sequences WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM products WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM warehouses WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM customers WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM companies WHERE tenant_id = $1 AND id = $2', [
         tenantId,
         companyId,
@@ -207,7 +241,7 @@ describe('The sales schema', () => {
         `INSERT INTO sales_orders
            (id, tenant_id, company_id, status, customer_id, warehouse_id, order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'draft', $3, $4, current_date, 'USD')`,
-        [TENANT_B, COMPANY_B1, CUSTOMER, WAREHOUSE],
+        [TENANT_B, COMPANY_B1, CUSTOMER[COMPANY_B1], WAREHOUSE[COMPANY_B1]],
       );
 
       expect(error).toMatch(/row-level security/);
@@ -219,7 +253,7 @@ describe('The sales schema', () => {
         `INSERT INTO sales_orders
            (id, tenant_id, company_id, status, customer_id, warehouse_id, order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'draft', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A2, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A2, CUSTOMER[COMPANY_A2], WAREHOUSE[COMPANY_A2]],
       );
 
       expect(error).toMatch(/row-level security/);
@@ -231,7 +265,7 @@ describe('The sales schema', () => {
         `INSERT INTO sales_orders
            (id, tenant_id, company_id, status, customer_id, warehouse_id, order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'draft', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A1, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A1, CUSTOMER[COMPANY_A1], WAREHOUSE[COMPANY_A1]],
       );
 
       // Without this the refusals above would pass even if the table rejected everything.
@@ -265,7 +299,7 @@ describe('The sales schema', () => {
       const error = await refusedAs(
         { tenantId: TENANT_A, companyId: COMPANY_A1 },
         insertLine,
-        [TENANT_A, COMPANY_A1, ORDER_A1, 1, PRODUCT, 'USD'],
+        [TENANT_A, COMPANY_A1, ORDER_A1, 1, PRODUCT[COMPANY_A1], 'USD'],
       );
 
       expect(error).toBeNull();
@@ -277,7 +311,7 @@ describe('The sales schema', () => {
       const error = await refusedAs(
         { tenantId: TENANT_A, companyId: COMPANY_A2 },
         insertLine,
-        [TENANT_A, COMPANY_A2, ORDER_A1, 1, PRODUCT, 'USD'],
+        [TENANT_A, COMPANY_A2, ORDER_A1, 1, PRODUCT[COMPANY_A2], 'USD'],
       );
 
       expect(error).toMatch(/sales_order_lines_order_fkey|foreign key/i);
@@ -287,7 +321,7 @@ describe('The sales schema', () => {
       const error = await refusedAs(
         { tenantId: TENANT_B, companyId: COMPANY_B1 },
         insertLine,
-        [TENANT_B, COMPANY_B1, ORDER_A1, 1, PRODUCT, 'USD'],
+        [TENANT_B, COMPANY_B1, ORDER_A1, 1, PRODUCT[COMPANY_B1], 'USD'],
       );
 
       expect(error).toMatch(/sales_order_lines_order_fkey|foreign key/i);
@@ -300,7 +334,7 @@ describe('The sales schema', () => {
       const error = await refusedAs(
         { tenantId: TENANT_A, companyId: COMPANY_A1 },
         insertLine,
-        [TENANT_A, COMPANY_A1, ORDER_A1, 2, PRODUCT, 'EUR'],
+        [TENANT_A, COMPANY_A1, ORDER_A1, 2, PRODUCT[COMPANY_A1], 'EUR'],
       );
 
       expect(error).toMatch(/sales_order_lines_currency_fkey|foreign key/i);
@@ -309,11 +343,11 @@ describe('The sales schema', () => {
     it('refuses two lines with the same number on one order', async () => {
       await app.query('BEGIN');
       await context(app, { tenantId: TENANT_A, companyId: COMPANY_A1 });
-      await app.query(insertLine, [TENANT_A, COMPANY_A1, ORDER_A1, 7, PRODUCT, 'USD']);
+      await app.query(insertLine, [TENANT_A, COMPANY_A1, ORDER_A1, 7, PRODUCT[COMPANY_A1], 'USD']);
 
       let message: string | null = null;
       try {
-        await app.query(insertLine, [TENANT_A, COMPANY_A1, ORDER_A1, 7, PRODUCT, 'USD']);
+        await app.query(insertLine, [TENANT_A, COMPANY_A1, ORDER_A1, 7, PRODUCT[COMPANY_A1], 'USD']);
       } catch (error) {
         message = error instanceof Error ? error.message : String(error);
       }
@@ -337,7 +371,7 @@ describe('The sales schema', () => {
            (id, tenant_id, company_id, doc_number, status, customer_id, warehouse_id,
             order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'SO-9999', 'draft', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A1, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A1, CUSTOMER[COMPANY_A1], WAREHOUSE[COMPANY_A1]],
       );
 
       expect(error).toMatch(/draft_has_no_number/);
@@ -349,7 +383,7 @@ describe('The sales schema', () => {
         `INSERT INTO sales_orders
            (id, tenant_id, company_id, status, customer_id, warehouse_id, order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'confirmed', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A1, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A1, CUSTOMER[COMPANY_A1], WAREHOUSE[COMPANY_A1]],
       );
 
       expect(error).toMatch(/draft_has_no_number/);
@@ -362,7 +396,7 @@ describe('The sales schema', () => {
            (id, tenant_id, company_id, doc_number, status, customer_id, warehouse_id,
             order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'SO-8888', 'posted', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A1, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A1, CUSTOMER[COMPANY_A1], WAREHOUSE[COMPANY_A1]],
       );
 
       // Section 12.1: each document type has its own status union, and `posted` is not in this
@@ -389,7 +423,7 @@ describe('The sales schema', () => {
            (id, tenant_id, company_id, doc_number, status, customer_id, warehouse_id,
             order_date, currency)
          VALUES (gen_random_uuid(), $1, $2, 'SO-0001', 'confirmed', $3, $4, current_date, 'USD')`,
-        [TENANT_A, COMPANY_A1, CUSTOMER, WAREHOUSE],
+        [TENANT_A, COMPANY_A1, CUSTOMER[COMPANY_A1], WAREHOUSE[COMPANY_A1]],
       );
 
       expect(error).toMatch(/doc_number|duplicate key/i);

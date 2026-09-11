@@ -21,6 +21,12 @@ import {
   identitySchema,
 } from './identity.js';
 import {
+  MASTER_DATA_COMPANY_PARTITIONED_TABLES,
+  MASTER_DATA_TENANT_SCOPED_TABLES,
+  MASTER_DATA_VERSION_EXEMPT_TABLES,
+  masterDataSchema,
+} from './master-data.js';
+import {
   SALES_COMPANY_PARTITIONED_TABLES,
   SALES_TENANT_SCOPED_TABLES,
   SALES_VERSION_EXEMPT_TABLES,
@@ -30,18 +36,21 @@ import {
 /** Every Drizzle table in the database, keyed by its export name. */
 export const databaseSchema = {
   ...identitySchema,
+  ...masterDataSchema,
   ...salesSchema,
 };
 
 /** Carry `tenant_id`, and row level security enabled and forced. */
 export const TENANT_SCOPED_TABLES = [
   ...IDENTITY_TENANT_SCOPED_TABLES,
+  ...MASTER_DATA_TENANT_SCOPED_TABLES,
   ...SALES_TENANT_SCOPED_TABLES,
 ] as const;
 
 /** Additionally partitioned by company, so they carry `company_id` as well. */
 export const COMPANY_PARTITIONED_TABLES = [
   ...IDENTITY_COMPANY_PARTITIONED_TABLES,
+  ...MASTER_DATA_COMPANY_PARTITIONED_TABLES,
   ...SALES_COMPANY_PARTITIONED_TABLES,
 ] as const;
 
@@ -51,6 +60,7 @@ export const GLOBAL_TABLES = IDENTITY_GLOBAL_TABLES;
 /** Exempt from `version`, each by one of the four shapes in section 4.2. */
 export const VERSION_EXEMPT_TABLES = [
   ...IDENTITY_VERSION_EXEMPT_TABLES,
+  ...MASTER_DATA_VERSION_EXEMPT_TABLES,
   ...SALES_VERSION_EXEMPT_TABLES,
 ] as const;
 

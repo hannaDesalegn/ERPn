@@ -31,10 +31,28 @@ const COMPANY_B1 = 'b6300000-0000-4000-8000-00000000000c';
 const USER_A = 'c6100000-0000-4000-8000-00000000000a';
 const USER_B = 'c6200000-0000-4000-8000-00000000000b';
 
-/** Master data identifiers with no tables behind them yet. */
-const CUSTOMER = 'd6100000-0000-4000-8000-00000000000a';
-const WAREHOUSE = 'd6200000-0000-4000-8000-00000000000b';
-const PRODUCT = 'd6300000-0000-4000-8000-00000000000c';
+/**
+ * Master data, one row of each per company.
+ *
+ * Migration 0006 made these real foreign keys. Seeded per company rather than once, because the
+ * keys name the tenant and company as well as the row: an order in one company cannot reference
+ * a customer in another, and the seed has to be able to express that.
+ */
+const CUSTOMER: Record<string, string> = {
+  [COMPANY_A1]: 'd6110000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd6120000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd6130000-0000-4000-8000-00000000000c',
+};
+const WAREHOUSE: Record<string, string> = {
+  [COMPANY_A1]: 'd6210000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd6220000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd6230000-0000-4000-8000-00000000000c',
+};
+const PRODUCT: Record<string, string> = {
+  [COMPANY_A1]: 'd6310000-0000-4000-8000-00000000000a',
+  [COMPANY_A2]: 'd6320000-0000-4000-8000-00000000000b',
+  [COMPANY_B1]: 'd6330000-0000-4000-8000-00000000000c',
+};
 
 const ORDER_A1 = 'e6100000-0000-4000-8000-00000000000a';
 const ORDER_A2 = 'e6200000-0000-4000-8000-00000000000b';
@@ -108,18 +126,36 @@ describe('Sales repositories', () => {
       r.companies.create({ id: COMPANY_B1, name: 'B One', baseCurrency: 'EUR' }),
     );
 
+    // Master data first, because the orders below now reference it through real keys.
+    for (const [tenantId, companyId] of SCOPES) {
+      await ownerContext(tenantId, companyId);
+      await owner.query(
+        'INSERT INTO customers (id, tenant_id, company_id, code, name) VALUES ($1,$2,$3,$4,$5)',
+        [CUSTOMER[companyId], tenantId, companyId, 'CUST-1', 'A Customer'],
+      );
+      await owner.query(
+        'INSERT INTO warehouses (id, tenant_id, company_id, code, name) VALUES ($1,$2,$3,$4,$5)',
+        [WAREHOUSE[companyId], tenantId, companyId, 'WH-1', 'Main'],
+      );
+      await owner.query(
+        `INSERT INTO products (id, tenant_id, company_id, sku, name, stocking_uom, sales_price_currency)
+         VALUES ($1,$2,$3,$4,$5,'unit',$6)`,
+        [PRODUCT[companyId], tenantId, companyId, 'SKU-1', 'Widget', companyId === COMPANY_B1 ? 'EUR' : 'USD'],
+      );
+    }
+
     // One order per company, created through the repository under each company's own scope.
-    const orders: [string, ReturnType<typeof inA1>, string][] = [
-      [ORDER_A1, inA1(), 'USD'],
-      [ORDER_A2, inA2(), 'USD'],
-      [ORDER_B1, inB1(), 'EUR'],
+    const orders: [string, ReturnType<typeof inA1>, string, string][] = [
+      [ORDER_A1, inA1(), 'USD', COMPANY_A1],
+      [ORDER_A2, inA2(), 'USD', COMPANY_A2],
+      [ORDER_B1, inB1(), 'EUR', COMPANY_B1],
     ];
-    for (const [id, scope, currency] of orders) {
+    for (const [id, scope, currency, companyId] of orders) {
       await uow.inActorScope(scope, (r) =>
         r.salesOrders.create({
           id,
-          customerId: CUSTOMER,
-          warehouseId: WAREHOUSE,
+          customerId: CUSTOMER[companyId]!,
+          warehouseId: WAREHOUSE[companyId]!,
           orderDate: '2026-09-11',
           currency,
         }),
@@ -133,6 +169,9 @@ describe('Sales repositories', () => {
       await owner.query('DELETE FROM sales_order_lines WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM sales_orders WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM document_number_sequences WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM products WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM warehouses WHERE tenant_id = $1', [tenantId]);
+      await owner.query('DELETE FROM customers WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM companies WHERE tenant_id = $1 AND id = $2', [
         tenantId,
         companyId,
@@ -197,8 +236,8 @@ describe('Sales repositories', () => {
       const created = await uow.inActorScope(inA2(), (r) =>
         r.salesOrders.create({
           id,
-          customerId: CUSTOMER,
-          warehouseId: WAREHOUSE,
+          customerId: CUSTOMER[COMPANY_A2]!,
+          warehouseId: WAREHOUSE[COMPANY_A2]!,
           orderDate: '2026-09-11',
           currency: 'USD',
         }),
@@ -218,8 +257,8 @@ describe('Sales repositories', () => {
       const created = await uow.inActorScope(inA1(), (r) =>
         r.salesOrders.create({
           id,
-          customerId: CUSTOMER,
-          warehouseId: WAREHOUSE,
+          customerId: CUSTOMER[COMPANY_A1]!,
+          warehouseId: WAREHOUSE[COMPANY_A1]!,
           orderDate: '2026-09-11',
           currency: 'USD',
         }),
@@ -251,8 +290,8 @@ describe('Sales repositories', () => {
       await uow.inActorScope(inA1(), (r) =>
         r.salesOrders.create({
           id,
-          customerId: CUSTOMER,
-          warehouseId: WAREHOUSE,
+          customerId: CUSTOMER[COMPANY_A1]!,
+          warehouseId: WAREHOUSE[COMPANY_A1]!,
           orderDate: '2026-09-11',
           currency: 'USD',
         }),
@@ -278,7 +317,7 @@ describe('Sales repositories', () => {
       id,
       salesOrderId,
       lineNumber,
-      productId: PRODUCT,
+      productId: PRODUCT[COMPANY_A1]!,
       productSku: 'SKU-1',
       productName: 'Widget',
       quantity: '2.500000',
