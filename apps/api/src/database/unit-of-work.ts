@@ -27,6 +27,7 @@ import { DATABASE_POOL } from './tokens.js';
 import { DrizzleAuthThrottleRepository } from './repositories/auth-throttle.repository.js';
 import {
   DrizzleCustomerRepository,
+  DrizzleProductRepository,
   DrizzleWarehouseRepository,
 } from './repositories/master-data.repository.js';
 import {
@@ -158,6 +159,7 @@ function buildRepositories(
     audit: new DrizzleAuditRepository(db, scope),
     authThrottle: new DrizzleAuthThrottleRepository(db),
     customers: new DrizzleCustomerRepository(db, scope),
+    products: new DrizzleProductRepository(db, scope),
     warehouses: new DrizzleWarehouseRepository(db, scope),
     salesOrders: new DrizzleSalesOrderRepository(db, scope),
     salesOrderLines: new DrizzleSalesOrderLineRepository(db, scope),

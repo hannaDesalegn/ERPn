@@ -419,6 +419,59 @@ export interface WarehouseRepository {
 }
 
 /**
+ * The catalogue.
+ *
+ * Note the absence, which section 8.1 calls the single easiest thing for a future contributor to
+ * undo under deadline pressure: there is no quantity. Stock is an append only ledger of
+ * movements, not an attribute of a product.
+ *
+ * `salesPrice` is a string for the reason section 4.3 gives about doubles, and it is the master
+ * data section 3.3 requires the server to recompute from rather than trusting a price a form
+ * sent back.
+ */
+export interface ProductRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** The code humans use. Unique within the company, never globally. */
+  sku: string;
+  name: string;
+  /** Only a stockable product participates in inventory. */
+  type: string;
+  /** Section 8.4: the canonical unit the stock ledger is always recorded in. */
+  stockingUom: string;
+  salesPrice: string;
+  salesPriceCurrency: string;
+  status: string;
+  version: number;
+}
+
+/**
+ * A new product.
+ *
+ * `stockingUom` has no default, deliberately. Section 8.4 says a missing one makes every
+ * quantity in history ambiguous, and a default here would be this layer choosing a unit for a
+ * business it knows nothing about.
+ */
+export interface NewProduct {
+  id: string;
+  sku: string;
+  name: string;
+  stockingUom: string;
+  salesPriceCurrency: string;
+  type?: string;
+  salesPrice?: string;
+}
+
+export interface ProductRepository {
+  findById(id: string): Promise<ProductRecord | null>;
+  findBySku(sku: string): Promise<ProductRecord | null>;
+  listForCompany(): Promise<ProductRecord[]>;
+  create(input: NewProduct): Promise<ProductRecord>;
+  archive(input: ArchiveRequest): Promise<ProductRecord>;
+}
+
+/**
  * Sales documents. Company partitioned, like everything a company owns.
  *
  * DECIMALS CROSS THIS BOUNDARY AS STRINGS. Section 4.3 stores money as exact `NUMERIC` and sends
@@ -582,6 +635,7 @@ export interface DocumentNumberSequenceRepository {
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
   readonly customers: CustomerRepository;
+  readonly products: ProductRepository;
   readonly warehouses: WarehouseRepository;
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
@@ -621,6 +675,7 @@ export interface PrincipalRepositories {
 export interface SystemRepositories {
   readonly tenants: TenantRepository;
   readonly customers: CustomerRepository;
+  readonly products: ProductRepository;
   readonly warehouses: WarehouseRepository;
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;

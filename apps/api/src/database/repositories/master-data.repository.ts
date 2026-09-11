@@ -25,7 +25,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
-import { customers, warehouses } from '../schema/master-data.js';
+import { customers, products, warehouses } from '../schema/master-data.js';
 import type { Scope } from '../scope.js';
 import { actingUserId } from '../scope.js';
 import { requireCompanyScope } from './company-scope.js';
@@ -36,7 +36,10 @@ import {
   type CustomerRecord,
   type CustomerRepository,
   type NewCustomer,
+  type NewProduct,
   type NewWarehouse,
+  type ProductRecord,
+  type ProductRepository,
   type WarehouseRecord,
   type WarehouseRepository,
 } from './types.js';
@@ -44,6 +47,7 @@ import {
 type Db = NodePgDatabase<Record<string, never>>;
 
 const CUSTOMERS = 'Customers';
+const PRODUCTS = 'Products';
 const WAREHOUSES = 'Warehouses';
 
 // ---------------------------------------------------------------------------------------
@@ -164,6 +168,136 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     const current = await this.findById(input.id);
     if (!current) throw new RecordNotFoundError('Customer', input.id);
     throw new ConcurrencyConflictError('Customer', input.id);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Products.
+// ---------------------------------------------------------------------------------------
+
+export class DrizzleProductRepository implements ProductRepository {
+  constructor(
+    private readonly db: Db,
+    private readonly scope: Scope,
+  ) {}
+
+  async findById(id: string): Promise<ProductRecord | null> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, PRODUCTS);
+
+    const rows = await this.db
+      .select()
+      .from(products)
+      .where(
+        and(
+          eq(products.id, id),
+          eq(products.tenantId, tenantId),
+          eq(products.companyId, companyId),
+        ),
+      )
+      .limit(1);
+
+    return rows[0] ? toProduct(rows[0]) : null;
+  }
+
+  /**
+   * Lookup by SKU.
+   *
+   * Scoped like every other read. A SKU is unique within a company and not globally, so two
+   * customers of this product routinely have the same one, and an unscoped query would return
+   * whichever row the planner reached first.
+   */
+  async findBySku(sku: string): Promise<ProductRecord | null> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, PRODUCTS);
+
+    const rows = await this.db
+      .select()
+      .from(products)
+      .where(
+        and(
+          eq(products.sku, sku),
+          eq(products.tenantId, tenantId),
+          eq(products.companyId, companyId),
+        ),
+      )
+      .limit(1);
+
+    return rows[0] ? toProduct(rows[0]) : null;
+  }
+
+  async listForCompany(): Promise<ProductRecord[]> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, PRODUCTS);
+
+    const rows = await this.db
+      .select()
+      .from(products)
+      .where(and(eq(products.tenantId, tenantId), eq(products.companyId, companyId)))
+      .orderBy(asc(products.sku));
+
+    return rows.map(toProduct);
+  }
+
+  /**
+   * Creates a product.
+   *
+   * `stockingUom` is required and has no default here, per section 8.4: the stock ledger is
+   * always recorded in it, and a default would be this layer picking a unit for a business it
+   * knows nothing about. The price defaults to zero, which is a real state for a service item
+   * quoted per job, and its currency is required for the reason section 4.3 gives about storing
+   * a currency alongside every amount.
+   */
+  async create(input: NewProduct): Promise<ProductRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, PRODUCTS);
+
+    const rows = await this.db
+      .insert(products)
+      .values({
+        id: input.id,
+        // From the scope. `NewProduct` has no field with which to claim another company.
+        tenantId,
+        companyId,
+        sku: input.sku,
+        name: input.name,
+        type: input.type ?? 'stockable',
+        stockingUom: input.stockingUom,
+        salesPrice: input.salesPrice ?? '0',
+        salesPriceCurrency: input.salesPriceCurrency,
+        createdBy: actingUserId(this.scope),
+        updatedBy: actingUserId(this.scope),
+      })
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new Error('Insert returned no row');
+    return toProduct(row);
+  }
+
+  async archive(input: ArchiveRequest): Promise<ProductRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, PRODUCTS);
+
+    const rows = await this.db
+      .update(products)
+      .set({
+        status: 'archived',
+        version: sql`${products.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(products.id, input.id),
+          eq(products.tenantId, tenantId),
+          eq(products.companyId, companyId),
+          eq(products.version, input.expectedVersion),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (row) return toProduct(row);
+
+    const current = await this.findById(input.id);
+    if (!current) throw new RecordNotFoundError('Product', input.id);
+    throw new ConcurrencyConflictError('Product', input.id);
   }
 }
 
@@ -310,6 +444,7 @@ export class DrizzleWarehouseRepository implements WarehouseRepository {
 // ---------------------------------------------------------------------------------------
 
 type CustomerRow = typeof customers.$inferSelect;
+type ProductRow = typeof products.$inferSelect;
 type WarehouseRow = typeof warehouses.$inferSelect;
 
 function toCustomer(row: CustomerRow): CustomerRecord {
@@ -319,6 +454,24 @@ function toCustomer(row: CustomerRow): CustomerRecord {
     companyId: row.companyId,
     code: row.code,
     name: row.name,
+    status: row.status,
+    version: row.version,
+  };
+}
+
+function toProduct(row: ProductRow): ProductRecord {
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    companyId: row.companyId,
+    sku: row.sku,
+    name: row.name,
+    type: row.type,
+    stockingUom: row.stockingUom,
+    // Exactly what the database holds. Section 4.3: a JavaScript number is an IEEE-754 double
+    // and would round the sixth decimal place away without saying so.
+    salesPrice: row.salesPrice,
+    salesPriceCurrency: row.salesPriceCurrency,
     status: row.status,
     version: row.version,
   };
