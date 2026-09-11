@@ -442,6 +442,40 @@ administration UI, and never a code change:
   throttling, is deployment level configuration; see section 5.3.
 - chart of accounts, and the accounts that document postings map to
 
+*Amended 2026-09-11, resolving where the authoritative tax rate lives. Section 3.3 required the
+server to recompute tax from its own master data and no section said which master data.*
+
+`[DEC]` **The authoritative tax rate is a standard rate held per company, alongside the other
+fiscal settings above.** Today there is exactly one, which is what section 9.7 means when it puts
+"a tax engine beyond a single rate" in the future.
+
+Three candidates were considered and two rejected.
+
+| Candidate | Why not |
+|---|---|
+| A constant in code | Section 2.9 makes fiscal settings configuration and never a code change. Two companies of this product trade in different countries, and a shared constant makes one of them wrong. |
+| A rate per product | Reduced rates for food, books or medicine are real, and they are a rate *table* keyed by category and jurisdiction, not a column. Section 9.7 puts that engine in the future, and a per-product column now is that engine half built. |
+| A rate per customer | What varies per customer is exemption and reverse charge, not the rate. Section 9.7 names both as future, and modelling them as a rate would encode the wrong shape for when they arrive. |
+
+`[REQ]` The rate and the account a tax posting credits live at the same level, because posting
+needs both and an invoice whose rate and account disagree does not balance. Section 2.9 already
+holds "the accounts that document postings map to" per company; this puts the rate beside them.
+
+`[REQ]` A document line stores the rate that applied when it was raised, per section 3.4's
+allowance for a legal snapshot of a past agreement. Changing the company's rate never alters a
+document already posted. On a draft the stored rate is a working figure and is recomputed when
+the document is confirmed, per section 12.2's requirement to validate against current master
+data at that moment.
+
+`[REQ]` Resolving a rate is one function, and every document line goes through it. That is what
+makes the future engine an addition rather than a rewrite: when jurisdictions, exemptions and
+reverse charge arrive under section 9.7, the resolution changes inside that function and the
+stored snapshot on every past line is untouched.
+
+`[FUT]` Tax registration numbers on the company and on each party already exist in the domain
+model and are not yet persisted. They are required on a legally valid invoice and arrive with
+invoice posting rather than here.
+
 `[DEC]` Configuration is validated against the same rules as any other write. A company cannot
 configure itself into an invalid state, for example a numbering series that would produce
 duplicates, or a fiscal year that overlaps another.
@@ -1242,7 +1276,9 @@ realised foreign exchange gain or loss entry.
 `[FUT]` Period end revaluation of open foreign currency balances.
 
 `[FUT]` A tax engine beyond a single rate: jurisdictions, exemptions, and reverse charge for
-cross border trade within the European Union, which the current fixture set implies.
+cross border trade within the European Union, which the current fixture set implies. The single
+rate this is "beyond" is the company standard rate ruled in section 2.9 on 2026-09-11, and the
+resolution function named there is where this engine replaces it.
 
 `[FUT]` Analytical dimensions or cost centres.
 
@@ -2046,4 +2082,5 @@ they are open.
 | 2026-09-10 | 6.2, 16.1 | Route access declared as one of three kinds, with the authenticated kind confined by rule to `/me` and the company switch. The guard ruled global, and enforcement ruled to re-derive rather than cache. Two 16.1 entries closed as the authorization layer landed, and the duplicated frontend permission vocabulary registered in their place. | "Every route declares the permission it requires" had no way to describe sign in, the health probes, or the two routes that tell a caller what they may do, and an undescribable route is one someone will leave undeclared |
 | 2026-09-10 | 6.7, 16.1 | The mock identity and route authorization temporary clauses discharged as the frontend began consuming `/me`. A clause added stating that a frontend route guard is presentation and never enforcement. | The frontend now has guards that look like access control, and the one thing worth writing down about them is that they are not |
 | 2026-09-10 | 14.4, 16.1 | Cross site request forgery implemented as the section already specified, with the one open decision recorded: the header carries a token bound to the session, derived from the stored hash rather than stored beside it. The last 16.1 entry discharged. | A plain double submit is satisfied by anyone who can write a cookie for the site, and the contract named the header and the origin check without saying what the header should carry |
+| 2026-09-11 | 2.9, 9.7 | The authoritative tax rate ruled to be a standard rate per company, beside the other fiscal settings, with the rate snapshotted onto each document line and resolved through one function. Per-product and per-customer rates rejected with reasons. | Section 3.3 required the server to recompute tax from its own master data and no section said which master data, which blocked sales order totals and would have blocked invoice posting |
 | 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |

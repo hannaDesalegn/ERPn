@@ -19,6 +19,14 @@ export interface CompanyRecord {
   name: string;
   legalName: string | null;
   baseCurrency: string;
+  /**
+   * The company standard tax rate, per section 2.9 as amended 2026-09-11.
+   *
+   * The authority a document line's rate is resolved from, not the rate itself: section 3.4
+   * has the line snapshot what applied when it was raised, so changing this never alters a
+   * posted document. A string for the reason section 4.3 gives about doubles.
+   */
+  standardTaxRatePercent: string;
   status: string;
   version: number;
 }

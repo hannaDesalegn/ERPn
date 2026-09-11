@@ -23,6 +23,7 @@ import {
   inet,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -100,6 +101,19 @@ export const companies = pgTable('companies', {
   name: text('name').notNull(),
   legalName: text('legal_name'),
   baseCurrency: char('base_currency', { length: 3 }).notNull(),
+  /**
+   * The company standard tax rate, per section 2.9 as amended 2026-09-11.
+   *
+   * A string for the reason section 4.3 gives about doubles, and at the same precision as
+   * `sales_order_lines.tax_rate_percent`, which is what a document line snapshots it into.
+   */
+  standardTaxRatePercent: numeric('standard_tax_rate_percent', {
+    precision: 9,
+    scale: 6,
+    mode: 'string',
+  })
+    .notNull()
+    .default('0'),
   status: text('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by'),

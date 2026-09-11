@@ -783,6 +783,10 @@ function toCompany(row: Row<typeof companies.$inferSelect>): CompanyRecord {
     name: row.name,
     legalName: row.legalName,
     baseCurrency: row.baseCurrency,
+    // Exactly what the database holds. Section 4.3: a number here would round the sixth
+    // decimal place away without saying so, and a rate is what every document line is
+    // computed from.
+    standardTaxRatePercent: row.standardTaxRatePercent,
     status: row.status,
     version: row.version,
   };
