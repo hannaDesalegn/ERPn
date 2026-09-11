@@ -16,19 +16,21 @@
  * boundary, and deliberately refuses to be used as one, because a counter invented on demand
  * would issue number one to a company that has been trading for a year.
  *
- * ONE TRANSACTION. The company row and its sequence are written together or not at all. A
- * company that exists without its sequence is the exact state this service is here to prevent,
- * and it is worse than no company, because nothing about it looks wrong until someone confirms
- * an order.
+ * ONE TRANSACTION, AND WHY ALL OF IT AT ONCE. Section 2.7 requires the default role
+ * templates to be seeded when a company is created. Section 2.9 holds the numbering series as
+ * company configuration. Neither is optional, and a company missing either is not a company
+ * anyone can use: without roles nobody can be given authority in it, and without the sequence
+ * the first confirmation fails. So all three writes share one transaction, and a failure in any
+ * of them leaves nothing behind to be puzzled over later.
  *
- * WHAT IS NOT HERE YET. Default roles are still seeded by a separate call into
- * `RoleProvisioningService`, in a transaction of its own. That split predates this file and
- * unifying it would mean rewriting role provisioning, which belongs in its own increment rather
- * than smuggled into this one. It is recorded rather than hidden.
+ * ORDER MATTERS ONLY IN ONE RESPECT. The company row is written first because both of the others
+ * name it by foreign key. Between roles and the sequence there is no dependency either way.
  */
 
 import { Injectable } from '@nestjs/common';
 
+import { seedDefaultRolesIn } from '../authorization/role-provisioning.service.js';
+import type { SeededRole } from '../authorization/role-provisioning.service.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
 import type { CompanyRecord, DocumentNumberSequenceRecord } from '../database/index.js';
 import { provisionSalesOrderSequence } from '../sales/document-numbers.js';
@@ -49,6 +51,8 @@ export interface NewCompany {
 
 export interface ProvisionedCompany {
   company: CompanyRecord;
+  /** The company's own copies of the default templates, per section 2.7. */
+  roles: SeededRole[];
   salesOrderSequence: DocumentNumberSequenceRecord;
 }
 
@@ -75,11 +79,12 @@ export class CompanyProvisioningService {
           baseCurrency: input.baseCurrency,
         });
 
-        // After the company, because the sequence's foreign key names it. Inside the same
-        // transaction, so a failure here takes the company with it.
+        // Both after the company, because each names it by foreign key, and both inside this
+        // transaction, so a failure in either takes the company with it.
+        const roles = await seedDefaultRolesIn(repositories, company.id);
         const salesOrderSequence = await provisionSalesOrderSequence(repositories);
 
-        return { company, salesOrderSequence };
+        return { company, roles, salesOrderSequence };
       },
     );
   }

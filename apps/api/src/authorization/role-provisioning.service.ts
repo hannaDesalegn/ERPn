@@ -16,6 +16,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
 import { actorScope, systemScope, UnitOfWork } from '../database/index.js';
+import type { SystemRepositories } from '../database/index.js';
 import type { CompanyContext } from '../identity/identity.service.js';
 import { AuthorizationService } from './authorization.service.js';
 import { ROLE_TEMPLATE_LIST, type Permission, type RoleKey } from './permissions.js';
@@ -23,6 +24,53 @@ import { ROLE_TEMPLATE_LIST, type Permission, type RoleKey } from './permissions
 export interface SeededRole {
   id: string;
   key: RoleKey;
+}
+
+/**
+ * Copies the default templates into a company, inside the caller's transaction.
+ *
+ * Takes repositories rather than a unit of work, so that creating a company and giving it its
+ * roles can be one transaction rather than two. A company holding its numbering sequence but not
+ * its roles is the state that split allowed, and it is worse than no company at all: the missing
+ * roles look like a deliberate configuration choice rather than a failure.
+ *
+ * The company identifier is an argument only because the audit record names it as its subject.
+ * It must be the company the caller's scope already names; every write below is confined to that
+ * scope by the scope itself, not by this value.
+ */
+export async function seedDefaultRolesIn(
+  repositories: Pick<SystemRepositories, 'roles' | 'audit'>,
+  companyId: string,
+): Promise<SeededRole[]> {
+  const seeded: SeededRole[] = [];
+
+  for (const template of ROLE_TEMPLATE_LIST) {
+    const id = randomUUID();
+    await repositories.roles.create({
+      id,
+      key: template.key,
+      name: template.name,
+      description: template.description,
+    });
+    // Validated against the catalogue inside the repository. A template that named a capability
+    // the release no longer defines would fail the seed rather than create a company whose
+    // administrator role is quietly missing something.
+    await repositories.roles.grantPermissions({
+      roleId: id,
+      permissions: template.permissions,
+    });
+    seeded.push({ id, key: template.key });
+  }
+
+  await repositories.audit.append({
+    action: 'roles_seeded',
+    entityType: 'company',
+    entityId: companyId,
+    summary: `Seeded ${seeded.length} default roles`,
+    changes: { roles: seeded.map((role) => role.key) },
+  });
+
+  return seeded;
 }
 
 export type RoleChangeResult =
@@ -59,39 +107,8 @@ export class RoleProvisioningService {
     tenantId: string;
     companyId: string;
   }): Promise<SeededRole[]> {
-    return this.uow.inSystemScope(
-      systemScope('tenant-provisioning', target),
-      async (repos) => {
-        const seeded: SeededRole[] = [];
-
-        for (const template of ROLE_TEMPLATE_LIST) {
-          const id = randomUUID();
-          await repos.roles.create({
-            id,
-            key: template.key,
-            name: template.name,
-            description: template.description,
-          });
-          // Validated against the catalogue inside the repository. A template that named a
-          // capability the release no longer defines would fail the seed rather than create a
-          // company whose administrator role is quietly missing something.
-          await repos.roles.grantPermissions({
-            roleId: id,
-            permissions: template.permissions,
-          });
-          seeded.push({ id, key: template.key });
-        }
-
-        await repos.audit.append({
-          action: 'roles_seeded',
-          entityType: 'company',
-          entityId: target.companyId,
-          summary: `Seeded ${seeded.length} default roles`,
-          changes: { roles: seeded.map((role) => role.key) },
-        });
-
-        return seeded;
-      },
+    return this.uow.inSystemScope(systemScope('tenant-provisioning', target), (repos) =>
+      seedDefaultRolesIn(repos, target.companyId),
     );
   }
 

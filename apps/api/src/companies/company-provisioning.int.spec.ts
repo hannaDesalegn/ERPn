@@ -1,8 +1,10 @@
 /**
  * Provisioning a company, against a real PostgreSQL.
  *
- * The invariant being proved is one sentence: a company that exists has the sales order sequence
- * confirmation will later demand, and it got it in the same transaction that created it.
+ * The invariant being proved is one sentence: a company that exists is fully provisioned, with
+ * its default roles and its sales order sequence, all written by the transaction that created
+ * it. A half provisioned company is worse than none, because nothing about it looks wrong until
+ * somebody tries to grant authority in it or confirm an order.
  *
  * WHY THIS NEEDS A REAL DATABASE. Two of the claims are a rollback and a unique constraint, and
  * neither survives a mock. A fake transaction always rolls back cleanly, and a fake uniqueness
@@ -16,6 +18,8 @@ import { Client } from 'pg';
 
 import { AppConfigModule } from '../config/config.module.js';
 import { DatabaseModule } from '../database/database.module.js';
+import { seedDefaultRolesIn } from '../authorization/role-provisioning.service.js';
+import { ROLE_KEYS } from '../authorization/permissions.js';
 import { actorScope, systemScope, UnitOfWork } from '../database/index.js';
 import {
   allocateSalesOrderNumber,
@@ -118,7 +122,14 @@ describe('Company provisioning', () => {
     for (const [tenantId, companyId] of COMPANY_SCOPES) {
       await ownerContext(tenantId, companyId);
       await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
+      await owner.query(
+        'DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE company_id = $1)',
+        [companyId],
+      );
+      await owner.query('DELETE FROM roles WHERE company_id = $1', [companyId]);
     }
+    await ownerContext();
+    await owner.query('TRUNCATE audit_events');
     for (const tenantId of TENANTS) {
       await ownerContext(tenantId);
       await owner.query('DELETE FROM companies WHERE tenant_id = $1', [tenantId]);
@@ -150,6 +161,24 @@ describe('Company provisioning', () => {
   const companyRows = async (tenantId: string, companyId: string) => {
     await ownerContext(tenantId, companyId);
     const rows = await owner.query('SELECT id FROM companies WHERE id = $1', [companyId]);
+    return rows.rows;
+  };
+
+  /** Every role a company holds, with how many permissions each carries. */
+  const rolesOf = async (tenantId: string, companyId: string) => {
+    await ownerContext(tenantId, companyId);
+    const rows = await owner.query<{
+      id: string;
+      tenant_id: string;
+      company_id: string;
+      key: string;
+      grants: string;
+    }>(
+      `SELECT r.id, r.tenant_id, r.company_id, r.key,
+              (SELECT count(*) FROM role_permissions rp WHERE rp.role_id = r.id) AS grants
+         FROM roles r
+        ORDER BY r.key`,
+    );
     return rows.rows;
   };
 
@@ -506,6 +535,167 @@ describe('Company provisioning', () => {
       }
 
       expect(await sequencesOf(TENANT_A, COMPANY_BARE)).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------------------
+  // 8. Everything a company needs, in one transaction.
+  // -------------------------------------------------------------------------------------
+
+  describe('the whole company, or none of it', () => {
+    it('creates the company, its default roles and its sequence together', async () => {
+      const { company, roles, salesOrderSequence } = await provisionA1();
+
+      expect(company.id).toBe(COMPANY_A1);
+      expect(roles.map((role) => role.key).sort()).toEqual([...ROLE_KEYS].sort());
+      expect(salesOrderSequence.docType).toBe(SALES_ORDER_DOC_TYPE);
+
+      // Read back from the database, not from what the service returned.
+      expect(await rolesOf(TENANT_A, COMPANY_A1)).toHaveLength(ROLE_KEYS.length);
+      expect(await sequencesOf(TENANT_A, COMPANY_A1)).toHaveLength(1);
+      expect(await companyRows(TENANT_A, COMPANY_A1)).toHaveLength(1);
+    });
+
+    it('scopes all three to the same tenant and company', async () => {
+      await provisionA1();
+
+      for (const role of await rolesOf(TENANT_A, COMPANY_A1)) {
+        expect(role.tenant_id).toBe(TENANT_A);
+        expect(role.company_id).toBe(COMPANY_A1);
+      }
+      const sequence = (await sequencesOf(TENANT_A, COMPANY_A1))[0];
+      expect(sequence?.tenant_id).toBe(TENANT_A);
+      expect(sequence?.company_id).toBe(COMPANY_A1);
+    });
+
+    it('gives every seeded role the permissions its template grants', async () => {
+      // Section 2.7 seeds templates, not empty shells. A role with no permissions would look
+      // provisioned on the administration screen and grant nothing.
+      await provisionA1();
+
+      for (const role of await rolesOf(TENANT_A, COMPANY_A1)) {
+        expect(Number(role.grants)).toBeGreaterThan(0);
+      }
+    });
+
+    it('writes all three in a single transaction', async () => {
+      // One `xmin` across the company, a role and the sequence. Three values would mean three
+      // transactions and three windows in which a company exists half configured.
+      await provisionA1();
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const written = await owner.query<{ xmin: string }>(
+        `SELECT xmin::text AS xmin FROM companies WHERE id = $1
+         UNION
+         SELECT xmin::text FROM roles WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM document_number_sequences WHERE company_id = $1`,
+        [COMPANY_A1],
+      );
+
+      expect(written.rows).toHaveLength(1);
+    });
+
+    it('leaves nothing behind when role seeding fails', async () => {
+      // The roles are seeded before the sequence, so a failure here has already written the
+      // company and some of the roles. All of it must go.
+      await expect(
+        uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_DOOMED }),
+          async (repositories) => {
+            await repositories.companies.create({
+              id: COMPANY_DOOMED,
+              name: 'Doomed',
+              baseCurrency: 'USD',
+            });
+            await seedDefaultRolesIn(repositories, COMPANY_DOOMED);
+            // A second seeding of the same company, which the unique key on company and role
+            // key refuses partway through the second role.
+            await seedDefaultRolesIn(repositories, COMPANY_DOOMED);
+          },
+        ),
+      ).rejects.toThrow();
+
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await rolesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await sequencesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('leaves no roles behind when the sequence write is what fails', async () => {
+      await provisionA1();
+
+      await expect(
+        uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_DOOMED }),
+          async (repositories) => {
+            await repositories.companies.create({
+              id: COMPANY_DOOMED,
+              name: 'Doomed',
+              baseCurrency: 'USD',
+            });
+            await seedDefaultRolesIn(repositories, COMPANY_DOOMED);
+            // Reusing the sequence id already provisioned above, which the primary key refuses.
+            await repositories.documentNumberSequences.create({
+              id: (await sequencesOf(TENANT_A, COMPANY_A1))[0]!.id,
+              docType: SALES_ORDER_DOC_TYPE,
+            });
+          },
+        ),
+      ).rejects.toThrow();
+
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await rolesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('refuses to provision the same company twice, and changes nothing when it does', async () => {
+      const first = await provisionA1();
+
+      await expect(provisionA1()).rejects.toThrow();
+
+      // Still exactly one of each, and the same rows as before.
+      expect(await rolesOf(TENANT_A, COMPANY_A1)).toHaveLength(ROLE_KEYS.length);
+      const sequences = await sequencesOf(TENANT_A, COMPANY_A1);
+      expect(sequences).toHaveLength(1);
+      expect(sequences[0]?.id).toBe(first.salesOrderSequence.id);
+    });
+
+    it('provisions each company in a tenant separately and completely', async () => {
+      await provisionA1();
+      await provisioning.provision({
+        tenantId: TENANT_A,
+        id: COMPANY_A2,
+        name: 'A Two',
+        baseCurrency: 'USD',
+      });
+
+      // Roles are per company, per section 2.7, so the same six keys exist twice over as
+      // different rows rather than being shared.
+      const first = await rolesOf(TENANT_A, COMPANY_A1);
+      const second = await rolesOf(TENANT_A, COMPANY_A2);
+
+      expect(first).toHaveLength(ROLE_KEYS.length);
+      expect(second).toHaveLength(ROLE_KEYS.length);
+      expect(first.map((role) => role.key)).toEqual(second.map((role) => role.key));
+      expect(first.some((role) => second.some((other) => other.id === role.id))).toBe(false);
+    });
+
+    it('records the seeding in the audit trail, in that same transaction', async () => {
+      await provisionA1();
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const events = await owner.query<{ action: string; entity_id: string; xmin: string }>(
+        `SELECT action, entity_id, xmin::text AS xmin FROM audit_events WHERE entity_id = $1`,
+        [COMPANY_A1],
+      );
+      const company = await owner.query<{ xmin: string }>(
+        'SELECT xmin::text AS xmin FROM companies WHERE id = $1',
+        [COMPANY_A1],
+      );
+
+      expect(events.rows).toHaveLength(1);
+      expect(events.rows[0]?.action).toBe('roles_seeded');
+      // Section 7.1: the record and the change it describes share a transaction.
+      expect(events.rows[0]?.xmin).toBe(company.rows[0]?.xmin);
     });
   });
 });
