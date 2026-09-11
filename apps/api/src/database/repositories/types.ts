@@ -753,11 +753,44 @@ export interface RecordedMovement {
  * There is no update and no delete. The ledger is append only, and the application role holds no
  * grant for either, so a correction is a compensating movement rather than an edit.
  */
+/**
+ * What a company can still promise for one product in one warehouse.
+ *
+ * Section 8.5: available equals on hand minus reserved, and a salesperson is shown available
+ * rather than on hand. All three figures are returned rather than just the answer, because a
+ * caller refusing an oversell has to be able to say which half was short.
+ */
+export interface StockAvailability {
+  productId: string;
+  warehouseId: string;
+  /** From the maintained balance of section 8.2. Zero when nothing has ever moved for this key. */
+  onHand: string;
+  /** Summed from the reservation records, which are the source of truth for it. */
+  reserved: string;
+  /** `onHand` minus `reserved`. May be negative, and a negative answer is a real one. */
+  available: string;
+  /**
+   * Whether a balance row existed to be locked.
+   *
+   * False means nothing has ever moved for this key, so there was no row and no lock was taken.
+   * A caller about to write a reservation must ensure the row before relying on the lock, the
+   * way `record` already does.
+   */
+  locked: boolean;
+}
+
 export interface StockLedgerRepository {
   balanceFor(productId: string, warehouseId: string): Promise<StockBalanceRecord | null>;
   movementsFor(productId: string, warehouseId: string): Promise<StockMovementRecord[]>;
   /** Writes the movement and moves its balance, under the row lock section 10.2 requires. */
   record(input: NewStockMovement): Promise<RecordedMovement>;
+  /**
+   * Locks the balance row and reads the position on top of it.
+   *
+   * The read the reservation decision is made from, which is why it takes the lock rather than
+   * leaving the caller to remember. Writes nothing.
+   */
+  availabilityForUpdate(productId: string, warehouseId: string): Promise<StockAvailability>;
 }
 
 

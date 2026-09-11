@@ -60,6 +60,7 @@ export type {
   StockMovementRecord,
   NewStockMovement,
   RecordedMovement,
+  StockAvailability,
   StockReservationRecord,
   StockReservationRepository,
   NewStockReservation,
