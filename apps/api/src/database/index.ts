@@ -57,6 +57,7 @@ export type {
   SalesOrderPage,
   SalesOrderPageQuery,
   SalesOrderPageRow,
+  SalesOrderDraftUpdate,
   SalesOrderTotals,
   SalesOrderTransition,
   StockBalanceRecord,

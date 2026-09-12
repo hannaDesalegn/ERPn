@@ -694,6 +694,36 @@ export interface SalesOrderRepository {
    * the predicate as well, so the guard holds even if a version is reused.
    */
   applyTransition(input: SalesOrderTransition): Promise<SalesOrderRecord>;
+  /**
+   * Rewrites a draft header, guarded by the version the caller read.
+   *
+   * Separate from applyTransition because it moves nothing. That one writes a status and the
+   * number that must accompany it; this writes the fields a person chose and leaves the status
+   * alone. Folding them together would give one method that could both edit and confirm.
+   *
+   * The predicate carries the version and the status. Section 10.1 requires the version, so two
+   * people editing one draft cannot silently overwrite each other. The status is there because
+   * section 12.2 makes only a draft editable, and somebody may have confirmed it between the
+   * caller reading the order and this running. Either way no row matches.
+   */
+  updateDraft(input: SalesOrderDraftUpdate): Promise<SalesOrderRecord>;
+}
+
+/**
+ * The header fields a draft's owner may change, and the version they last saw.
+ *
+ * Exactly the fields creating an order accepts, because what could be entered then is what may be
+ * changed while it is still a draft. No status, no number, no totals and no version to set: those
+ * are the server's, and there is nowhere here to put them.
+ */
+export interface SalesOrderDraftUpdate {
+  id: string;
+  expectedVersion: number;
+  customerId: string;
+  warehouseId: string;
+  orderDate: string;
+  expectedDeliveryDate: string | null;
+  salesRepUserId: string | null;
 }
 
 /** A status change and the number that goes with it, guarded by what the caller read. */

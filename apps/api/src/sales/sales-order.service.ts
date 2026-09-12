@@ -52,6 +52,7 @@ import {
   type Decimal,
 } from '../shared/decimal.js';
 import { resolveTaxRate } from '../tax/tax-rate.js';
+import { statusOf } from './sales-order-status.js';
 
 /** The scales the schema declares. Amounts at four, everything else at six. */
 const AMOUNT_SCALE = 4;
@@ -77,6 +78,18 @@ export interface CreateDraftInput {
   lines: DraftLineInput[];
 }
 
+/**
+ * A draft as it should now be.
+ *
+ * The same fields creating one accepts, plus the identifier and the version the caller read.
+ * Section 10.1 requires that version; everything else a document eventually shows is the
+ * server s and has nowhere here to be supplied.
+ */
+export interface UpdateDraftInput extends CreateDraftInput {
+  salesOrderId: string;
+  expectedVersion: number;
+}
+
 export interface SalesOrderDraft {
   order: SalesOrderRecord;
   lines: SalesOrderLineRecord[];
@@ -92,6 +105,8 @@ export interface SalesOrderDraft {
  */
 export type DraftRejection =
   | 'no_lines'
+  | 'order_not_found'
+  | 'not_a_draft'
   | 'customer_not_found'
   | 'warehouse_not_found'
   | 'product_not_found'
@@ -241,6 +256,126 @@ export class SalesOrderService {
    * transaction, per section 11, and a method that opens its own cannot take part in that. The
    * wrapper above keeps the standalone call working unchanged.
    */
+  /**
+   * Rewrites a draft, inside a transaction the caller already opened.
+   *
+   * WHAT SECTION 12.2 ACTUALLY PERMITS. A draft is editable and has no side effects: nothing is
+   * reserved, owed or posted, so there is nothing to unwind and no compensating anything. That is
+   * what makes an edit a rewrite rather than a reconciliation.
+   *
+   * A REPLACEMENT, NOT A PATCH. The caller sends the draft as it should now be, and every line is
+   * priced from master data and the submitted quantity exactly as creation prices it. The contract
+   * does not specify a request shape; this one is chosen because pricing already recomputes each
+   * line from scratch, so a replacement and a patch would run the same code with the patch adding
+   * a per line vocabulary the contract never describes.
+   *
+   * THE VERSION IS THE WHOLE CONCURRENCY STORY, per section 10.1. The header write carries the
+   * version the caller read, so two people editing one draft resolve to one winner and the loser
+   * is told the order moved rather than silently overwriting. The lines are rewritten after that
+   * write, inside the same transaction, so a loser removes nothing: its update matched no row, it
+   * threw, and the transaction that would have deleted the lines never committed.
+   *
+   * NO AUDIT RECORD, AND THAT IS A RULING RATHER THAN AN OVERSIGHT. Section 7.1 says a change
+   * cannot exist without its audit record, and section 12.2 says a draft has no side effects. Read
+   * together, and as the project lead settled on 2026-09-13, document audit begins at confirmation:
+   * creating and editing a draft are pre-confirmation mutations of something that has promised
+   * nobody anything, and confirmation is the lifecycle boundary where the trail starts. Creation
+   * already ships unaudited and stays that way; this matches it rather than introducing a trail
+   * that records edits to a document with no record of existing.
+   */
+  async updateDraftIn(
+    repos: DraftRepositories,
+    companyId: string,
+    input: UpdateDraftInput,
+  ): Promise<SalesOrderDraft> {
+    if (input.lines.length === 0) {
+      throw new SalesOrderDraftError('no_lines', 'A sales order needs at least one line');
+    }
+
+    const company = await repos.companies.findById(companyId);
+    if (!company) {
+      throw new Error('The acting company disappeared inside its own transaction');
+    }
+
+    // Scoped, so an order in another company is not found rather than refused, per section 6.1.
+    const existing = await repos.salesOrders.findById(input.salesOrderId);
+    if (!existing) {
+      throw notFound('order_not_found', 'Sales order', input.salesOrderId);
+    }
+
+    // NOT A TRANSITION, AND SO NOT THE TRANSITION TABLE. Editing leaves the order exactly where
+    // it was, and section 12.1's table governs moves between states: it refuses draft to draft,
+    // because staying put is not a move. What section 12.2 actually says is that a draft is
+    // editable, which is a question about the current state and is asked as one.
+    //
+    // The same question is asked again by the header write, for the case where somebody confirms
+    // the order between this line and that one.
+    const status = statusOf(existing.status);
+    if (status !== 'draft') {
+      throw new SalesOrderDraftError(
+        'not_a_draft',
+        `A ${status} sales order cannot be edited. Only a draft can.`,
+      );
+    }
+
+    const customer = await repos.customers.findById(input.customerId);
+    if (!customer || customer.status !== 'active') {
+      throw notFound('customer_not_found', 'Customer', input.customerId);
+    }
+
+    const warehouse = await repos.warehouses.findById(input.warehouseId);
+    if (!warehouse || warehouse.status !== 'active') {
+      throw notFound('warehouse_not_found', 'Warehouse', input.warehouseId);
+    }
+
+    // Every line priced before anything is written, so a line that cannot be priced leaves the
+    // existing draft untouched rather than half rewritten. The transaction would roll it back
+    // anyway; this makes the common case fail before it has written at all.
+    const priced = [];
+    for (const line of input.lines) {
+      priced.push(await this.price(repos, company, line));
+    }
+
+    // The header first, because its version is the lock. Everything after this point belongs to
+    // a transaction that has already won the race.
+    const header = await repos.salesOrders.updateDraft({
+      id: existing.id,
+      expectedVersion: input.expectedVersion,
+      customerId: customer.id,
+      warehouseId: warehouse.id,
+      orderDate: input.orderDate,
+      expectedDeliveryDate: input.expectedDeliveryDate ?? null,
+      salesRepUserId: input.salesRepUserId ?? null,
+    });
+
+    // Out with the old lines and in with the new. The grant to delete a sales order line exists
+    // for exactly this, and migration 0005 says so: a draft is editable under section 12.2 and
+    // removing a line from one is ordinary editing rather than deleting a document.
+    for (const line of await repos.salesOrderLines.listForOrder(existing.id)) {
+      await repos.salesOrderLines.remove(line.id);
+    }
+
+    const lines: SalesOrderLineRecord[] = [];
+    for (const [index, line] of priced.entries()) {
+      lines.push(
+        await repos.salesOrderLines.create({
+          ...line,
+          id: randomUUID(),
+          salesOrderId: existing.id,
+          // Renumbered from one, so removing the second line of three does not leave a gap.
+          lineNumber: index + 1,
+          // Still the company's, never the caller's. An edit cannot change what an order trades
+          // in any more than creation could.
+          currency: company.baseCurrency,
+        }),
+      );
+    }
+
+    // Summed from the rows as written, as creation does. `setTotals` does not touch the version,
+    // so the edit leaves it exactly one higher than the caller read.
+    return { order: await this.total(repos, header, lines), lines };
+  }
+
   async createDraftIn(
     repos: DraftRepositories,
     companyId: string,

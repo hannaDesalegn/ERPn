@@ -59,6 +59,7 @@ import type {
   SalesOrderRepository,
   SalesOrderPage,
   SalesOrderPageQuery,
+  SalesOrderDraftUpdate,
   SalesOrderTotals,
   SalesOrderTransition,
 } from './types.js';
@@ -285,6 +286,51 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
       total: Number(aggregates?.total ?? 0),
       totalValue: aggregates?.totalValue ?? '0',
     };
+  }
+
+  /**
+   * Rewrites a draft's header under the version the caller read.
+   *
+   * The predicate carries four things: the identifier, the scope, the version and the status. The
+   * version is section 10.1's optimistic lock, so two people editing one draft cannot overwrite
+   * each other silently. The status is section 12.2's rule that only a draft is editable, checked
+   * here as well as in the service because the service checked it before this statement ran and
+   * somebody may have confirmed the order in between.
+   *
+   * Either miss answers the same way. A caller who lost a race and a caller whose order was
+   * confirmed under them both need to re-read before trying again, and telling them apart would
+   * be telling them apart with a query they can make themselves.
+   */
+  async updateDraft(input: SalesOrderDraftUpdate): Promise<SalesOrderRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const rows = await this.db
+      .update(salesOrders)
+      .set({
+        customerId: input.customerId,
+        warehouseId: input.warehouseId,
+        orderDate: input.orderDate,
+        expectedDeliveryDate: input.expectedDeliveryDate,
+        salesRepUserId: input.salesRepUserId,
+        version: sql`${salesOrders.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(salesOrders.id, input.id),
+          eq(salesOrders.tenantId, tenantId),
+          eq(salesOrders.companyId, companyId),
+          eq(salesOrders.version, input.expectedVersion),
+          // Only a draft, per section 12.2. Nothing here can move a confirmed order.
+          eq(salesOrders.status, 'draft'),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new ConcurrencyConflictError('Sales order', input.id);
+    return toSalesOrder(row);
   }
 
   async setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord> {
