@@ -45,7 +45,13 @@ export function SalesOrdersPage() {
     placeholderData: keepPreviousData,
   });
 
-  const warehouses = useQuery({ queryKey: queryKeys.warehouses, queryFn: api.inventory.listWarehouses });
+  // The real read, not the fixture one the stock and purchasing screens still share. Those
+  // render fixture documents whose warehouse identifiers exist only in the mocks, so pointing
+  // their filter here would list warehouses matching none of their rows.
+  const warehouses = useQuery({
+    queryKey: queryKeys.warehouseOptions,
+    queryFn: api.masterData.listWarehouses,
+  });
 
   const columns: Column<SalesOrderRow>[] = [
     {

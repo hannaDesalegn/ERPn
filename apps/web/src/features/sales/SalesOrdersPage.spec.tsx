@@ -22,6 +22,13 @@ import type { Me } from '@/services/session.service';
 import { SalesOrdersPage } from './SalesOrdersPage';
 
 const LIST_PATH = '/api/sales-orders';
+const WAREHOUSES_PATH = '/api/warehouses';
+
+/** As the master data endpoint serves them. */
+const WAREHOUSES = [
+  { id: 'wh-real-1', code: 'WH-1', name: 'Main depot', status: 'active', isDefault: true },
+  { id: 'wh-real-2', code: 'WH-2', name: 'Overflow', status: 'active', isDefault: false },
+];
 
 const SELLER: Me = {
   user: { id: 'u-1', email: 'sam@example.test', name: 'Sam Seller' },
@@ -129,9 +136,11 @@ function Landed() {
 }
 
 function renderList(body: unknown = PAGE, status = 200) {
-  stubFetch((url) =>
-    url.startsWith(LIST_PATH) ? { status, body } : { status: 200, body: SELLER },
-  );
+  stubFetch((url) => {
+    if (url.startsWith(WAREHOUSES_PATH)) return { status: 200, body: WAREHOUSES };
+    if (url.startsWith(LIST_PATH)) return { status, body };
+    return { status: 200, body: SELLER };
+  });
   return mount();
 }
 
@@ -159,7 +168,8 @@ describe('the list it shows', () => {
 
     await waitFor(() => expect(screen.getByText('North Supply')).toBeDefined());
     expect(screen.getByText('SO-0001')).toBeDefined();
-    expect(screen.getByText('Main depot')).toBeDefined();
+    // More than once now: the row and the warehouse filter option both name it.
+    expect(screen.getAllByText('Main depot').length).toBeGreaterThan(0);
     expect(screen.getByText('South Supply')).toBeDefined();
   });
 
@@ -226,6 +236,12 @@ describe('the states around it', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string) => {
+        if (input.startsWith(WAREHOUSES_PATH)) {
+          return new Response(JSON.stringify(WAREHOUSES), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         if (input.startsWith(LIST_PATH)) {
           await held;
           return new Response(JSON.stringify(PAGE), {
@@ -322,5 +338,66 @@ describe('the navigation this work package exists for', () => {
     for (const row of PAGE.rows) {
       expect(row.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The warehouse filter.
+// ---------------------------------------------------------------------------
+
+describe('the warehouse filter', () => {
+  const warehouseCalls = () => calls.filter((call) => call.url.startsWith(WAREHOUSES_PATH));
+
+  it('reads the real master data endpoint', async () => {
+    renderList();
+
+    await waitFor(() => expect(warehouseCalls().length).toBeGreaterThan(0));
+    expect(warehouseCalls()[0]?.method).toBe('GET');
+  });
+
+  it('renders the warehouses the server returned', async () => {
+    renderList();
+
+    const select = await waitFor(() => screen.getByLabelText(/filter by warehouse/i));
+
+    // The select exists before its query resolves, so this waits for the options rather than the
+    // element, which would pass against an empty one.
+    await waitFor(() => expect(select.textContent).toMatch(/Main depot/));
+    expect(select.textContent).toMatch(/Overflow/);
+  });
+
+  it('uses no fixture warehouse', async () => {
+    // The fixtures name warehouses differently and identify them as `wh-1` style strings. If one
+    // reached this select, its identifier would then be sent to a backend that has never heard
+    // of it, which is the bug this migration exists to prevent.
+    renderList();
+
+    const select = await waitFor(() => screen.getByLabelText(/filter by warehouse/i));
+    await waitFor(() => expect(select.querySelectorAll('option').length).toBeGreaterThan(1));
+
+    const options = Array.from(select.querySelectorAll('option')).map((option) => option.value);
+    expect(options.filter(Boolean)).toEqual(['wh-real-1', 'wh-real-2']);
+  });
+
+  it('sends the chosen identifier to the sales order list', async () => {
+    renderList();
+    await waitFor(() => expect(screen.getByText('North Supply')).toBeDefined());
+
+    fireEvent.change(screen.getByLabelText(/filter by warehouse/i), {
+      target: { value: 'wh-real-1' },
+    });
+
+    await waitFor(() =>
+      expect(listCalls().some((call) => /warehouseId=wh-real-1/.test(call.url))).toBe(true),
+    );
+  });
+
+  it('leaves the rest of the list working', async () => {
+    // The filter changed; nothing else about the screen did.
+    renderList();
+
+    await waitFor(() => expect(screen.getByText('North Supply')).toBeDefined());
+    expect(screen.getByText('SO-0001')).toBeDefined();
+    expect(screen.getByText(/2 orders/)).toBeDefined();
   });
 });
