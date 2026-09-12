@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
-import { ApiError } from '@/services/client';
+import { newIdempotencyKey, refusalText } from './refusalText';
 import type { SalesOrder } from '@/domain';
 import {
   Badge,
@@ -481,49 +481,4 @@ export function SalesOrderDetailPage() {
       </div>
     </>
   );
-}
-
-/**
- * A key for one confirmation intent.
- *
- * `crypto.randomUUID` where the browser has it, which is every browser this application supports
- * over HTTPS, and a random fallback where it does not. The value only has to be unique per
- * intent; it authenticates nothing and is never a secret.
- */
-function newIdempotencyKey(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-
-  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-/**
- * What to show when the server refuses a confirmation.
- *
- * The server's own words are used wherever it chose to explain: how much stock there actually
- * was, or which two states a transition was between. Where it deliberately says little, because
- * saying more would tell a caller about a record they may not see, this supplies a sentence that
- * is useful without adding anything the server did not.
- *
- * NO BUSINESS RULE IS DECIDED HERE. Every branch is about wording. The refusal already happened.
- */
-function refusalText(error: unknown): string {
-  if (!(error instanceof ApiError)) {
-    return 'The order could not be confirmed. Check your connection and try again.';
-  }
-
-  if (error.status === 403) {
-    return 'You do not have permission to confirm orders in this company.';
-  }
-
-  if (error.status === 404) {
-    return 'This order is no longer available.';
-  }
-
-  if (error.status >= 500) {
-    return 'The server could not complete the confirmation. Nothing was changed.';
-  }
-
-  return error.message;
 }
