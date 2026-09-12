@@ -39,7 +39,7 @@ import type {
   SalesOrderRecord,
 } from '../database/index.js';
 import type { CompanyContext } from '../identity/identity.service.js';
-import type { SalesOrderPageQuery } from '../database/index.js';
+import type { SalesOrderPageQuery, ScopedRepositories } from '../database/index.js';
 import {
   add,
   compare,
@@ -196,6 +196,18 @@ export interface SalesOrderRowView {
   deliveredQuantity: string;
 }
 
+/** What creating a draft needs from a transaction already in progress. */
+export type DraftRepositories = Pick<
+  ScopedRepositories,
+  'companies' | 'customers' | 'warehouses' | 'products' | 'salesOrders' | 'salesOrderLines'
+>;
+
+/** What reading one needs. */
+export type ReadRepositories = Pick<
+  ScopedRepositories,
+  'salesOrders' | 'salesOrderLines' | 'customers' | 'warehouses' | 'users'
+>;
+
 @Injectable()
 export class SalesOrderService {
   constructor(private readonly uow: UnitOfWork) {}
@@ -211,22 +223,39 @@ export class SalesOrderService {
     actorUserId: string,
     input: CreateDraftInput,
   ): Promise<SalesOrderDraft> {
-    if (input.lines.length === 0) {
-      // An order that promises nothing is not a draft of anything. Refused here rather than
-      // written as a header with no lines, which nothing downstream knows how to price.
-      throw new SalesOrderDraftError('no_lines', 'A sales order needs at least one line');
-    }
-
     return this.uow.inActorScope(
       actorScope({
         tenantId: context.tenantId,
         companyId: context.companyId,
         userId: actorUserId,
       }),
-      async (repos) => {
+      (repos) => this.createDraftIn(repos, context.companyId, input),
+    );
+  }
+
+  /**
+   * The same creation, inside a transaction the caller already opened.
+   *
+   * Split out for the reason `allocateSalesOrderNumber` and `reserveForOrderLine` are: an
+   * endpoint has to claim its idempotency key, do the work and store the response in one
+   * transaction, per section 11, and a method that opens its own cannot take part in that. The
+   * wrapper above keeps the standalone call working unchanged.
+   */
+  async createDraftIn(
+    repos: DraftRepositories,
+    companyId: string,
+    input: CreateDraftInput,
+  ): Promise<SalesOrderDraft> {
+    if (input.lines.length === 0) {
+      // An order that promises nothing is not a draft of anything. Refused here rather than
+      // written as a header with no lines, which nothing downstream knows how to price.
+      throw new SalesOrderDraftError('no_lines', 'A sales order needs at least one line');
+    }
+
+    return (async () => {
         // The company is the authority for two things the caller does not supply: the currency
         // the order trades in, and the tax rate every line carries.
-        const company = await repos.companies.findById(context.companyId);
+        const company = await repos.companies.findById(companyId);
         if (!company) {
           // Unreachable through a real session, which resolved this company from a membership
           // moments ago. Loud rather than silent, because the alternative is a null currency.
@@ -289,9 +318,8 @@ export class SalesOrderService {
         // The document totals are the sum of what was actually written, read back from the
         // rows. Summing what this function computed would agree with itself even if the write
         // had rounded differently.
-        return { order: await this.total(repos, order, lines), lines };
-      },
-    );
+      return { order: await this.total(repos, order, lines), lines };
+    })();
   }
 
   /**
@@ -367,7 +395,18 @@ export class SalesOrderService {
         // the context identifies the grant, not the person.
         userId: actorUserId,
       }),
-      async (repos) => {
+      (repos) => this.readIn(repos, salesOrderId),
+    );
+  }
+
+  /**
+   * The same read, inside a transaction the caller already opened.
+   *
+   * Exists so that creating a draft can answer with exactly what the detail endpoint would say,
+   * from inside the transaction that created it, without a second copy of the mapping below.
+   */
+  async readIn(repos: ReadRepositories, salesOrderId: string): Promise<SalesOrderView | null> {
+    return (async () => {
         const order = await repos.salesOrders.findById(salesOrderId);
         if (!order) return null;
 
@@ -413,8 +452,7 @@ export class SalesOrderService {
             invoicedQuantity: line.invoicedQuantity,
           })),
         };
-      },
-    );
+    })();
   }
 
   /**
