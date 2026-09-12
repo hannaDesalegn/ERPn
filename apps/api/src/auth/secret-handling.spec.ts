@@ -57,6 +57,9 @@ describe('Secret handling in the authentication files', () => {
       'authentication.service.ts',
       'csrf.guard.ts',
       'csrf.ts',
+      // Section 11's retention job. It reports its counts rather than logging them, which is why
+      // it is scanned here like the rest rather than listed as permitted to log.
+      'idempotency-expiry.service.ts',
       // Section 11's boundary lives here and holds a request digest, so it is scanned like the
       // rest: a fingerprint is not a secret, but a file that handled one carelessly would be.
       'idempotency.ts',

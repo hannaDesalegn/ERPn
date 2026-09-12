@@ -11,6 +11,7 @@ import { IdentityModule } from './identity/identity.module.js';
 import { SalesModule } from './sales/sales.module.js';
 import { AccessGuard } from './http/access.guard.js';
 import { CsrfGuard } from './http/csrf.guard.js';
+import { IdempotencyExpiryService } from './http/idempotency-expiry.service.js';
 import { RouteDeclarationAudit } from './http/route-declarations.js';
 
 /**
@@ -46,6 +47,11 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AccessGuard },
     RouteDeclarationAudit,
+    // Section 11's retention job. Registered here rather than behind a scheduler because the
+    // repository carries no scheduling dependency and the contract names none; what a deployment
+    // runs it from is section 15's business. Exported so an operator or a scheduler can reach it.
+    IdempotencyExpiryService,
   ],
+  exports: [IdempotencyExpiryService],
 })
 export class AppModule {}

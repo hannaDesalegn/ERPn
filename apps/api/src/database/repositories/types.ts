@@ -923,6 +923,14 @@ export interface IdempotencyRepository {
   /** Returns the record when this transaction now owns the key, null when someone else does. */
   claim(input: IdempotencyClaim): Promise<IdempotencyRecord | null>;
   complete(id: string, response: StoredResponse): Promise<void>;
+  /**
+   * Removes the records in this scope whose retention window has closed.
+   *
+   * Section 11's expiring job, and the only delete on this table. It cannot remove a live record
+   * even if asked to: migration 0011 adds a restrictive policy that ANDs an expiry test onto
+   * every delete, so the rule is the database's rather than this predicate's.
+   */
+  deleteExpired(now: Date): Promise<number>;
 }
 
 /** What an actor scoped unit of work hands to its callback. */

@@ -9,12 +9,14 @@
  * it does the work itself. Nothing else has to be locked, and no record can outlive the
  * transaction that claimed it.
  *
- * NO DELETE. Section 11 makes expiry a retention job's work, and a request path able to remove
- * its own record could replay an operation by forgetting it first. The application role holds no
- * such grant.
+ * THE ONLY DELETE IS THE EXPIRING ONE. Section 11 makes expiry a retention job's work, and a
+ * request path able to remove its own record could replay an operation by forgetting it first.
+ * Migration 0011 answers that with a restrictive policy rather than with trust: every delete is
+ * ANDed with an expiry test in the database, so no statement from this role can remove a record
+ * whose window is still open, whatever predicate a future caller writes here.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, lte } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { idempotencyRecords } from '../schema/idempotency.js';
@@ -130,6 +132,32 @@ export class DrizzleIdempotencyRepository implements IdempotencyRepository {
           eq(idempotencyRecords.companyId, companyId),
         ),
       );
+  }
+  /**
+   * Removes this scope's expired records.
+   *
+   * Takes the moment rather than reading the clock, so a caller sweeping many companies uses one
+   * instant for all of them and a test can place a record either side of a boundary it chose.
+   * The database applies its own `now()` as well, through the restrictive policy, so a caller
+   * passing a future time still cannot remove a live record.
+   */
+  async deleteExpired(now: Date): Promise<number> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Idempotency');
+
+    const removed = await this.db
+      .delete(idempotencyRecords)
+      .where(
+        and(
+          eq(idempotencyRecords.tenantId, tenantId),
+          eq(idempotencyRecords.companyId, companyId),
+          // Expired means the moment has arrived, not passed. `session-policy.ts` reads its own
+          // expiry the same way, and migration 0011 writes the same rule into the policy.
+          lte(idempotencyRecords.expiresAt, now),
+        ),
+      )
+      .returning({ id: idempotencyRecords.id });
+
+    return removed.length;
   }
 }
 
