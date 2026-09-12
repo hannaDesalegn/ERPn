@@ -169,6 +169,16 @@ export function SalesOrderDetailPage() {
               user could plausibly expect them to work, so the UI teaches the
               workflow rather than just refusing.
             */}
+            {/* Editing is a draft operation, per section 12.2, so it goes when the draft does. */}
+            {can('sales:create') && isDraft && (
+              <Button
+                icon="settings"
+                onClick={() => navigate(`/sales/orders/${id}/edit`)}
+                title="Changes the draft. Prices and totals are recalculated by the server."
+              >
+                Edit
+              </Button>
+            )}
             {can('sales:confirm') && isDraft && (
               <Button
                 variant="primary"

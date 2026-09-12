@@ -25,6 +25,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage';
 
 import { SalesOrdersPage } from '@/features/sales/SalesOrdersPage';
 import { SalesOrderCreatePage } from '@/features/sales/SalesOrderCreatePage';
+import { SalesOrderEditPage } from '@/features/sales/SalesOrderEditPage';
 import { SalesOrderDetailPage } from '@/features/sales/SalesOrderDetailPage';
 import { CustomersPage } from '@/features/parties/CustomersPage';
 import { CustomerDetailPage } from '@/features/parties/CustomerDetailPage';
@@ -68,6 +69,10 @@ export function AppRoutes() {
         <Route
           path="/sales/orders/new"
           element={<Protected permission="sales:create"><SalesOrderCreatePage /></Protected>}
+        />
+        <Route
+          path="/sales/orders/:id/edit"
+          element={<Protected permission="sales:create"><SalesOrderEditPage /></Protected>}
         />
         <Route
           path="/sales/orders/:id"

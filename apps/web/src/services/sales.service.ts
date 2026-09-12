@@ -305,6 +305,27 @@ export const salesService = {
   },
 
   /**
+   * Rewrites a draft.
+   *
+   * Carries the version the caller read, which section 10.1 requires: two people editing one
+   * draft resolve to one winner and the loser is told the order moved. A mismatch arrives as a
+   * 409 whose body holds the order as it now stands.
+   */
+  async updateOrder(
+    id: string,
+    input: NewSalesOrderInput & { version: number },
+    idempotencyKey: string,
+  ): Promise<SalesOrderDetail> {
+    return toDetail(
+      await request<SalesOrderResponse>(`/sales-orders/${id}`, {
+        method: 'PUT',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(input),
+      }),
+    );
+  },
+
+  /**
    * One sales order, from the backend.
    *
    * Section 16.1 removes the fixture layer per module as endpoints land, and the sales order

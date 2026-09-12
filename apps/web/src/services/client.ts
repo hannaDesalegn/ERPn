@@ -49,10 +49,21 @@ export class ApiError extends Error {
   // workspace compiles with erasableSyntaxOnly and that shape emits runtime code.
   readonly status: number;
 
-  constructor(status: number, message: string) {
+  /**
+   * The refusal body, when the server sent one.
+   *
+   * Some refusals carry more than a sentence. Section 10.1 requires a version conflict to answer
+   * with enough for the interface to explain what changed, which the endpoint does by returning
+   * the order as it now stands. Discarding the body here would leave the screen refetching it and
+   * showing a state one request newer than the one that lost.
+   */
+  readonly body: unknown;
+
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -176,7 +187,7 @@ function csrfToken(): string | null {
  * on the number rather than by reading prose. A body that is missing, malformed, or carries no
  * message falls back to the status line, because a refusal must still say something.
  */
-async function refusalMessage(response: Response): Promise<string> {
+async function refusal(response: Response): Promise<{ message: string; body: unknown }> {
   const fallback = `Request failed: ${response.status} ${response.statusText}`;
 
   try {
@@ -184,9 +195,12 @@ async function refusalMessage(response: Response): Promise<string> {
     const message =
       typeof body === 'object' && body !== null ? (body as { message?: unknown }).message : null;
 
-    return typeof message === 'string' && message.length > 0 ? message : fallback;
+    return {
+      message: typeof message === 'string' && message.length > 0 ? message : fallback,
+      body,
+    };
   } catch {
-    return fallback;
+    return { message: fallback, body: undefined };
   }
 }
 
@@ -218,7 +232,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new ApiError(response.status, await refusalMessage(response));
+    const refused = await refusal(response);
+    throw new ApiError(response.status, refused.message, refused.body);
   }
 
   // 204 is a success with no body, which sign in and sign out both return. Asking for JSON
