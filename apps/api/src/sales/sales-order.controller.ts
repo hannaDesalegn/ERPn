@@ -19,7 +19,7 @@
  * mass assignment is a route with nothing to assign.
  */
 
-import { Controller, Param, Post, Req, HttpCode } from '@nestjs/common';
+import { Controller, Get, Param, Post, Req, HttpCode } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -41,6 +41,7 @@ import {
 } from '../http/idempotency.js';
 import { IdentityService } from '../identity/identity.service.js';
 import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-order.js';
+import { SalesOrderService, type SalesOrderView } from './sales-order.service.js';
 import { IllegalSalesOrderTransitionError } from './sales-order-status.js';
 
 /**
@@ -75,8 +76,38 @@ export interface ConfirmationView {
 export class SalesOrderController {
   constructor(
     private readonly identity: IdentityService,
+    private readonly sales: SalesOrderService,
     private readonly uow: UnitOfWork,
   ) {}
+
+  /**
+   * One sales order, as the detail screen shows it.
+   *
+   * `sales:view` rather than `sales:confirm`: reading an order is what every role in the sales
+   * path does, and gating a read behind the capability to act on it would be the wrong shape.
+   *
+   * NOT FOUND COVERS EVERYTHING IT SHOULD. An order in another company, in another tenant, and
+   * one that does not exist all answer the same way, per section 6.1, so an identifier cannot be
+   * used to learn what exists elsewhere. The service already answers null for all three; this
+   * only turns that into a status code.
+   */
+  @RequirePermission('sales:view')
+  @Get(':salesOrderId')
+  async get(
+    @Param('salesOrderId') salesOrderId: string,
+    @Req() request: FastifyRequest,
+  ): Promise<SalesOrderView> {
+    if (!identifier.safeParse(salesOrderId).success) throw new NotFoundException('Not found');
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    const order = await this.sales.getById(context, principal.userId, salesOrderId);
+    if (!order) throw new NotFoundException('Not found');
+
+    return order;
+  }
 
   /**
    * Confirms a sales order.

@@ -338,6 +338,13 @@ describe('Confirming a sales order over HTTP', () => {
       headers: mutating(session, key === undefined ? extra : { 'idempotency-key': key, ...extra }),
     });
 
+  const readOrder = (session: BrowserSession, orderId: string) =>
+    app.inject({
+      method: 'GET',
+      url: `/api/sales-orders/${orderId}`,
+      headers: { cookie: session.cookie },
+    });
+
   const counter = async () => {
     await ownerContext(TENANT, COMPANY);
     const rows = await owner.query<{ next_value: string }>(
@@ -745,4 +752,88 @@ describe('Confirming a sales order over HTTP', () => {
     );
     return rows.rows[0]?.status;
   }
+// -------------------------------------------------------------------------------------
+  // Reading an order over HTTP.
+  // -------------------------------------------------------------------------------------
+
+  describe('reading an order', () => {
+    it('returns the persisted document and its lines', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await readOrder(seller, orderId);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        id: orderId,
+        status: 'draft',
+        docNumber: null,
+        currency: 'USD',
+        customer: { id: CUSTOMER },
+        warehouse: { id: WAREHOUSE },
+      });
+      expect(response.json().lines).toHaveLength(1);
+    });
+
+    it('needs only sales:view, not the capability to act on it', async () => {
+      // The clerk can see a sales order and cannot confirm one. Gating the read behind the
+      // capability to change it would be the wrong shape.
+      const orderId = await draft(COMPANY, '10');
+
+      expect((await readOrder(clerk, orderId)).statusCode).toBe(200);
+      expect((await confirm(clerk, orderId, 'key-clerk-read')).statusCode).toBe(403);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/sales-orders/${orderId}`,
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it('answers not found for an order in a sibling company', async () => {
+      const theirs = await draft(SIBLING, '10');
+
+      // A real order that really exists. Section 6.1 makes this indistinguishable from a missing
+      // one, so knowing its identifier reveals nothing.
+      expect((await readOrder(seller, theirs)).statusCode).toBe(404);
+    });
+
+    it('answers not found for an order that does not exist', async () => {
+      const response = await readOrder(seller, 'e8990000-0000-4000-8000-00000000000f');
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('answers not found for an identifier that is not a uuid', async () => {
+      expect((await readOrder(seller, 'not-a-uuid')).statusCode).toBe(404);
+    });
+
+    it('shows the number and status a confirmation gave it', async () => {
+      // The read and the write agreeing, which is what makes the detail screen coherent after
+      // the action rather than only during it.
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+
+      await confirm(seller, orderId, 'key-read-after');
+      const response = await readOrder(seller, orderId);
+
+      expect(response.json()).toMatchObject({
+        status: 'confirmed',
+        docNumber: 'SO-0001',
+      });
+    });
+
+    it('reads figures from the database rather than from anything cached', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      await ownerContext(TENANT, COMPANY);
+      await owner.query(`UPDATE sales_orders SET total = '777.0000' WHERE id = $1`, [orderId]);
+
+      expect((await readOrder(seller, orderId)).json().total).toBe('777.0000');
+    });
+  });
 });
