@@ -224,7 +224,8 @@ describe('Confirming a sales order over HTTP', () => {
       );
       await owner.query(
         `INSERT INTO role_permissions (tenant_id, company_id, role_id, permission)
-         VALUES ($1,$2,$3,'sales:confirm'), ($1,$2,$3,'sales:view'), ($1,$2,$4,'sales:view')`,
+         VALUES ($1,$2,$3,'sales:confirm'), ($1,$2,$3,'sales:view'), ($1,$2,$3,'sales:create'),
+                ($1,$2,$4,'sales:view')`,
         [TENANT, companyId, sellerRole, clerkRole],
       );
 
@@ -337,6 +338,28 @@ describe('Confirming a sales order over HTTP', () => {
       url: `/api/sales-orders/${orderId}/confirm`,
       headers: mutating(session, key === undefined ? extra : { 'idempotency-key': key, ...extra }),
     });
+
+  const createOrder = (
+    session: BrowserSession,
+    payload: Record<string, unknown>,
+    // `null` means send no header. `undefined` would trigger the default and quietly send one.
+    key: string | null = 'key-create',
+  ) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/sales-orders',
+      headers: mutating(session, key === null ? {} : { 'idempotency-key': key }),
+      payload,
+    });
+
+  /** A well formed order for the acting company, with whatever a test wants to vary. */
+  const validOrder = (overrides: Record<string, unknown> = {}) => ({
+    customerId: CUSTOMER,
+    warehouseId: WAREHOUSE,
+    orderDate: '2026-09-12',
+    lines: [{ productId: WIDGET, quantity: '3' }],
+    ...overrides,
+  });
 
   const listOrders = (session: BrowserSession, query = '') =>
     app.inject({
@@ -984,6 +1007,212 @@ describe('Confirming a sales order over HTTP', () => {
       for (const row of rows) {
         expect((await readOrder(seller, row.id)).statusCode).toBe(200);
       }
+    });
+  });
+  // -------------------------------------------------------------------------------------
+  // Creating a draft over HTTP.
+  // -------------------------------------------------------------------------------------
+
+  describe('creating a draft', () => {
+    it('answers 201 with the order the detail endpoint would describe', async () => {
+      const response = await createOrder(seller, validOrder());
+
+      expect(response.statusCode).toBe(201);
+      const created = response.json();
+      expect(created).toMatchObject({ status: 'draft', docNumber: null, currency: 'USD' });
+
+      // The same shape as reading it back, because there is one mapping rather than two.
+      const read = await readOrder(seller, created.id);
+      expect(read.json()).toEqual(created);
+    });
+
+    it('leaves it a draft with no number', async () => {
+      const created = (await createOrder(seller, validOrder())).json();
+
+      expect(created.docNumber).toBeNull();
+      expect(created.status).toBe('draft');
+      expect(await counter()).toBe('1');
+    });
+
+    it('prices the lines from master data rather than from the request', async () => {
+      // Three widgets at the catalogue price of ten. The request named neither figure.
+      const created = (await createOrder(seller, validOrder())).json();
+
+      expect(created.lines).toHaveLength(1);
+      expect(created.lines[0]).toMatchObject({ quantity: '3.000000', unitPrice: '10.000000' });
+      expect(created.total).not.toBe('0.0000');
+    });
+
+    it('refuses a price, a total or a status sent anyway', async () => {
+      // Section 14.2 rejects unknown fields rather than ignoring them, which is also the answer
+      // to section 14.3 on mass assignment.
+      for (const extra of [
+        { total: '0.0100' },
+        { status: 'confirmed' },
+        { docNumber: 'SO-9999' },
+        { companyId: SIBLING },
+      ]) {
+        expect((await createOrder(seller, validOrder(extra))).statusCode).toBe(400);
+      }
+    });
+
+    it('refuses a price smuggled onto a line', async () => {
+      const response = await createOrder(
+        seller,
+        validOrder({ lines: [{ productId: WIDGET, quantity: '3', unitPrice: '0.010000' }] }),
+      );
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('appears in the list it belongs to', async () => {
+      const created = (await createOrder(seller, validOrder())).json();
+
+      const rows = (await listOrders(seller)).json().rows as { id: string }[];
+
+      expect(rows.map((row) => row.id)).toContain(created.id);
+    });
+
+    it('can then be confirmed', async () => {
+      // The whole path in one test: create, read, confirm.
+      await stock(COMPANY, WIDGET, '100');
+      const created = (await createOrder(seller, validOrder())).json();
+
+      const confirmed = await confirm(seller, created.id, 'key-create-confirm');
+
+      expect(confirmed.statusCode).toBe(200);
+      expect(confirmed.json().docNumber).toBe('SO-0001');
+    });
+
+    it('needs sales:create, which the clerk does not hold', async () => {
+      const response = await createOrder(clerk, validOrder(), 'key-clerk-create');
+
+      expect(response.statusCode).toBe(403);
+      expect((await listOrders(seller)).json().total).toBe(0);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/sales-orders',
+        headers: { 'idempotency-key': 'key-anon-create' },
+        payload: validOrder(),
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it('requires an idempotency key', async () => {
+      const response = await createOrder(seller, validOrder(), null);
+
+      expect(response.statusCode).toBe(400);
+      expect((await listOrders(seller)).json().total).toBe(0);
+    });
+
+    it('replays a retry rather than creating a second order', async () => {
+      const first = await createOrder(seller, validOrder(), 'key-twice');
+      const second = await createOrder(seller, validOrder(), 'key-twice');
+
+      expect(second.json()).toEqual(first.json());
+      expect((await listOrders(seller)).json().total).toBe(1);
+    });
+
+    it('refuses the same key carrying a different order', async () => {
+      await createOrder(seller, validOrder(), 'key-shared-create');
+
+      const response = await createOrder(
+        seller,
+        validOrder({ orderDate: '2026-09-13' }),
+        'key-shared-create',
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect((await listOrders(seller)).json().total).toBe(1);
+    });
+  });
+
+  describe('a draft that cannot be created', () => {
+    const refusedBy = (payload: Record<string, unknown>, key = 'key-bad') => createOrder(seller, payload, key);
+
+    it('refuses a customer from a sibling company', async () => {
+      // A real customer, in a real company of the same tenant. Section 6.1 answers the same as
+      // for one that does not exist, so an identifier reveals nothing.
+      const response = await refusedBy(validOrder({ customerId: SIBLING_CUSTOMER }));
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().message).toBe('Customer not found');
+    });
+
+    it('refuses a warehouse from a sibling company', async () => {
+      const response = await refusedBy(validOrder({ warehouseId: SIBLING_WAREHOUSE }));
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().message).toBe('Warehouse not found');
+    });
+
+    it('refuses a product from a sibling company', async () => {
+      const response = await refusedBy(
+        validOrder({ lines: [{ productId: SIBLING_WIDGET, quantity: '1' }] }),
+      );
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().message).toBe('Product not found');
+    });
+
+    it('refuses master data that does not exist', async () => {
+      const response = await refusedBy(
+        validOrder({ customerId: 'e8990000-0000-4000-8000-00000000000f' }),
+      );
+
+      expect(response.statusCode).toBe(422);
+    });
+
+    it.each(['0', '-1', 'abc', '1.1234567'])('refuses a quantity of %s', async (quantity) => {
+      const response = await refusedBy(validOrder({ lines: [{ productId: WIDGET, quantity }] }));
+
+      expect(response.statusCode).toBe(422);
+    });
+
+    it('refuses an order with no lines', async () => {
+      // Established from the contract rather than assumed: section 12.2 prices a draft from its
+      // lines, and an order promising nothing is not a draft of anything.
+      const response = await refusedBy(validOrder({ lines: [] }));
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('writes nothing at all when it refuses', async () => {
+      await refusedBy(
+        validOrder({
+          lines: [
+            { productId: WIDGET, quantity: '1' },
+            { productId: SIBLING_WIDGET, quantity: '1' },
+          ],
+        }),
+      );
+
+      // Not one line, not a header, and no idempotency record to block the retry.
+      expect((await listOrders(seller)).json().total).toBe(0);
+      await ownerContext(TENANT, COMPANY);
+      const lines = await owner.query('SELECT 1 FROM sales_order_lines');
+      const records = await owner.query('SELECT 1 FROM idempotency_records');
+      expect(lines.rowCount).toBe(0);
+      expect(records.rowCount).toBe(0);
+    });
+
+    it('lets the retry after a refusal succeed', async () => {
+      await refusedBy(validOrder({ customerId: SIBLING_CUSTOMER }), 'key-retry-create');
+
+      const response = await createOrder(seller, validOrder(), 'key-retry-create');
+
+      expect(response.statusCode).toBe(201);
+    });
+
+    it('leaks no database vocabulary when it refuses', async () => {
+      const refused = await refusedBy(validOrder({ customerId: SIBLING_CUSTOMER }));
+      const body = JSON.stringify(refused.json());
+
+      expect(body).not.toMatch(/sales_orders|relation|constraint|column|pg_|select /i);
     });
   });
 });

@@ -19,7 +19,7 @@
  * mass assignment is a route with nothing to assign.
  */
 
-import { Controller, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -41,6 +41,7 @@ import {
 } from '../http/idempotency.js';
 import { IdentityService } from '../identity/identity.service.js';
 import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-order.js';
+import { SalesOrderDraftError } from './sales-order.service.js';
 import {
   SalesOrderService,
   type SalesOrderPageView,
@@ -96,6 +97,48 @@ const listQuery = z
 const many = (value: string | string[] | undefined): string[] | undefined =>
   value === undefined ? undefined : Array.isArray(value) ? value : [value];
 
+/**
+ * What creating a draft accepts.
+ *
+ * IDENTIFIERS AND QUANTITIES, AND NOTHING ELSE. There is no price, no tax rate, no total, no
+ * currency, no status and no document number, because section 3.3 makes every one of those the
+ * server's to compute from its own master data. A caller sending one is sending a field the
+ * operation does not read, and `strict` refuses it outright rather than ignoring it.
+ *
+ * There is no tenant or company either. Both come from the session, so an order in another
+ * company has no expressible request.
+ *
+ * Quantities and discounts are strings, not numbers. Section 4.3 keeps them exact, and a JSON
+ * number is a double that has already lost the sixth decimal place by the time this sees it.
+ */
+const createBody = z
+  .object({
+    customerId: z.string().uuid(),
+    warehouseId: z.string().uuid(),
+    orderDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'An order date is a calendar day'),
+    expectedDeliveryDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullish(),
+    salesRepUserId: z.string().uuid().nullish(),
+    lines: z
+      .array(
+        z
+          .object({
+            productId: z.string().uuid(),
+            quantity: z.string().min(1).max(32),
+            discountPercent: z.string().min(1).max(32).optional(),
+          })
+          .strict(),
+      )
+      .min(1, 'A sales order needs at least one line')
+      .max(500),
+  })
+  .strict();
+
+/** The endpoint dimension of a creation key's identity, per section 11. */
+const CREATE_ENDPOINT = 'POST sales-orders';
+
 /** The endpoint dimension of the key's identity, per section 11. Stable, not derived from a URL. */
 const ENDPOINT = 'POST sales-orders/:id/confirm';
 
@@ -113,6 +156,89 @@ export class SalesOrderController {
     private readonly sales: SalesOrderService,
     private readonly uow: UnitOfWork,
   ) {}
+
+  /**
+   * Creates a draft sales order.
+   *
+   * ONE TRANSACTION COVERS THE KEY, THE WRITE AND THE ANSWER. Section 11 requires the idempotency
+   * record to commit with the work it describes, so a retry after a failure does the work rather
+   * than replaying a success that never happened. The same shape as confirmation, for the same
+   * reason.
+   *
+   * IT ANSWERS WITH WHAT THE DETAIL ENDPOINT WOULD SAY. The read runs inside the creating
+   * transaction through the same method `GET :id` uses, so a client can put the response
+   * straight into the cache it would have filled by reading, and there is no second copy of the
+   * mapping to drift.
+   *
+   * IT STAYS A DRAFT. No number is allocated, no stock reserved, nothing posted. Section 12.2
+   * makes all of that confirmation's work, and confirmation is a separate endpoint.
+   */
+  @RequirePermission('sales:create')
+  @Post()
+  @HttpCode(201)
+  async create(
+    @Body() body: unknown,
+    @Req() request: FastifyRequest,
+  ): Promise<SalesOrderView> {
+    const parsed = createBody.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues[0]?.message ?? 'That is not a sales order');
+    }
+
+    const key = idempotencyKey.safeParse(request.headers[IDEMPOTENCY_HEADER]);
+    if (!key.success) {
+      throw new BadRequestException(
+        'This operation requires an Idempotency-Key header, per section 11',
+      );
+    }
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    const fingerprint = fingerprintOf(parsed.data);
+
+    try {
+      const outcome = await this.uow.inActorScope(
+        actorScope({
+          tenantId: context.tenantId,
+          companyId: context.companyId,
+          userId: principal.userId,
+        }),
+        (repositories) =>
+          runIdempotently(
+            repositories,
+            { endpoint: CREATE_ENDPOINT, key: key.data, fingerprint },
+            async () => {
+              const draft = await this.sales.createDraftIn(repositories, context.companyId, {
+                customerId: parsed.data.customerId,
+                warehouseId: parsed.data.warehouseId,
+                orderDate: parsed.data.orderDate,
+                expectedDeliveryDate: parsed.data.expectedDeliveryDate ?? null,
+                salesRepUserId: parsed.data.salesRepUserId ?? null,
+                lines: parsed.data.lines.map((line) => ({
+                  productId: line.productId,
+                  quantity: line.quantity,
+                  ...(line.discountPercent ? { discountPercent: line.discountPercent } : {}),
+                })),
+              });
+
+              const view = await this.sales.readIn(repositories, draft.order.id);
+              if (!view) {
+                // Unreachable: it was written by this transaction moments ago.
+                throw new Error('The draft vanished inside its own transaction');
+              }
+
+              return { status: 201, body: view as unknown as Record<string, unknown> };
+            },
+          ),
+      );
+
+      return outcome.response.body as unknown as SalesOrderView;
+    } catch (error) {
+      throw translate(error);
+    }
+  }
 
   /**
    * This company's sales orders, one page at a time.
@@ -260,6 +386,13 @@ function translate(error: unknown): unknown {
     if (error.reason === 'not_found') return new NotFoundException('Not found');
     if (error.reason === 'forbidden') return new ForbiddenException('Forbidden');
     // A real order in a state that cannot be confirmed. The caller may see why.
+    return new UnprocessableEntityException(error.message);
+  }
+
+  if (error instanceof SalesOrderDraftError) {
+    // Unprocessable rather than not found. The request was well formed and the endpoint exists;
+    // something it referenced is not usable. The message already says "not found" without saying
+    // whether the record is missing or another company's, which is section 6.1's point.
     return new UnprocessableEntityException(error.message);
   }
 
