@@ -160,7 +160,12 @@ export function SalesOrdersPage() {
         title="Sales orders"
         actions={
           can('sales:create') ? (
-            <Button variant="primary" icon="plus" disabled title="Creation forms are a later milestone">
+            <Button
+              variant="primary"
+              icon="plus"
+              onClick={() => navigate('/sales/orders/new')}
+              title="Creates a draft order"
+            >
               New order
             </Button>
           ) : undefined

@@ -66,6 +66,8 @@ export const queryKeys = {
   warehouses: ['inventory', 'warehouses'] as const,
   /** The real read, kept apart from the fixture one above until inventory's endpoints land. */
   warehouseOptions: ['master-data', 'warehouses'] as const,
+  customerOptions: ['master-data', 'customers'] as const,
+  productOptions: ['master-data', 'products'] as const,
   warehouseStats: ['inventory', 'warehouses', 'stats'] as const,
   adjustments: ['inventory', 'adjustments'] as const,
   adjustment: (id: string) => ['inventory', 'adjustments', id] as const,

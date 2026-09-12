@@ -24,6 +24,7 @@ import { Protected } from '@/app/Protected';
 import { DashboardPage } from '@/features/dashboard/DashboardPage';
 
 import { SalesOrdersPage } from '@/features/sales/SalesOrdersPage';
+import { SalesOrderCreatePage } from '@/features/sales/SalesOrderCreatePage';
 import { SalesOrderDetailPage } from '@/features/sales/SalesOrderDetailPage';
 import { CustomersPage } from '@/features/parties/CustomersPage';
 import { CustomerDetailPage } from '@/features/parties/CustomerDetailPage';
@@ -62,6 +63,11 @@ export function AppRoutes() {
         <Route
           path="/sales/orders"
           element={<Protected permission="sales:view"><SalesOrdersPage /></Protected>}
+        />
+        {/* Before the :id route, so "new" is not read as an identifier. */}
+        <Route
+          path="/sales/orders/new"
+          element={<Protected permission="sales:create"><SalesOrderCreatePage /></Protected>}
         />
         <Route
           path="/sales/orders/:id"

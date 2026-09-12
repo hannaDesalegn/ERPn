@@ -30,9 +30,48 @@ export interface WarehouseOption {
   isDefault: boolean;
 }
 
+/** A party the company sells to, as a picker needs it. */
+export interface CustomerOption {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+}
+
+export interface ProductOption {
+  id: string;
+  sku: string;
+  name: string;
+  /** Only a stockable product participates in inventory. */
+  type: string;
+  /** The canonical unit a quantity is entered in, per section 8.4. */
+  stockingUom: string;
+  status: string;
+}
+
+/**
+ * Only what a picker should offer.
+ *
+ * Archived records are returned by the endpoint on purpose, because the same list will feed an
+ * administration screen that has to show them. Offering one here would offer something the
+ * creation endpoint then refuses, so the filtering happens at the point of display.
+ */
+const active = <T extends { status: string }>(rows: T[]): T[] =>
+  rows.filter((row) => row.status === 'active');
+
 export const masterDataService = {
+  /** Every customer the acting company can sell to. */
+  async listCustomers(): Promise<CustomerOption[]> {
+    return active(await request<CustomerOption[]>('/customers'));
+  },
+
+  /** Every product the acting company can sell. */
+  async listProducts(): Promise<ProductOption[]> {
+    return active(await request<ProductOption[]>('/products'));
+  },
+
   /** Every warehouse in the acting company. Unpaged, because a picker reads the whole set. */
   async listWarehouses(): Promise<WarehouseOption[]> {
-    return request<WarehouseOption[]>('/warehouses');
+    return active(await request<WarehouseOption[]>('/warehouses'));
   },
 };

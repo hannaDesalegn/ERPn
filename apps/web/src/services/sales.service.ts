@@ -211,7 +211,25 @@ export interface SalesOrderRow {
   deliveredQuantity: number;
 }
 
-/** `ListParams` into the query string the endpoint accepts. */
+/**
+ * What a caller may say when creating an order.
+ *
+ * Identifiers, dates and quantities. Everything a document eventually shows that is not here is
+ * the server's, which is what makes this type short.
+ */
+export interface NewSalesOrderInput {
+  customerId: string;
+  warehouseId: string;
+  orderDate: string;
+  expectedDeliveryDate?: string;
+  lines: {
+    productId: string;
+    quantity: string;
+    discountPercent?: string;
+  }[];
+}
+
+/**  into the query string the endpoint accepts. */
 function listQueryString(params: ListParams): string {
   const query = new URLSearchParams();
 
@@ -260,6 +278,30 @@ export const salesService = {
       pageSize: page.pageSize,
       totals: { value: toMoney(page.totalValue, 'USD').amount },
     };
+  },
+
+  /**
+   * Creates a draft sales order.
+   *
+   * WHAT IS NOT IN THE REQUEST IS THE POINT. No price, no tax rate, no total, no currency, no
+   * status and no document number, because section 3.3 makes every one of those the server's to
+   * compute from its own master data. The type has nowhere to put them and the endpoint rejects
+   * an unknown field rather than ignoring it.
+   *
+   * Quantities and discounts are strings, exact to six decimal places. A JSON number is a double
+   * and would have lost the sixth before it left the browser.
+   *
+   * The key is an argument rather than made here, for the reason confirming takes one: section 11
+   * gives a key to a user intent, not to a network attempt, so a retry has to carry the same one.
+   */
+  async createOrder(input: NewSalesOrderInput, idempotencyKey: string): Promise<SalesOrderDetail> {
+    return toDetail(
+      await request<SalesOrderResponse>('/sales-orders', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(input),
+      }),
+    );
   },
 
   /**
