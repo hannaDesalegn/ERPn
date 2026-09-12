@@ -211,7 +211,17 @@ describe('Schema drift', () => {
         (table) => !associationOrAppendOnly.includes(table),
       );
 
-      expect(claimingFourthShape).toEqual(['sessions']);
+      // `idempotency_records` is the second table to claim the fourth shape, and this line
+      // changing is the reviewed decision the pin exists to force rather than a detail.
+      //
+      // It qualifies on all four conditions, and the migration checks them one by one: the row
+      // is operational state caching an HTTP response rather than a business record, section 11
+      // requires it to expire on a bounded window, last write wins is trivially the model because
+      // one transaction writes it and nothing touches it afterwards, and there is exactly one
+      // writer per row because the unique key refuses a second. The first condition is the
+      // arguable one, since the cached body contains a document number; it is a rendering of a
+      // fact that `sales_orders` holds and remains the authority for.
+      expect(claimingFourthShape).toEqual(['sessions', 'idempotency_records']);
     });
   });
 

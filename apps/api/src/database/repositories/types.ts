@@ -874,6 +874,57 @@ export interface StockReservationRepository {
   createUnderBalanceLock(input: NewStockReservation): Promise<StockReservationRecord>;
 }
 
+
+// ---------------------------------------------------------------------------------------
+// Idempotency, section 11.
+// ---------------------------------------------------------------------------------------
+
+/** A response worth replaying, exactly as the first attempt answered it. */
+export interface StoredResponse {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+export interface IdempotencyRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  userId: string;
+  endpoint: string;
+  key: string;
+  fingerprint: string;
+  /** Null only while the claiming transaction is still running. */
+  response: StoredResponse | null;
+  expiresAt: Date;
+}
+
+/**
+ * A key to claim.
+ *
+ * No tenant, company or user: all three come from the scope, so a caller cannot claim a key on
+ * somebody else's behalf or in another company.
+ */
+export interface IdempotencyClaim {
+  id: string;
+  endpoint: string;
+  key: string;
+  fingerprint: string;
+  expiresAt: Date;
+}
+
+/**
+ * The store behind section 11.
+ *
+ * No delete. Expiry is the retention job's work, and a request path that could remove its own
+ * record could replay an operation by forgetting it first.
+ */
+export interface IdempotencyRepository {
+  find(endpoint: string, key: string): Promise<IdempotencyRecord | null>;
+  /** Returns the record when this transaction now owns the key, null when someone else does. */
+  claim(input: IdempotencyClaim): Promise<IdempotencyRecord | null>;
+  complete(id: string, response: StoredResponse): Promise<void>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
@@ -885,6 +936,7 @@ export interface ScopedRepositories {
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly stockLedger: StockLedgerRepository;
   readonly stockReservations: StockReservationRepository;
+  readonly idempotency: IdempotencyRepository;
   readonly sessions: SessionRepository;
   readonly memberships: MembershipRepository;
   readonly roles: RoleRepository;
@@ -927,6 +979,7 @@ export interface SystemRepositories {
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
   readonly stockLedger: StockLedgerRepository;
   readonly stockReservations: StockReservationRepository;
+  readonly idempotency: IdempotencyRepository;
   readonly users: UserRepository;
   readonly sessions: SessionRepository;
   readonly companies: CompanyRepository;

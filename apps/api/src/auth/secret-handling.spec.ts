@@ -57,6 +57,9 @@ describe('Secret handling in the authentication files', () => {
       'authentication.service.ts',
       'csrf.guard.ts',
       'csrf.ts',
+      // Section 11's boundary lives here and holds a request digest, so it is scanned like the
+      // rest: a fingerprint is not a secret, but a file that handled one carelessly would be.
+      'idempotency.ts',
       'password-hasher.ts',
       'plugins.ts',
       'principal.ts',

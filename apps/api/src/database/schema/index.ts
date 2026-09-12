@@ -27,6 +27,12 @@ import {
   masterDataSchema,
 } from './master-data.js';
 import {
+  IDEMPOTENCY_COMPANY_PARTITIONED_TABLES,
+  IDEMPOTENCY_TENANT_SCOPED_TABLES,
+  IDEMPOTENCY_VERSION_EXEMPT_TABLES,
+  idempotencySchema,
+} from './idempotency.js';
+import {
   INVENTORY_COMPANY_PARTITIONED_TABLES,
   INVENTORY_TENANT_SCOPED_TABLES,
   INVENTORY_VERSION_EXEMPT_TABLES,
@@ -45,6 +51,7 @@ export const databaseSchema = {
   ...masterDataSchema,
   ...salesSchema,
   ...inventorySchema,
+  ...idempotencySchema,
 };
 
 /** Carry `tenant_id`, and row level security enabled and forced. */
@@ -53,6 +60,7 @@ export const TENANT_SCOPED_TABLES = [
   ...MASTER_DATA_TENANT_SCOPED_TABLES,
   ...SALES_TENANT_SCOPED_TABLES,
   ...INVENTORY_TENANT_SCOPED_TABLES,
+  ...IDEMPOTENCY_TENANT_SCOPED_TABLES,
 ] as const;
 
 /** Additionally partitioned by company, so they carry `company_id` as well. */
@@ -61,6 +69,7 @@ export const COMPANY_PARTITIONED_TABLES = [
   ...MASTER_DATA_COMPANY_PARTITIONED_TABLES,
   ...SALES_COMPANY_PARTITIONED_TABLES,
   ...INVENTORY_COMPANY_PARTITIONED_TABLES,
+  ...IDEMPOTENCY_COMPANY_PARTITIONED_TABLES,
 ] as const;
 
 /** Outside the tenant boundary, per the closed list in section 4.6. */
@@ -72,6 +81,7 @@ export const VERSION_EXEMPT_TABLES = [
   ...MASTER_DATA_VERSION_EXEMPT_TABLES,
   ...SALES_VERSION_EXEMPT_TABLES,
   ...INVENTORY_VERSION_EXEMPT_TABLES,
+  ...IDEMPOTENCY_VERSION_EXEMPT_TABLES,
 ] as const;
 
 /** Not business tables, so section 4.2 does not govern them. */
