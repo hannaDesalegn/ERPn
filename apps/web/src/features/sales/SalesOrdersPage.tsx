@@ -10,7 +10,7 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
-import type { SalesOrder } from '@/domain';
+import type { SalesOrderRow } from '@/services/sales.service';
 import { Button, Card, PageHeader, SearchInput, Select, Toolbar } from '@/components/ui';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
 import { MoneyText } from '@/components/domain/MoneyText';
@@ -47,13 +47,18 @@ export function SalesOrdersPage() {
 
   const warehouses = useQuery({ queryKey: queryKeys.warehouses, queryFn: api.inventory.listWarehouses });
 
-  const columns: Column<SalesOrder>[] = [
+  const columns: Column<SalesOrderRow>[] = [
     {
       key: 'docNumber',
       header: 'Order',
       sortable: true,
       width: '130px',
-      render: (order) => <span className="font-medium text-accent-text">{order.docNumber}</span>,
+      // A draft has no number until confirmation allocates one, per section 12.2.
+      render: (order) => (
+        <span className={order.docNumber ? 'font-medium text-accent-text' : 'text-muted'}>
+          {order.docNumber ?? 'Draft'}
+        </span>
+      ),
     },
     {
       key: 'orderDate',
@@ -73,13 +78,16 @@ export function SalesOrdersPage() {
       key: 'warehouse',
       header: 'Warehouse',
       hideBelow: 'lg',
-      render: (order) => <span className="text-secondary">{order.warehouseName}</span>,
+      render: (order) => <span className="text-secondary">{order.warehouse.name}</span>,
     },
     {
       key: 'rep',
       header: 'Rep',
       hideBelow: 'xl',
-      render: (order) => <span className="text-secondary">{order.salesRep.name}</span>,
+      // Nullable in the column, so nullable here rather than a name nobody has.
+      render: (order) => (
+        <span className="text-secondary">{order.salesRep?.name ?? 'Not assigned'}</span>
+      ),
     },
     {
       key: 'lines',
@@ -88,7 +96,7 @@ export function SalesOrdersPage() {
       numeric: true,
       hideBelow: 'md',
       width: '60px',
-      render: (order) => <span className="text-muted">{order.lines.length}</span>,
+      render: (order) => <span className="text-muted">{order.lineCount}</span>,
     },
     {
       /**
@@ -104,9 +112,12 @@ export function SalesOrdersPage() {
       hideBelow: 'md',
       width: '90px',
       render: (order) => {
-        const ordered = order.lines.reduce((a, l) => a + l.quantity, 0);
-        const delivered = order.lines.reduce((a, l) => a + l.deliveredQuantity, 0);
-        const pct = ordered === 0 ? 0 : Math.round((delivered / ordered) * 100);
+        // Summed by the database across the whole order rather than from lines sent for the
+        // purpose. The screen shows a percentage; it does not need the document.
+        const pct =
+          order.orderedQuantity === 0
+            ? 0
+            : Math.round((order.deliveredQuantity / order.orderedQuantity) * 100);
         // Delivery progress does not apply to a draft or a cancelled order, so
         // the cell stays empty rather than reporting a misleading 0%.
         if (order.status === 'draft' || order.status === 'cancelled') return null;

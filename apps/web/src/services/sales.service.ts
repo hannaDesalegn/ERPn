@@ -165,47 +165,113 @@ function toDetail(response: SalesOrderResponse): SalesOrderDetail {
   };
 }
 
+
+/** One row of the list, as the backend serves it. */
+interface SalesOrderRowResponse {
+  id: string;
+  docNumber: string | null;
+  status: string;
+  orderDate: string;
+  currency: string;
+  total: string;
+  customer: { name: string };
+  warehouse: { name: string };
+  salesRep: { name: string } | null;
+  lineCount: number;
+  orderedQuantity: string;
+  deliveredQuantity: string;
+}
+
+interface SalesOrderPageResponse {
+  rows: SalesOrderRowResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalValue: string;
+}
+
+/**
+ * A sales order as the list screen shows it.
+ *
+ * Not the detail type and not the fixture type. A list row carries a line count and two
+ * quantities where the document carries lines, because the screen renders a count and a
+ * delivered percentage and nothing else from them.
+ */
+export interface SalesOrderRow {
+  id: ID;
+  docNumber: string | null;
+  status: SalesOrderStatus;
+  orderDate: ISODate;
+  total: Money;
+  customer: { name: string };
+  warehouse: { name: string };
+  salesRep: { name: string } | null;
+  lineCount: number;
+  orderedQuantity: number;
+  deliveredQuantity: number;
+}
+
+/** `ListParams` into the query string the endpoint accepts. */
+function listQueryString(params: ListParams): string {
+  const query = new URLSearchParams();
+
+  if (params.search) query.set('search', params.search);
+  for (const [key, values] of Object.entries(params.filters ?? {})) {
+    for (const value of values ?? []) query.append(key, value);
+  }
+  if (params.sortBy) query.set('sortBy', params.sortBy);
+  if (params.sortDir) query.set('sortDir', params.sortDir);
+  if (params.page) query.set('page', String(params.page));
+  if (params.pageSize) query.set('pageSize', String(params.pageSize));
+
+  const rendered = query.toString();
+  return rendered ? `?${rendered}` : '';
+}
+
 export const salesService = {
-  async listOrders(params: ListParams = {}): Promise<Paginated<SalesOrder>> {
-    const result = queryList(db.salesOrders, params, {
-      searchFields: (so) => [so.docNumber, so.customer.name, so.salesRep.name, so.warehouseName],
-      filterAccessors: {
-        status: (so) => so.status,
-        warehouseId: (so) => so.warehouseId,
-        salesRepId: (so) => so.salesRep.id,
-        customerId: (so) => so.customer.id,
-      },
-      sortAccessors: {
-        docNumber: (so) => so.docNumber,
-        orderDate: (so) => so.orderDate,
-        customer: (so) => so.customer.name,
-        total: (so) => so.total.amount,
-        status: (so) => so.status,
-      },
-      defaultSort: { by: 'orderDate', dir: 'desc' },
-    });
+  /**
+   * One page of this company's sales orders, from the backend.
+   *
+   * The filtering, sorting, paging and the total are all the server's, which is what section 3.3
+   * means by an aggregate covering the whole filtered set: computing it here from `rows` would
+   * silently answer a different question as soon as a second page existed.
+   */
+  async listOrders(params: ListParams = {}): Promise<Paginated<SalesOrderRow>> {
+    const page = await request<SalesOrderPageResponse>(
+      `/sales-orders${listQueryString(params)}`,
+    );
 
-    // Aggregate over the filtered set, not the page. See the note in client.ts.
-    const filteredTotal = queryList(db.salesOrders, { ...params, page: 1, pageSize: Number.MAX_SAFE_INTEGER }, {
-      searchFields: (so) => [so.docNumber, so.customer.name, so.salesRep.name, so.warehouseName],
-      filterAccessors: {
-        status: (so) => so.status,
-        warehouseId: (so) => so.warehouseId,
-        salesRepId: (so) => so.salesRep.id,
-        customerId: (so) => so.customer.id,
-      },
-    }).rows.reduce((acc, so) => acc + so.total.amount, 0);
-
-    return delay({ ...result, totals: { value: filteredTotal } });
+    return {
+      rows: page.rows.map((row) => ({
+        id: row.id,
+        docNumber: row.docNumber,
+        status: row.status as SalesOrderStatus,
+        orderDate: row.orderDate,
+        total: toMoney(row.total, row.currency),
+        customer: row.customer,
+        warehouse: row.warehouse,
+        salesRep: row.salesRep,
+        lineCount: row.lineCount,
+        orderedQuantity: Number(row.orderedQuantity),
+        deliveredQuantity: Number(row.deliveredQuantity),
+      })),
+      total: page.total,
+      page: page.page,
+      pageSize: page.pageSize,
+      totals: { value: toMoney(page.totalValue, 'USD').amount },
+    };
   },
 
   /**
    * One sales order, from the backend.
    *
-   * THE FIRST READ IN THIS FILE THAT IS NOT A FIXTURE. Section 16.1 removes the fixture layer per
-   * module as endpoints land, and this is the sales order detail landing. The list beside it still
-   * reads `db.salesOrders`, because no list endpoint exists yet, so the two disagree about which
-   * orders there are until it does.
+   * Section 16.1 removes the fixture layer per module as endpoints land, and the sales order
+   * document has landed: this and the list above both read the backend, so an identifier from one
+   * is an identifier the other serves.
+   *
+   * `db.salesOrders` survives below for the dashboard's recent orders and for resolving document
+   * references, neither of which has an endpoint. Those are other modules' fixtures, not this
+   * one's.
    */
   async getOrder(id: string): Promise<SalesOrderDetail> {
     return toDetail(await request<SalesOrderResponse>(`/sales-orders/${id}`));
