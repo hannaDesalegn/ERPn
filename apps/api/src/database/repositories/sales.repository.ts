@@ -16,9 +16,10 @@
  *      types carry no field to supply them, which is the first line of defence, and this is the
  *      second. Row level security is the third.
  *
- * WHAT IS DELIBERATELY ABSENT. No confirmation, no state transition, no reservation. Section
- * 12.2 makes confirming one transaction that does six things, and most of them are not data
- * access. Putting any of them here would be the moment this layer stopped being a data layer.
+ * WHAT IS DELIBERATELY ABSENT. No confirmation and no reservation. Section 12.2 makes confirming
+ * one transaction that does six things, and most of them are not data access. Putting any of
+ * them here would be the moment this layer stopped being a data layer. `applyTransition` writes
+ * a status the caller has already decided is legal; it does not decide.
  *
  * THE ONE EXCEPTION IS NUMBER ALLOCATION, at the bottom of this file. It is step four of that
  * same transaction and it lives here because it is a row lock and an increment, which is data
@@ -38,7 +39,11 @@ import type { Scope } from '../scope.js';
 import { actingUserId } from '../scope.js';
 import { formatDocumentNumber } from '../../shared/document-number.js';
 import { requireCompanyScope } from './company-scope.js';
-import { DocumentNumberSequenceMissingError, RecordNotFoundError } from './types.js';
+import {
+  ConcurrencyConflictError,
+  DocumentNumberSequenceMissingError,
+  RecordNotFoundError,
+} from './types.js';
 import type {
   AllocatedDocumentNumber,
   DocumentNumberSequenceRecord,
@@ -51,6 +56,7 @@ import type {
   SalesOrderRecord,
   SalesOrderRepository,
   SalesOrderTotals,
+  SalesOrderTransition,
 } from './types.js';
 
 type Db = NodePgDatabase<Record<string, never>>;
@@ -125,6 +131,43 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
 
     const row = rows[0];
     if (!row) throw new Error('Insert returned no row');
+    return toSalesOrder(row);
+  }
+
+  /**
+   * Writes a status change and the document number together.
+   *
+   * The version and the expected status are both in the predicate. Under section 10.1 that is
+   * what makes two concurrent confirmations resolve to one: both read a draft at the same
+   * version, both do the work, and the second matches no row and is told the order moved under
+   * it. Section 10.2 does not list sales order rows among those needing a pessimistic lock, so
+   * this is the optimistic mechanism the contract actually asks for here.
+   */
+  async applyTransition(input: SalesOrderTransition): Promise<SalesOrderRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const rows = await this.db
+      .update(salesOrders)
+      .set({
+        status: input.status,
+        docNumber: input.docNumber,
+        version: sql`${salesOrders.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(salesOrders.id, input.id),
+          eq(salesOrders.tenantId, tenantId),
+          eq(salesOrders.companyId, companyId),
+          eq(salesOrders.version, input.expectedVersion),
+          eq(salesOrders.status, input.expectedStatus),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new ConcurrencyConflictError('Sales order', input.id);
     return toSalesOrder(row);
   }
 

@@ -55,6 +55,7 @@ export type {
   ProductRepository,
   SalesOrderRepository,
   SalesOrderTotals,
+  SalesOrderTransition,
   StockBalanceRecord,
   StockLedgerRepository,
   StockMovementRecord,

@@ -625,6 +625,28 @@ export interface SalesOrderRepository {
    * using the wrong method.
    */
   setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord>;
+  /**
+   * Moves an order to a new status and stamps the number it was given.
+   *
+   * BOTH AT ONCE, BECAUSE THE SCHEMA WILL NOT TAKE THEM SEPARATELY. Migration 0005 checks that a
+   * draft has no number and that anything else has one, so a status written without a number, or
+   * a number written while still a draft, is refused by the database.
+   *
+   * GUARDED BY THE VERSION THE CALLER READ, per section 10.1. Two confirmations of one order both
+   * see a draft, both do the work, and only the first matches; the second finds no row and is
+   * told so rather than issuing a second number for the same document. The expected status is in
+   * the predicate as well, so the guard holds even if a version is reused.
+   */
+  applyTransition(input: SalesOrderTransition): Promise<SalesOrderRecord>;
+}
+
+/** A status change and the number that goes with it, guarded by what the caller read. */
+export interface SalesOrderTransition {
+  id: string;
+  expectedVersion: number;
+  expectedStatus: string;
+  status: string;
+  docNumber: string;
 }
 
 export interface SalesOrderTotals {

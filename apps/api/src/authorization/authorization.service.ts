@@ -23,6 +23,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { actorScope, UnitOfWork } from '../database/index.js';
+import type { ScopedRepositories } from '../database/index.js';
 import type { CompanyContext } from '../identity/identity.service.js';
 import { isPermission, type Permission } from './permissions.js';
 
@@ -34,6 +35,35 @@ export interface Grants {
 }
 
 export const NO_GRANTS: Grants = { roles: [], permissions: [] };
+
+/**
+ * What one membership grants, read inside the caller's transaction.
+ *
+ * Takes repositories rather than a unit of work so that an operation which has to authorize and
+ * then write, such as confirming a sales order, can do both under one transaction. Section 12.2
+ * makes authorization step two of six that happen together or not at all, and a permission read
+ * on a connection of its own would be a decision made outside the transaction it governs.
+ *
+ * Roles and permissions come back together, from one scope, because they are two views of the
+ * same fact and reading them separately invites a state where the reported roles and the
+ * enforced permissions describe different moments.
+ */
+export async function grantsIn(
+  repositories: Pick<ScopedRepositories, 'roles'>,
+  membershipId: string,
+): Promise<Grants> {
+  const roles = await repositories.roles.listForMembership(membershipId);
+  const stored = await repositories.roles.listPermissionsForMembership(membershipId);
+
+  return {
+    roles: roles.map((role) => ({ key: role.key, name: role.name })),
+    // The second half of the two checks in section 2.7. A stored string the current release no
+    // longer defines is dropped here rather than handed to a comparison that would never match
+    // anything. The startup check is what makes it loud; this makes it safe in the meantime, and
+    // it fails closed because an unknown string grants nothing.
+    permissions: stored.filter(isPermission),
+  };
+}
 
 @Injectable()
 export class AuthorizationService {
@@ -53,19 +83,7 @@ export class AuthorizationService {
         companyId: context.companyId,
         userId,
       }),
-      async (repos) => {
-        const roles = await repos.roles.listForMembership(context.membershipId);
-        const stored = await repos.roles.listPermissionsForMembership(context.membershipId);
-
-        return {
-          roles: roles.map((role) => ({ key: role.key, name: role.name })),
-          // The second half of the two checks in section 2.7. A stored string the current
-          // release no longer defines is dropped here rather than handed to a comparison that
-          // would never match anything. The startup check is what makes it loud; this makes it
-          // safe in the meantime, and it fails closed because an unknown string grants nothing.
-          permissions: stored.filter(isPermission),
-        };
-      },
+      (repos) => grantsIn(repos, context.membershipId),
     );
   }
 
