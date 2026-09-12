@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
 import { newIdempotencyKey, refusalText } from './refusalText';
+import { ApiError } from '@/services/client';
 import type { SalesOrder } from '@/domain';
 import {
   Badge,
@@ -42,6 +43,22 @@ import {
 import { useSession } from '@/app/session';
 import { cn, formatDate, formatQuantity } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
+
+/**
+ * What to say where the history would be.
+ *
+ * A refusal here is not the page failing. The permission catalogue keeps `audit:view` apart from
+ * `sales:view`, so a person can legitimately be allowed to read this order and not allowed to read
+ * who touched it. That is a fact about their permissions and is said as one, rather than borrowed
+ * from the wording used when an action is refused.
+ */
+function historyProblem(error: unknown): string {
+  if (error instanceof ApiError && error.status === 403) {
+    return 'You do not have permission to view this history.';
+  }
+
+  return refusalText(error);
+}
 
 export function SalesOrderDetailPage() {
   const { id = '' } = useParams();
@@ -69,9 +86,17 @@ export function SalesOrderDetailPage() {
     queryFn: () => api.sales.getOrder(id),
   });
 
+  /**
+   * The history panel, now reading what the server actually recorded.
+   *
+   * This was a fixture until the endpoint existed. It is the real trail: records written in the
+   * same transaction as the change they describe, per section 7.1, read back scoped to this
+   * order. A draft answers with nothing, and nothing is what is drawn, because document audit
+   * begins at confirmation and inventing a "created" entry would be a claim the server never made.
+   */
   const auditTrail = useQuery({
-    queryKey: queryKeys.auditForDocument(id),
-    queryFn: () => api.admin.auditForDocument(id),
+    queryKey: queryKeys.salesOrderAudit(id),
+    queryFn: () => api.sales.auditTrail(id),
   });
 
   /**
@@ -90,7 +115,7 @@ export function SalesOrderDetailPage() {
       queryClient.setQueryData<SalesOrder>(queryKeys.salesOrder(id), (current) =>
         current ? { ...current, status: result.status as SalesOrder['status'], docNumber: result.docNumber } : current,
       );
-      void queryClient.invalidateQueries({ queryKey: queryKeys.auditForDocument(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.salesOrderAudit(id) });
     },
   });
 
@@ -450,7 +475,7 @@ export function SalesOrderDetailPage() {
             ) : null}
           </Card>
 
-          {/* Audit — who touched this document */}
+          {/* History: what the server recorded about this document, per section 7.1 */}
           <Card padded={false}>
             <CardHeader title="History" />
             {auditTrail.isLoading ? (
@@ -458,10 +483,21 @@ export function SalesOrderDetailPage() {
                 <Skeleton className="h-10" />
                 <Skeleton className="h-10" />
               </div>
+            ) : auditTrail.isError ? (
+              <p className="px-4 py-6 text-center text-xs text-muted">
+                {historyProblem(auditTrail.error)}
+              </p>
+            ) : auditTrail.data && auditTrail.data.length > 0 ? (
+              <ActivityTimeline events={auditTrail.data} />
             ) : (
-              <ActivityTimeline events={auditTrail.data ?? []} />
+              <p className="px-4 py-6 text-center text-xs text-muted">
+                {so.status === 'draft'
+                  ? 'History begins when this order is confirmed.'
+                  : 'No recorded activity.'}
+              </p>
             )}
           </Card>
+
 
           {/*
             ACCOUNTING CONSEQUENCE.

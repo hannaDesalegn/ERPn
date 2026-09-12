@@ -246,6 +246,59 @@ function listQueryString(params: ListParams): string {
   return rendered ? `?${rendered}` : '';
 }
 
+/**
+ * One audit record as the backend holds it.
+ *
+ * `actor` is nullable because the account that acted can be gone, and the record outlives it: the
+ * trail is append only and a removed user does not remove what they did. `actorRoles` is an array
+ * because section 7.3 captures the roles held at the time, which is a set and not a title.
+ */
+interface AuditEventResponse {
+  id: string;
+  occurredAt: string;
+  action: string;
+  summary: string;
+  actor: { id: string; name: string } | null;
+  actorRoles: string[];
+}
+
+/**
+ * What the history panel renders.
+ *
+ * The shape the timeline already reads, filled from the record rather than from a fixture. There
+ * is no `changes` field: section 6.4 narrows field level detail by default and the endpoint sends
+ * none, so there is nothing here to declare and nothing to invent.
+ */
+export interface SalesOrderAuditEvent {
+  id: ID;
+  occurredAt: string;
+  action: string;
+  summary: string;
+  actor: { name: string };
+  actorRole: string;
+}
+
+/**
+ * What to show where a name would be when the account is gone.
+ *
+ * Not a person, and not blank either. The record still names an action and a time, and saying who
+ * is unknown is truthful where inventing a name or silently attributing it to nobody is not.
+ */
+const DEPARTED_ACTOR = 'Removed user';
+
+function toAuditEvent(event: AuditEventResponse): SalesOrderAuditEvent {
+  return {
+    id: event.id,
+    occurredAt: event.occurredAt,
+    action: event.action,
+    summary: event.summary,
+    actor: { name: event.actor?.name ?? DEPARTED_ACTOR },
+    // Joined rather than rendered one by one, because the panel has a line for a role and the
+    // roles held at the time are what section 7.3 recorded. An actor with none says so.
+    actorRole: event.actorRoles.length > 0 ? event.actorRoles.join(', ') : 'No role recorded',
+  };
+}
+
 export const salesService = {
   /**
    * One page of this company's sales orders, from the backend.
@@ -362,6 +415,23 @@ export const salesService = {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
     });
+  },
+
+  /**
+   * The audit trail of one sales order.
+   *
+   * Real records, written by the server in the same transaction as the change they describe, per
+   * section 7.1. A draft answers with an empty list and that is the truth about a draft: document
+   * audit begins at confirmation, which is the lifecycle boundary section 12.2 draws, so a
+   * document that has promised nobody anything has nothing recorded about it.
+   *
+   * Scoped by the order, not by a caller supplied company. The endpoint resolves the order under
+   * the acting scope first, so an identifier belonging to another company answers as missing
+   * rather than as forbidden, per section 6.1.
+   */
+  async auditTrail(id: string): Promise<SalesOrderAuditEvent[]> {
+    const events = await request<AuditEventResponse[]>(`/sales-orders/${id}/audit-events`);
+    return events.map(toAuditEvent);
   },
 
   async listDeliveries(params: ListParams = {}): Promise<Paginated<Delivery>> {

@@ -28,7 +28,8 @@ import { SalesOrderDetailPage } from './SalesOrderDetailPage';
 
 const DRAFT_ORDER = 'so-055';
 const ORDER_URL = `/api/sales-orders/${DRAFT_ORDER}`;
-const CONFIRM_URL = `${ORDER_URL}/confirm`;
+const CONFIRM_URL = ORDER_URL + '/confirm';
+const AUDIT_URL = ORDER_URL + '/audit-events';
 
 /**
  * The order as the backend serves it.
@@ -172,10 +173,20 @@ function mount() {
   );
 }
 
+/**
+ * What the audit endpoint answers with, for the test that is not about the audit endpoint.
+ *
+ * An empty trail is the honest default here, because every order these tests mount is a draft and
+ * a draft has no recorded activity: document audit begins at confirmation. The history tests below
+ * set this to something else.
+ */
+let auditResponse: () => { status: number; body?: unknown } = () => ({ status: 200, body: [] });
+
 function renderPage(me: Me, confirm: () => { status: number; body?: unknown }) {
   stubFetch({
     'GET /api/me': () => ({ status: 200, body: me }),
     [`GET ${ORDER_URL}`]: () => ({ status: 200, body: DRAFT_RESPONSE }),
+    [`GET ${AUDIT_URL}`]: () => auditResponse(),
     [`POST ${CONFIRM_URL}`]: confirm,
   });
 
@@ -190,6 +201,7 @@ const confirmCalls = () => calls.filter((call) => call.url === CONFIRM_URL);
 
 beforeEach(() => {
   calls = [];
+  auditResponse = () => ({ status: 200, body: [] });
 });
 
 afterEach(() => {
@@ -297,6 +309,10 @@ describe('while it is running and after it finishes', () => {
     });
 
     stubFetchWith(async (input, init) => {
+      if (input === AUDIT_URL) {
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+
       if (input !== CONFIRM_URL) {
         return new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : SELLER), {
           status: 200,
@@ -430,6 +446,11 @@ describe('when the server refuses', () => {
   it('does not mark the order confirmed when the request never arrives', async () => {
     stubFetchWith((input) => {
       if (input === CONFIRM_URL) return Promise.reject(new TypeError('Failed to fetch'));
+      if (input === AUDIT_URL) {
+        return Promise.resolve(
+          new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
+        );
+      }
 
       return Promise.resolve(
         new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : SELLER), {
@@ -522,6 +543,7 @@ describe('the order it shows', () => {
         status: 200,
         body: { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0007' },
       }),
+      [`GET ${AUDIT_URL}`]: () => auditResponse(),
       [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
     });
     mount();
@@ -534,6 +556,7 @@ describe('the order it shows', () => {
     stubFetch({
       'GET /api/me': () => ({ status: 200, body: SELLER }),
       [`GET ${ORDER_URL}`]: () => ({ status: 200, body: { ...DRAFT_RESPONSE, salesRep: null } }),
+      [`GET ${AUDIT_URL}`]: () => auditResponse(),
       [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
     });
     mount();
@@ -574,5 +597,186 @@ describe('the order it shows', () => {
 
     await waitFor(() => expect(screen.getByText('SO-0001')).toBeDefined());
     expect(confirmCalls()).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The history panel.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server actually recorded about this order.
+ *
+ * One confirmation, because that is the only thing the backend writes about a sales order today:
+ * document audit begins at the confirming transaction, which is the lifecycle boundary section
+ * 12.2 draws. `actorRoles` is an array because section 7.3 captures the roles held at the time.
+ */
+const CONFIRMATION_EVENT = {
+  id: 'ae-real-1',
+  occurredAt: '2026-09-12T09:30:00.000Z',
+  action: 'sales_order_confirmed',
+  summary: 'Confirmed sales order SO-0001',
+  actor: { id: 'u-1', name: 'Sam Seller' },
+  actorRoles: ['Sales'],
+};
+
+describe('the history it shows', () => {
+  const auditCalls = () => calls.filter((call) => call.url === AUDIT_URL);
+
+  it('reads the trail from the endpoint for this order', async () => {
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() => expect(auditCalls()).toHaveLength(1));
+    expect(auditCalls()[0]?.method).toBe('GET');
+  });
+
+  it('renders the confirmation the server recorded', async () => {
+    auditResponse = () => ({ status: 200, body: [CONFIRMATION_EVENT] });
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText('Confirmed sales order SO-0001')).toBeDefined());
+  });
+
+  it('names the actor and the roles they held at the time', async () => {
+    auditResponse = () => ({
+      status: 200,
+      body: [{ ...CONFIRMATION_EVENT, actorRoles: ['Sales', 'Warehouse'] }],
+    });
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    // More than once on this page: the order names a sales rep too. The assertion is that the
+    // trail names the actor, not that the name is unique on screen.
+    await waitFor(() => expect(screen.getAllByText('Sam Seller').length).toBeGreaterThan(1));
+    // Both roles, because the record captured both. Showing one would be choosing which of two
+    // recorded facts to hide.
+    expect(screen.getByText(/Sales, Warehouse/)).toBeDefined();
+  });
+
+  it('shows no fixture activity, because it no longer reads the fixture', async () => {
+    // `so-055` has a generated trail in the fixture layer, headed by "Created sales order". The
+    // real endpoint answers a draft with nothing, so that sentence appearing would mean this
+    // screen had gone back to reading `db.auditEvents`.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() => expect(auditCalls()).toHaveLength(1));
+    expect(screen.queryByText(/Created sales order/i)).toBeNull();
+  });
+
+  it('tells the truth about a draft rather than inventing a creation entry', async () => {
+    // A draft has promised nobody anything and has no recorded activity. The panel says when
+    // history will begin, which is true, instead of drawing an entry the server never wrote.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/history begins when this order is confirmed/i)).toBeDefined(),
+    );
+  });
+
+  it('says nothing was recorded when a confirmed order has an empty trail', async () => {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: SELLER }),
+      [`GET ${ORDER_URL}`]: () => ({
+        status: 200,
+        body: { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0009' },
+      }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: [] }),
+    });
+    mount();
+    await waitForPage();
+
+    // Not the draft sentence: this order is past the boundary, so an empty trail is a different
+    // statement and gets different words.
+    await waitFor(() => expect(screen.getByText(/no recorded activity/i)).toBeDefined());
+    expect(screen.queryByText(/history begins when/i)).toBeNull();
+  });
+
+  it('draws nothing while the trail is still loading', async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+
+    stubFetchWith(async (input) => {
+      if (input === AUDIT_URL) {
+        await held;
+        return new Response(JSON.stringify([CONFIRMATION_EVENT]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : SELLER), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    mount();
+    await waitForPage();
+
+    // Nothing claimed either way while the answer is outstanding. Neither the event nor the
+    // empty state, because the screen does not know yet.
+    expect(screen.queryByText('Confirmed sales order SO-0001')).toBeNull();
+    expect(screen.queryByText(/history begins when this order is confirmed/i)).toBeNull();
+
+    release();
+    await waitFor(() => expect(screen.getByText('Confirmed sales order SO-0001')).toBeDefined());
+  });
+
+  it('says so plainly when the caller may not read the trail', async () => {
+    // `audit:view` is a separate capability from `sales:view`, so being able to read the order
+    // and not who touched it is a legitimate state rather than an error in the page.
+    auditResponse = () => ({ status: 403, body: { message: 'Forbidden', statusCode: 403 } });
+    renderPage(CLERK, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/do not have permission to view this history/i)).toBeDefined(),
+    );
+    // The order itself is still on screen. A refused panel is not a refused page.
+    expect(screen.getByText('North Supply')).toBeDefined();
+  });
+
+  it('reports a failed read instead of showing an empty trail', async () => {
+    auditResponse = () => ({ status: 500, body: { message: 'Internal Server Error' } });
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText(/could not complete the request/i)).toBeDefined());
+    expect(screen.queryByText(/no recorded activity/i)).toBeNull();
+  });
+
+  it('names a departed actor as gone rather than as somebody', async () => {
+    // The trail outlives the account. The record still says what happened and when, and the one
+    // thing it can no longer say is who, which is said rather than filled in.
+    auditResponse = () => ({ status: 200, body: [{ ...CONFIRMATION_EVENT, actor: null }] });
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText('Removed user')).toBeDefined());
+    expect(screen.getByText('Confirmed sales order SO-0001')).toBeDefined();
+  });
+
+  it('re-reads the trail after confirming, because confirming is what writes to it', async () => {
+    let confirmed = false;
+    auditResponse = () => ({ status: 200, body: confirmed ? [CONFIRMATION_EVENT] : [] });
+    renderPage(SELLER, () => {
+      confirmed = true;
+      return { status: 200, body: CONFIRMED };
+    });
+    await waitForPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/history begins when this order is confirmed/i)).toBeDefined(),
+    );
+
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(screen.getByText('Confirmed sales order SO-0001')).toBeDefined());
   });
 });

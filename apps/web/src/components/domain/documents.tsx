@@ -9,7 +9,7 @@
  */
 
 import { Link } from 'react-router-dom';
-import type { AuditEvent, DocType, DocumentRef } from '@/domain';
+import type { DocType, DocumentRef, FieldChange } from '@/domain';
 import { Icon, type IconName } from '@/components/ui';
 import { MoneyText } from './MoneyText';
 import { StatusBadge } from './StatusBadge';
@@ -257,6 +257,8 @@ const ACTION_ICONS: Record<string, IconName> = {
   created: 'plus',
   updated: 'settings',
   confirmed: 'check',
+  // What the backend actually writes for section 12.2's confirming transaction.
+  sales_order_confirmed: 'check',
   approved: 'check',
   posted: 'ledger',
   paid: 'bank',
@@ -270,11 +272,30 @@ const ACTION_ICONS: Record<string, IconName> = {
   rejected: 'close',
 };
 
+/**
+ * What the timeline actually reads off an event.
+ *
+ * Narrower than `AuditEvent`, which every fixture screen still passes and which satisfies this
+ * structurally, so none of them changed. It exists because a real audit record has no document
+ * reference and no document number to put in a `target`, and requiring one would have meant
+ * inventing both to render a panel that never looks at them.
+ */
+export interface TimelineEvent {
+  id: string;
+  occurredAt: string;
+  actor: { name: string };
+  /** The role held at the time, per section 7.3. Never looked up now. */
+  actorRole: string;
+  action: string;
+  summary: string;
+  changes?: FieldChange[] | undefined;
+}
+
 export function ActivityTimeline({
   events,
   compact = false,
 }: {
-  events: AuditEvent[];
+  events: TimelineEvent[];
   compact?: boolean;
 }) {
   if (events.length === 0) {

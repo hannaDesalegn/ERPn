@@ -54,6 +54,7 @@ export const queryKeys = {
   dashboard: ['dashboard'] as const,
   salesOrders: (params?: unknown) => ['sales', 'orders', params] as const,
   salesOrder: (id: string) => ['sales', 'orders', id] as const,
+  salesOrderAudit: (id: string) => ['sales', 'orders', id, 'audit'] as const,
   deliveries: (params?: unknown) => ['sales', 'deliveries', params] as const,
   purchaseOrders: (params?: unknown) => ['purchasing', 'orders', params] as const,
   purchaseOrder: (id: string) => ['purchasing', 'orders', id] as const,
