@@ -19,7 +19,8 @@
  * mass assignment is a route with nothing to assign.
  */
 
-import { Body, Controller, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, Req } from '@nestjs/common';
+import type { HttpException } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -39,7 +40,7 @@ import {
   IdempotencyConflictError,
   runIdempotently,
 } from '../http/idempotency.js';
-import { IdentityService } from '../identity/identity.service.js';
+import { IdentityService, type CompanyContext } from '../identity/identity.service.js';
 import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-order.js';
 import { SalesOrderDraftError } from './sales-order.service.js';
 import {
@@ -138,6 +139,17 @@ const createBody = z
 
 /** The endpoint dimension of a creation key's identity, per section 11. */
 const CREATE_ENDPOINT = 'POST sales-orders';
+
+/** The endpoint dimension of an edit key's identity, per section 11. */
+const UPDATE_ENDPOINT = 'PUT sales-orders/:id';
+
+/**
+ * What editing a draft accepts.
+ *
+ * The creation body plus the version the caller read, which section 10.1 requires. Still no
+ * price, total, status or number: an edit may change no more than creation could set.
+ */
+const updateBody = createBody.extend({ version: z.number().int().min(1) });
 
 /** The endpoint dimension of the key's identity, per section 11. Stable, not derived from a URL. */
 const ENDPOINT = 'POST sales-orders/:id/confirm';
@@ -238,6 +250,121 @@ export class SalesOrderController {
     } catch (error) {
       throw translate(error);
     }
+  }
+
+  /**
+   * Rewrites a draft sales order.
+   *
+   * ONE TRANSACTION COVERS THE KEY, THE WRITE AND THE ANSWER, as creating and confirming do. A
+   * retry after a failure does the work rather than replaying a success that never happened.
+   *
+   * THE 409 CARRIES THE ORDER, NOT A SENTENCE. Section 10.1 requires a mismatch to answer with
+   * enough information for the interface to tell the user what changed, and a bare message is not
+   * that: the screen would have to fetch the order itself to say anything useful, and would be
+   * showing a state one request newer than the one that lost. So the conflict body is the order as
+   * it now stands, read in its own transaction after the failed one rolled back.
+   *
+   * IT ANSWERS WITH WHAT THE DETAIL ENDPOINT WOULD SAY, through the same method that endpoint
+   * uses, so a client can put the response straight into the cache it would otherwise refetch.
+   */
+  @RequirePermission('sales:create')
+  @Put(':salesOrderId')
+  @HttpCode(200)
+  async update(
+    @Param('salesOrderId') salesOrderId: string,
+    @Body() body: unknown,
+    @Req() request: FastifyRequest,
+  ): Promise<SalesOrderView> {
+    if (!identifier.safeParse(salesOrderId).success) throw new NotFoundException('Not found');
+
+    const parsed = updateBody.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues[0]?.message ?? 'That is not a sales order');
+    }
+
+    const key = idempotencyKey.safeParse(request.headers[IDEMPOTENCY_HEADER]);
+    if (!key.success) {
+      throw new BadRequestException(
+        'This operation requires an Idempotency-Key header, per section 11',
+      );
+    }
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    const scope = actorScope({
+      tenantId: context.tenantId,
+      companyId: context.companyId,
+      userId: principal.userId,
+    });
+    // The order is part of the intent, so two edits of different orders under one key are two
+    // different requests rather than a replay of the first.
+    const fingerprint = fingerprintOf({ salesOrderId, ...parsed.data });
+
+    try {
+      const outcome = await this.uow.inActorScope(scope, (repositories) =>
+        runIdempotently(
+          repositories,
+          { endpoint: UPDATE_ENDPOINT, key: key.data, fingerprint },
+          async () => {
+            await this.sales.updateDraftIn(repositories, context.companyId, {
+              salesOrderId,
+              expectedVersion: parsed.data.version,
+              customerId: parsed.data.customerId,
+              warehouseId: parsed.data.warehouseId,
+              orderDate: parsed.data.orderDate,
+              expectedDeliveryDate: parsed.data.expectedDeliveryDate ?? null,
+              lines: parsed.data.lines.map((line) => ({
+                productId: line.productId,
+                quantity: line.quantity,
+                ...(line.discountPercent ? { discountPercent: line.discountPercent } : {}),
+              })),
+            });
+
+            const view = await this.sales.readIn(repositories, salesOrderId);
+            if (!view) throw new Error('The draft vanished inside its own transaction');
+
+            return { status: 200, body: view as unknown as Record<string, unknown> };
+          },
+        ),
+      );
+
+      return outcome.response.body as unknown as SalesOrderView;
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        throw await this.conflict(context, principal.userId, salesOrderId, error.message);
+      }
+
+      throw translate(error);
+    }
+  }
+
+  /**
+   * A 409 that says what the order is now.
+   *
+   * Read after the failed transaction rolled back, so it is the state that won rather than the
+   * state that lost. Section 10.1 wants the interface to explain what changed, and it cannot do
+   * that from a message alone.
+   *
+   * If the order has gone entirely, which a concurrent delete would do and nothing currently can,
+   * the answer becomes a not found rather than a conflict about something absent.
+   */
+  private async conflict(
+    context: CompanyContext,
+    actorUserId: string,
+    salesOrderId: string,
+    message: string,
+  ): Promise<HttpException> {
+    const current = await this.sales.getById(context, actorUserId, salesOrderId);
+    if (!current) return new NotFoundException('Not found');
+
+    return new ConflictException({
+      statusCode: 409,
+      message,
+      /** What the order is now, so the screen can show the difference rather than guess at it. */
+      current,
+    });
   }
 
   /**

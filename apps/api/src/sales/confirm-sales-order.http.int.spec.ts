@@ -1215,4 +1215,200 @@ describe('Confirming a sales order over HTTP', () => {
       expect(body).not.toMatch(/sales_orders|relation|constraint|column|pg_|select /i);
     });
   });
+  // -------------------------------------------------------------------------------------
+  // Editing a draft over HTTP.
+  // -------------------------------------------------------------------------------------
+
+  describe('editing a draft', () => {
+    const editOrder = (
+      session: BrowserSession,
+      orderId: string,
+      payload: Record<string, unknown>,
+      key: string | null = 'key-edit',
+    ) =>
+      app.inject({
+        method: 'PUT',
+        url: `/api/sales-orders/${orderId}`,
+        headers: mutating(session, key === null ? {} : { 'idempotency-key': key }),
+        payload,
+      });
+
+    /** The created order, plus a body that edits it to two widgets. */
+    const openDraft = async () => {
+      const created = (await createOrder(seller, validOrder(), 'key-open')).json();
+      return {
+        id: created.id as string,
+        body: {
+          ...validOrder({ lines: [{ productId: WIDGET, quantity: '2' }] }),
+          version: created.version as number,
+        },
+      };
+    };
+
+    it('answers 200 with the order the detail endpoint would describe', async () => {
+      const draft = await openDraft();
+
+      const response = await editOrder(seller, draft.id, draft.body);
+
+      expect(response.statusCode).toBe(200);
+      const edited = response.json();
+      expect(edited).toMatchObject({ id: draft.id, status: 'draft', docNumber: null });
+      expect((await readOrder(seller, draft.id)).json()).toEqual(edited);
+    });
+
+    it('rewrites the lines and advances the version by one', async () => {
+      const draft = await openDraft();
+
+      const edited = (await editOrder(seller, draft.id, draft.body)).json();
+
+      expect(edited.lines).toHaveLength(1);
+      expect(edited.lines[0].quantity).toBe('2.000000');
+      expect(edited.version).toBe(draft.body.version + 1);
+    });
+
+    it('prices the new lines from master data', async () => {
+      const draft = await openDraft();
+
+      const edited = (await editOrder(seller, draft.id, draft.body)).json();
+
+      expect(edited.lines[0].unitPrice).toBe('10.000000');
+      expect(edited.total).not.toBe('0.0000');
+    });
+
+    it('refuses a status, number or total sent alongside', async () => {
+      const draft = await openDraft();
+
+      for (const extra of [{ status: 'confirmed' }, { docNumber: 'SO-9999' }, { total: '0.0100' }]) {
+        const response = await editOrder(seller, draft.id, { ...draft.body, ...extra });
+        expect(response.statusCode).toBe(400);
+      }
+    });
+
+    it('requires the version, because section 10.1 does', async () => {
+      const draft = await openDraft();
+      const { version, ...withoutVersion } = draft.body;
+
+      const response = await editOrder(seller, draft.id, withoutVersion);
+
+      expect(response.statusCode).toBe(400);
+      expect(version).toBeGreaterThan(0);
+    });
+
+    it('requires an idempotency key', async () => {
+      const draft = await openDraft();
+
+      expect((await editOrder(seller, draft.id, draft.body, null)).statusCode).toBe(400);
+    });
+
+    it('needs sales:create, which the clerk does not hold', async () => {
+      const draft = await openDraft();
+
+      expect((await editOrder(clerk, draft.id, draft.body, 'key-clerk-edit')).statusCode).toBe(403);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const draft = await openDraft();
+
+      const response = await app.inject({
+        method: 'PUT',
+        url: `/api/sales-orders/${draft.id}`,
+        headers: { 'idempotency-key': 'key-anon-edit' },
+        payload: draft.body,
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it('answers not found for an order in a sibling company', async () => {
+      const theirs = await draft(SIBLING, '10');
+      const mine = await openDraft();
+
+      const response = await editOrder(seller, theirs, { ...mine.body, version: 1 }, 'key-sibling-edit');
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().message).toBe('Sales order not found');
+    });
+
+    it('replays a retry rather than editing twice', async () => {
+      const draft = await openDraft();
+
+      const first = await editOrder(seller, draft.id, draft.body, 'key-retry-edit');
+      const second = await editOrder(seller, draft.id, draft.body, 'key-retry-edit');
+
+      expect(second.json()).toEqual(first.json());
+      // One increment, not two, which is what a second real edit would have produced.
+      expect((await readOrder(seller, draft.id)).json().version).toBe(draft.body.version + 1);
+    });
+
+    it('answers 409 with the order as it now stands when the version has moved', async () => {
+      // Section 10.1 wants enough for the interface to explain what changed, so the body carries
+      // the current order rather than a sentence the screen would have to go and interpret.
+      const draft = await openDraft();
+      await editOrder(seller, draft.id, draft.body, 'key-first-edit');
+
+      const response = await editOrder(seller, draft.id, draft.body, 'key-stale-edit');
+
+      expect(response.statusCode).toBe(409);
+      const body = response.json();
+      expect(body.message).toMatch(/modified by someone else/);
+      expect(body.current).toMatchObject({ id: draft.id, status: 'draft' });
+      expect(body.current.version).toBe(draft.body.version + 1);
+    });
+
+    it('leaves the winner untouched when the loser is refused', async () => {
+      const draft = await openDraft();
+      await editOrder(seller, draft.id, draft.body, 'key-winner');
+      const won = (await readOrder(seller, draft.id)).json();
+
+      await editOrder(
+        seller,
+        draft.id,
+        { ...draft.body, lines: [{ productId: WIDGET, quantity: '99' }] },
+        'key-loser',
+      );
+
+      expect((await readOrder(seller, draft.id)).json()).toEqual(won);
+    });
+
+    it('refuses an order that has been confirmed', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const draft = await openDraft();
+      await confirm(seller, draft.id, 'key-confirm-then-edit');
+
+      const response = await editOrder(seller, draft.id, draft.body, 'key-after-confirm');
+
+      // Unprocessable rather than conflict: the version is beside the point, the document has
+      // left the state where editing means anything.
+      expect([409, 422]).toContain(response.statusCode);
+      expect((await readOrder(seller, draft.id)).json().status).toBe('confirmed');
+    });
+
+    it('leaks no database vocabulary when it refuses', async () => {
+      const draft = await openDraft();
+
+      const response = await editOrder(
+        seller,
+        draft.id,
+        { ...draft.body, customerId: SIBLING_CUSTOMER },
+        'key-leak-edit',
+      );
+      const body = JSON.stringify(response.json());
+
+      expect(body).not.toMatch(/sales_orders|relation|constraint|column|pg_|select /i);
+    });
+
+    it('writes nothing when it refuses', async () => {
+      const draft = await openDraft();
+      const before = (await readOrder(seller, draft.id)).json();
+
+      await editOrder(
+        seller,
+        draft.id,
+        { ...draft.body, customerId: SIBLING_CUSTOMER },
+        'key-nothing-edit',
+      );
+
+      expect((await readOrder(seller, draft.id)).json()).toEqual(before);
+    });
+  });
 });
