@@ -26,9 +26,50 @@ import { SessionProvider } from '@/app/session';
 import type { Me } from '@/services/session.service';
 import { SalesOrderDetailPage } from './SalesOrderDetailPage';
 
-/** A draft in the fixture set, which is what the confirm action is gated on. */
 const DRAFT_ORDER = 'so-055';
-const CONFIRM_URL = `/api/sales-orders/${DRAFT_ORDER}/confirm`;
+const ORDER_URL = `/api/sales-orders/${DRAFT_ORDER}`;
+const CONFIRM_URL = `${ORDER_URL}/confirm`;
+
+/**
+ * The order as the backend serves it.
+ *
+ * A draft, so it has no document number: section 12.2 allocates one in the confirming
+ * transaction. Figures are decimal strings because that is what the server keeps, and turning
+ * them into what this application renders is the service layer's job.
+ */
+const DRAFT_RESPONSE = {
+  id: DRAFT_ORDER,
+  docNumber: null,
+  status: 'draft',
+  orderDate: '2026-09-11',
+  expectedDeliveryDate: '2026-09-20',
+  currency: 'USD',
+  customer: { id: 'cust-1', name: 'North Supply' },
+  warehouse: { id: 'wh-1', name: 'Main depot' },
+  salesRep: { id: 'u-1', name: 'Sam Seller' },
+  subtotal: '100.0000',
+  taxTotal: '10.0000',
+  total: '110.0000',
+  version: 1,
+  lines: [
+    {
+      id: 'line-1',
+      lineNumber: 1,
+      productId: 'p-1',
+      productSku: 'SKU-W',
+      productName: 'Widget at order time',
+      quantity: '10.000000',
+      unitPrice: '10.000000',
+      discountPercent: '0.000000',
+      taxRatePercent: '10.000000',
+      lineSubtotal: '100.0000',
+      lineTax: '10.0000',
+      lineTotal: '110.0000',
+      deliveredQuantity: '0.000000',
+      invoicedQuantity: '0.000000',
+    },
+  ],
+};
 
 const SELLER: Me = {
   user: { id: 'u-1', email: 'sam@example.test', name: 'Sam Seller' },
@@ -134,6 +175,7 @@ function mount() {
 function renderPage(me: Me, confirm: () => { status: number; body?: unknown }) {
   stubFetch({
     'GET /api/me': () => ({ status: 200, body: me }),
+    [`GET ${ORDER_URL}`]: () => ({ status: 200, body: DRAFT_RESPONSE }),
     [`POST ${CONFIRM_URL}`]: confirm,
   });
 
@@ -256,7 +298,7 @@ describe('while it is running and after it finishes', () => {
 
     stubFetchWith(async (input, init) => {
       if (input !== CONFIRM_URL) {
-        return new Response(JSON.stringify(SELLER), {
+        return new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : SELLER), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -290,14 +332,14 @@ describe('while it is running and after it finishes', () => {
     renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
     await waitForPage();
 
-    // The fixture order is a draft numbered SO-2026-0055. After confirming, the screen must show
-    // what the server issued, not what the fixture said.
-    expect(screen.getByText('SO-2026-0055')).toBeDefined();
+    // A draft has no number until it is confirmed. After confirming, the screen must show what
+    // the server issued rather than anything worked out here.
+    expect(screen.getByText('Draft order')).toBeDefined();
 
     fireEvent.click(confirmButton());
 
     await waitFor(() => expect(screen.getByText('SO-0001')).toBeDefined());
-    expect(screen.queryByText('SO-2026-0055')).toBeNull();
+    expect(screen.queryByText('Draft order')).toBeNull();
   });
 
   it('stops offering confirmation once the order is confirmed', async () => {
@@ -381,7 +423,7 @@ describe('when the server refuses', () => {
     await refusal(500, 'Internal Server Error');
 
     // Still a draft, still numbered as the fixture had it, and the action still offered.
-    expect(screen.getByText('SO-2026-0055')).toBeDefined();
+    expect(screen.getByText('Draft order')).toBeDefined();
     expect(screen.getByRole('button', { name: /confirm order/i })).toBeDefined();
   });
 
@@ -390,7 +432,7 @@ describe('when the server refuses', () => {
       if (input === CONFIRM_URL) return Promise.reject(new TypeError('Failed to fetch'));
 
       return Promise.resolve(
-        new Response(JSON.stringify(SELLER), {
+        new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : SELLER), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
@@ -404,7 +446,7 @@ describe('when the server refuses', () => {
 
     const alert = await waitFor(() => screen.getByRole('alert'));
     expect(alert.textContent).toMatch(/check your connection/i);
-    expect(screen.getByText('SO-2026-0055')).toBeDefined();
+    expect(screen.getByText('Draft order')).toBeDefined();
   });
 });
 
@@ -437,5 +479,100 @@ describe('the fixture placeholder', () => {
 
     await waitFor(() => expect(confirmCalls()).toHaveLength(1));
     expect(confirmCalls()[0]?.url).toBe(CONFIRM_URL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The read path.
+// ---------------------------------------------------------------------------
+
+describe('the order it shows', () => {
+  const orderCalls = () => calls.filter((call) => call.url === ORDER_URL);
+
+  it('comes from the endpoint rather than the fixture layer', async () => {
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    expect(orderCalls()).toHaveLength(1);
+    expect(orderCalls()[0]?.method).toBe('GET');
+  });
+
+  it('renders what the server sent, not what the fixtures hold', async () => {
+    // `so-055` exists in the fixture set with its own customer, warehouse and number. Every one
+    // of these is the served value instead, which is what says the fixture read is gone.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    expect(screen.getByText('North Supply')).toBeDefined();
+    expect(screen.getByText('Main depot')).toBeDefined();
+    expect(screen.getByText('Widget at order time')).toBeDefined();
+  });
+
+  it('heads a draft with a word rather than a number it does not have', async () => {
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    expect(screen.getByText('Draft order')).toBeDefined();
+  });
+
+  it('shows the number once the server has issued one', async () => {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: SELLER }),
+      [`GET ${ORDER_URL}`]: () => ({
+        status: 200,
+        body: { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0007' },
+      }),
+      [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
+    });
+    mount();
+    await waitForPage();
+
+    expect(screen.getByText('SO-0007')).toBeDefined();
+  });
+
+  it('says who the rep is, and says so plainly when there is none', async () => {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: SELLER }),
+      [`GET ${ORDER_URL}`]: () => ({ status: 200, body: { ...DRAFT_RESPONSE, salesRep: null } }),
+      [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
+    });
+    mount();
+    await waitForPage();
+
+    // Nullable in the column and nullable on screen. A fabricated name would be a person who
+    // does not exist appearing on a document.
+    expect(screen.getByText('Not assigned')).toBeDefined();
+  });
+
+  it('turns the decimal strings on the wire into the money it renders', async () => {
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    // 110.0000 on the wire, rendered as currency rather than as the string it arrived as.
+    expect(screen.queryByText('110.0000')).toBeNull();
+    expect(screen.getAllByText(/110.00/).length).toBeGreaterThan(0);
+  });
+
+  it('shows a refused read as an error rather than an empty document', async () => {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: SELLER }),
+      [`GET ${ORDER_URL}`]: () => ({ status: 404, body: { message: 'Not found' } }),
+    });
+    mount();
+
+    await waitFor(() => expect(screen.getByText(/something went wrong/i)).toBeDefined());
+    expect(screen.queryByRole('button', { name: /confirm order/i })).toBeNull();
+  });
+
+  it('still confirms after the read path changed', async () => {
+    // The pair this capability exists to make coherent: the screen reads the real order and the
+    // action that changes it still works against the same backend.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(screen.getByText('SO-0001')).toBeDefined());
+    expect(confirmCalls()).toHaveLength(1);
   });
 });

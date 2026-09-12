@@ -138,13 +138,18 @@ export function SalesOrderDetailPage() {
             <Link to="/sales/orders" className="text-muted hover:text-primary" aria-label="Back to sales orders">
               <Icon name="chevronLeft" className="size-4" />
             </Link>
-            {so.docNumber}
+            {/*
+              A draft has no number. Section 12.2 allocates one in the confirming transaction, so
+              until then there is nothing to quote and the word is the honest heading.
+            */}
+            {so.docNumber ?? 'Draft order'}
             <StatusBadge status={so.status} />
           </span>
         }
         subtitle={
           <>
-            {so.customer.name} · ordered {formatDate(so.orderDate)} · {so.salesRep.name}
+            {so.customer.name} · ordered {formatDate(so.orderDate)}
+            {so.salesRep && ` · ${so.salesRep.name}`}
           </>
         }
         meta={
@@ -220,8 +225,10 @@ export function SalesOrderDetailPage() {
               </Field>
               <Field label="Order date">{formatDate(so.orderDate)}</Field>
               <Field label="Expected delivery">{formatDate(so.expectedDeliveryDate)}</Field>
-              <Field label="Warehouse">{so.warehouseName}</Field>
-              <Field label="Sales rep">{so.salesRep.name}</Field>
+              <Field label="Warehouse">{so.warehouse.name}</Field>
+              {/* Nullable in the column, so nullable here. "Not assigned" is the wording the customer
+                  screen already uses for the same absence. */}
+              <Field label="Sales rep">{so.salesRep?.name ?? 'Not assigned'}</Field>
               <Field label="Payment terms">
                 {customer.data?.paymentTerms.label ?? <Skeleton className="h-4 w-16" />}
               </Field>
@@ -325,24 +332,20 @@ export function SalesOrderDetailPage() {
                     <MoneyText value={so.total} strong />
                   </dd>
                 </div>
-                {so.invoicedTotal.amount > 0 && (
-                  <div className="flex justify-between pt-1 text-xs">
-                    <dt className="text-muted">Invoiced</dt>
-                    <dd>
-                      <MoneyText value={so.invoicedTotal} muted />
-                    </dd>
-                  </div>
-                )}
+                {/*
+                  NO INVOICED TOTAL. It needs an invoices table, which does not exist. Showing a
+                  zero would be a figure nothing stands behind, so the row is absent until there
+                  is something to put in it.
+                */}
               </dl>
             </div>
           </Card>
 
-          {so.notes && (
-            <Card>
-              <p className="text-2xs font-medium tracking-wide text-muted uppercase">Notes</p>
-              <p className="mt-1 text-sm text-secondary">{so.notes}</p>
-            </Card>
-          )}
+          {/*
+            NO NOTES. A sales order has no notes column, so there is nothing to show. The card is
+            gone rather than rendered empty, which is what this project's empty value rules ask
+            for when a concept does not apply rather than merely being unset.
+          */}
         </div>
 
         {/* ---------------- Connections ---------------- */}
@@ -356,7 +359,13 @@ export function SalesOrderDetailPage() {
               title="Related documents"
               action={<Icon name="link" className="size-3.5 text-muted" />}
             />
-            <RelatedDocuments links={so.links} />
+            {/*
+              EMPTY UNTIL THE LINK TABLE EXISTS. Section 12.4 stores document relationships in a
+              link table and derives this view by query, and is explicit that the stored array the
+              fixtures carry is the second source of truth it forbids. So nothing is passed rather
+              than a graph assembled here.
+            */}
+            <RelatedDocuments links={[]} />
           </Card>
 
           {/* Customer context — credit exposure is a sales decision, so it

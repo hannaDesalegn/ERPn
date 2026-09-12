@@ -1,6 +1,14 @@
 /** Sales cycle reads: orders, deliveries, and the documents around them. */
 
-import type { Delivery, DocumentRef, SalesOrder } from '@/domain';
+import type {
+  Delivery,
+  DocumentRef,
+  ID,
+  ISODate,
+  Money,
+  SalesOrder,
+  SalesOrderStatus,
+} from '@/domain';
 import { db } from '@/mocks/db';
 import {
   delay,
@@ -23,6 +31,138 @@ export interface ConfirmationResult {
   status: string;
   docNumber: string;
   reservations: number;
+}
+
+
+/**
+ * A sales order as the backend holds it.
+ *
+ * Exactly the endpoint's response. Figures are decimal strings because contract section 4.3 keeps
+ * them exact on the server, and converting them to whatever this application renders is this
+ * layer's job rather than a component's.
+ */
+interface SalesOrderResponse {
+  id: string;
+  docNumber: string | null;
+  status: string;
+  orderDate: string;
+  expectedDeliveryDate: string | null;
+  currency: string;
+  customer: { id: string; name: string };
+  warehouse: { id: string; name: string };
+  salesRep: { id: string; name: string } | null;
+  subtotal: string;
+  taxTotal: string;
+  total: string;
+  version: number;
+  lines: {
+    id: string;
+    lineNumber: number;
+    productId: string;
+    productSku: string;
+    productName: string;
+    quantity: string;
+    unitPrice: string;
+    discountPercent: string;
+    taxRatePercent: string;
+    lineSubtotal: string;
+    lineTax: string;
+    lineTotal: string;
+    deliveredQuantity: string;
+    invoicedQuantity: string;
+  }[];
+}
+
+/**
+ * What the detail screen works with.
+ *
+ * Deliberately not the fixture `SalesOrder` type. That one carries an invoiced total, a links
+ * array and notes, and the backend has no source for any of them: invoices have no table, section
+ * 12.4 is explicit that a stored links array is the wrong answer, and notes are not modelled.
+ * Declaring them here and filling them with zeroes would put three claims in the type that
+ * nothing stands behind.
+ *
+ * `docNumber` and `salesRep` are nullable because the columns are. A draft has no number until
+ * section 12.2's confirming transaction allocates one.
+ */
+export interface SalesOrderDetail {
+  id: string;
+  docNumber: string | null;
+  status: SalesOrderStatus;
+  orderDate: ISODate;
+  expectedDeliveryDate?: ISODate;
+  currency: Money['currency'];
+  customer: { id: ID; name: string };
+  warehouse: { id: ID; name: string };
+  salesRep: { id: ID; name: string } | null;
+  subtotal: Money;
+  taxTotal: Money;
+  total: Money;
+  /** Section 10.1's token, carried so a later edit can say what it read. */
+  version: number;
+  lines: SalesOrderDetailLine[];
+}
+
+export interface SalesOrderDetailLine {
+  id: ID;
+  lineNumber: number;
+  productId: ID;
+  productSku: string;
+  productName: string;
+  quantity: number;
+  unitPrice: Money;
+  discountPercent: number;
+  taxRatePercent: number;
+  lineSubtotal: Money;
+  lineTax: Money;
+  lineTotal: Money;
+  deliveredQuantity: number;
+  invoicedQuantity: number;
+}
+
+/**
+ * A decimal string into the minor units this application counts in.
+ *
+ * The server keeps four decimal places and this rounds to two, which is the representation
+ * section 16.1 already records as temporary pending a shared contracts package. Rounding here
+ * rather than anywhere else keeps the loss in one place, at the seam, where it can be removed.
+ */
+function toMoney(value: string, currency: string): Money {
+  return { amount: Math.round(Number(value) * 100), currency: currency as Money['currency'] };
+}
+
+function toDetail(response: SalesOrderResponse): SalesOrderDetail {
+  return {
+    id: response.id,
+    docNumber: response.docNumber,
+    status: response.status as SalesOrderStatus,
+    orderDate: response.orderDate,
+    ...(response.expectedDeliveryDate ? { expectedDeliveryDate: response.expectedDeliveryDate } : {}),
+    currency: response.currency as Money['currency'],
+    customer: response.customer,
+    warehouse: response.warehouse,
+    salesRep: response.salesRep,
+    subtotal: toMoney(response.subtotal, response.currency),
+    taxTotal: toMoney(response.taxTotal, response.currency),
+    total: toMoney(response.total, response.currency),
+    version: response.version,
+    lines: response.lines.map((line) => ({
+      id: line.id,
+      lineNumber: line.lineNumber,
+      productId: line.productId,
+      productSku: line.productSku,
+      productName: line.productName,
+      quantity: Number(line.quantity),
+      unitPrice: toMoney(line.unitPrice, response.currency),
+      discountPercent: Number(line.discountPercent),
+      taxRatePercent: Number(line.taxRatePercent),
+      lineSubtotal: toMoney(line.lineSubtotal, response.currency),
+      lineTax: toMoney(line.lineTax, response.currency),
+      lineTotal: toMoney(line.lineTotal, response.currency),
+      deliveredQuantity: Number(line.deliveredQuantity),
+      invoicedQuantity: Number(line.invoicedQuantity),
+    })),
+  };
 }
 
 export const salesService = {
@@ -59,10 +199,16 @@ export const salesService = {
     return delay({ ...result, totals: { value: filteredTotal } });
   },
 
-  async getOrder(id: string): Promise<SalesOrder> {
-    const order = db.salesOrders.find((so) => so.id === id);
-    if (!order) throw new NotFoundError('Sales order', id);
-    return delay(order);
+  /**
+   * One sales order, from the backend.
+   *
+   * THE FIRST READ IN THIS FILE THAT IS NOT A FIXTURE. Section 16.1 removes the fixture layer per
+   * module as endpoints land, and this is the sales order detail landing. The list beside it still
+   * reads `db.salesOrders`, because no list endpoint exists yet, so the two disagree about which
+   * orders there are until it does.
+   */
+  async getOrder(id: string): Promise<SalesOrderDetail> {
+    return toDetail(await request<SalesOrderResponse>(`/sales-orders/${id}`));
   },
 
   /**
