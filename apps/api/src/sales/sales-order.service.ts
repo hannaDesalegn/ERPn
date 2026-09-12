@@ -110,6 +110,57 @@ export class SalesOrderDraftError extends Error {
   }
 }
 
+
+/**
+ * A sales order as a screen needs it: the document, its lines, and the names it points at.
+ *
+ * EXACTLY WHAT THE DATABASE HOLDS, AND NOTHING ELSE. Three things the current detail screen shows
+ * have no source here and are deliberately absent rather than invented. The invoiced total needs
+ * an invoices table that does not exist. The related documents need the link table section 12.4
+ * describes, which also does not exist and which that section is explicit must not be a stored
+ * array. Notes are not modelled on a sales order at all. Section 16.1 removes the fixture layer
+ * per module as endpoints land, and those three belong to modules whose endpoints have not.
+ *
+ * FIGURES ARE DECIMAL STRINGS, as section 4.3 requires. Converting them to whatever a client
+ * renders is the client's boundary, not this one.
+ */
+export interface SalesOrderView {
+  id: string;
+  /** Null while the order is a draft. Allocated at confirmation, per section 10.4. */
+  docNumber: string | null;
+  status: string;
+  orderDate: string;
+  expectedDeliveryDate: string | null;
+  currency: string;
+  customer: { id: string; name: string };
+  warehouse: { id: string; name: string };
+  /** Null when nobody was recorded, which the column permits. */
+  salesRep: { id: string; name: string } | null;
+  subtotal: string;
+  taxTotal: string;
+  total: string;
+  /** Section 10.1's optimistic locking token, so a later edit can carry what it read. */
+  version: number;
+  lines: SalesOrderLineView[];
+}
+
+export interface SalesOrderLineView {
+  id: string;
+  lineNumber: number;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: string;
+  unitPrice: string;
+  discountPercent: string;
+  taxRatePercent: string;
+  lineSubtotal: string;
+  lineTax: string;
+  lineTotal: string;
+  deliveredQuantity: string;
+  invoicedQuantity: string;
+}
+
 @Injectable()
 export class SalesOrderService {
   constructor(private readonly uow: UnitOfWork) {}
@@ -204,6 +255,86 @@ export class SalesOrderService {
         // rows. Summing what this function computed would agree with itself even if the write
         // had rounded differently.
         return { order: await this.total(repos, order, lines), lines };
+      },
+    );
+  }
+
+  /**
+   * Reads one sales order with everything a detail screen shows.
+   *
+   * ONE TRANSACTION, AND EVERY READ INSIDE IT IS SCOPED. The order, its lines, the customer, the
+   * warehouse and the sales rep are read under one actor scope, so an order belonging to another
+   * company is not refused here; it is not among the rows any of these queries can return.
+   * Section 6.3 calls that the shape to have, because a check performed after the rows come back
+   * is only correct while every caller remembers to perform it.
+   *
+   * NULL RATHER THAN NOT FOUND, per section 6.1. A missing order, another company's order and
+   * another tenant's order are one answer, so knowing a UUID reveals nothing about what exists
+   * elsewhere.
+   *
+   * THE NAMES ARE READ, NOT SNAPSHOTTED. A customer's current name is what a screen should show,
+   * unlike the product name on a line, which section 3.4 snapshots because it is part of what was
+   * agreed. The line carries its own copy for that reason and this does not second guess it.
+   */
+  async getById(
+    context: CompanyContext,
+    actorUserId: string,
+    salesOrderId: string,
+  ): Promise<SalesOrderView | null> {
+    return this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        // The acting user, as every other operation here takes it. The membership beside it in
+        // the context identifies the grant, not the person.
+        userId: actorUserId,
+      }),
+      async (repos) => {
+        const order = await repos.salesOrders.findById(salesOrderId);
+        if (!order) return null;
+
+        // One at a time. A unit of work is one connection, so parallel reads would be pipelined
+        // onto it and the driver deprecates that.
+        const lines = await repos.salesOrderLines.listForOrder(order.id);
+        const customer = await repos.customers.findById(order.customerId);
+        const warehouse = await repos.warehouses.findById(order.warehouseId);
+        const salesRep = order.salesRepUserId
+          ? await repos.users.findById(order.salesRepUserId)
+          : null;
+
+        return {
+          id: order.id,
+          docNumber: order.docNumber,
+          status: order.status,
+          orderDate: order.orderDate,
+          expectedDeliveryDate: order.expectedDeliveryDate,
+          currency: order.currency,
+          // A composite foreign key pins both to this company, so a missing row here would mean
+          // the key was dropped rather than that the reference was wrong.
+          customer: { id: order.customerId, name: customer?.name ?? '' },
+          warehouse: { id: order.warehouseId, name: warehouse?.name ?? '' },
+          salesRep: salesRep ? { id: salesRep.id, name: salesRep.name } : null,
+          subtotal: order.subtotal,
+          taxTotal: order.taxTotal,
+          total: order.total,
+          version: order.version,
+          lines: lines.map((line) => ({
+            id: line.id,
+            lineNumber: line.lineNumber,
+            productId: line.productId,
+            productSku: line.productSku,
+            productName: line.productName,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discountPercent: line.discountPercent,
+            taxRatePercent: line.taxRatePercent,
+            lineSubtotal: line.lineSubtotal,
+            lineTax: line.lineTax,
+            lineTotal: line.lineTotal,
+            deliveredQuantity: line.deliveredQuantity,
+            invoicedQuantity: line.invoicedQuantity,
+          })),
+        };
       },
     );
   }
