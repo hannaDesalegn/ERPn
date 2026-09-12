@@ -12,6 +12,7 @@ import { SalesModule } from './sales/sales.module.js';
 import { AccessGuard } from './http/access.guard.js';
 import { CsrfGuard } from './http/csrf.guard.js';
 import { IdempotencyExpiryService } from './http/idempotency-expiry.service.js';
+import { MasterDataModule } from './master-data/master-data.module.js';
 import { RouteDeclarationAudit } from './http/route-declarations.js';
 
 /**
@@ -33,6 +34,7 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     IdentityModule,
     AdministrationModule,
     CompaniesModule,
+    MasterDataModule,
     SalesModule,
     HealthModule,
   ],
