@@ -225,6 +225,7 @@ describe('Confirming a sales order over HTTP', () => {
       await owner.query(
         `INSERT INTO role_permissions (tenant_id, company_id, role_id, permission)
          VALUES ($1,$2,$3,'sales:confirm'), ($1,$2,$3,'sales:view'), ($1,$2,$3,'sales:create'),
+                ($1,$2,$3,'audit:view'),
                 ($1,$2,$4,'sales:view')`,
         [TENANT, companyId, sellerRole, clerkRole],
       );
@@ -1409,6 +1410,142 @@ describe('Confirming a sales order over HTTP', () => {
       );
 
       expect((await readOrder(seller, draft.id)).json()).toEqual(before);
+    });
+  });
+  // -------------------------------------------------------------------------------------
+  // The trail for one order.
+  // -------------------------------------------------------------------------------------
+
+  describe('the audit trail of an order', () => {
+    const auditFor = (session: BrowserSession, orderId: string) =>
+      app.inject({
+        method: 'GET',
+        url: `/api/sales-orders/${orderId}/audit-events`,
+        headers: { cookie: session.cookie },
+      });
+
+    it('is empty for a draft, because document audit begins at confirmation', async () => {
+      // Not a gap. A draft has promised nobody anything, so there is nothing recorded about it
+      // and the answer is an empty list rather than an invented entry.
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await auditFor(seller, orderId);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual([]);
+    });
+
+    it('shows the confirmation once the order is confirmed', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-audit-confirm');
+
+      const trail = (await auditFor(seller, orderId)).json();
+
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'sales_order_confirmed',
+        summary: 'Confirmed sales order SO-0001',
+      });
+    });
+
+    it('names the person who did it', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-audit-actor');
+
+      const [event] = (await auditFor(seller, orderId)).json();
+
+      // Resolved from the identifier the record stored, so the trail says who rather than which
+      // uuid. Section 17.1: every operation writes a record naming that actor.
+      expect(event.actor).toEqual({ id: SELLER, name: 'Seller' });
+    });
+
+    it('records when it happened', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      const before = Date.now();
+      await confirm(seller, orderId, 'key-audit-when');
+
+      const [event] = (await auditFor(seller, orderId)).json();
+
+      expect(Date.parse(event.occurredAt)).toBeGreaterThanOrEqual(before - 1000);
+    });
+
+    it('sends no field level detail, which section 6.4 narrows by default', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-audit-narrow');
+
+      const [event] = (await auditFor(seller, orderId)).json();
+
+      expect(event).not.toHaveProperty('changes');
+      expect(event).not.toHaveProperty('ipAddress');
+      expect(event).not.toHaveProperty('userAgent');
+      expect(event).not.toHaveProperty('requestId');
+    });
+
+    it('shows only this order, not the company trail', async () => {
+      // Two confirmed orders. Each trail names its own, which an entity scoped read must and a
+      // company wide one would not.
+      await stock(COMPANY, WIDGET, '100');
+      const first = await draft(COMPANY, '10');
+      const second = await draft(COMPANY, '10');
+      await confirm(seller, first, 'key-audit-first');
+      await confirm(seller, second, 'key-audit-second');
+
+      const trail = (await auditFor(seller, second)).json();
+
+      expect(trail).toHaveLength(1);
+      expect(trail[0].summary).toBe('Confirmed sales order SO-0002');
+    });
+
+    it('answers not found for an order in a sibling company', async () => {
+      // A real order that really exists. The trail is addressed by identifier, so the order is
+      // resolved under the acting scope first and that is what refuses this.
+      const theirs = await draft(SIBLING, '10');
+
+      expect((await auditFor(seller, theirs)).statusCode).toBe(404);
+    });
+
+    it('answers not found for an order that does not exist', async () => {
+      const response = await auditFor(seller, 'e8990000-0000-4000-8000-00000000000f');
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('answers not found for an identifier that is not a uuid', async () => {
+      expect((await auditFor(seller, 'not-a-uuid')).statusCode).toBe(404);
+    });
+
+    it('refuses a signed-in caller without audit:view', async () => {
+      // The clerk can see the order and not who did what to it, which is the distinction the
+      // catalogue already draws between sales:view and audit:view.
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-audit-clerk');
+
+      expect((await readOrder(clerk, orderId)).statusCode).toBe(200);
+      expect((await auditFor(clerk, orderId)).statusCode).toBe(403);
+    });
+
+    it('refuses a caller with no session', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/sales-orders/${orderId}/audit-events`,
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it('leaks no database vocabulary when it refuses', async () => {
+      const theirs = await draft(SIBLING, '10');
+
+      const body = JSON.stringify((await auditFor(seller, theirs)).json());
+
+      expect(body).not.toMatch(/audit_events|sales_orders|relation|column|pg_|select /i);
     });
   });
 });

@@ -223,6 +223,25 @@ export type ReadRepositories = Pick<
   'salesOrders' | 'salesOrderLines' | 'customers' | 'warehouses' | 'users'
 >;
 
+/**
+ * One entry in a sales order's trail.
+ *
+ * Narrow on purpose, like the company wide audit read beside it. The structured `changes` are
+ * not sent: section 6.4 puts field level restriction at serialisation and makes the narrow shape
+ * the safe default, and the events a sales order has are state transitions, which the domain
+ * model already says carry no field diff.
+ */
+export interface SalesOrderAuditView {
+  id: string;
+  occurredAt: string;
+  action: string;
+  summary: string;
+  /** Resolved from the identifier the record stored. Null if the account is gone. */
+  actor: { id: string; name: string } | null;
+  /** The roles the actor held at the time, per section 7.3. Never looked up now. */
+  actorRoles: string[];
+}
+
 @Injectable()
 export class SalesOrderService {
   constructor(private readonly uow: UnitOfWork) {}
@@ -498,6 +517,60 @@ export class SalesOrderService {
       pageSize: query.pageSize,
       totalValue: page.totalValue,
     };
+  }
+
+  /**
+   * The trail for one sales order.
+   *
+   * THE ORDER IS RESOLVED FIRST, and that is the access control. A trail is read by entity
+   * identifier, and an identifier alone says nothing about who may see it, so this asks the
+   * scoped order read whether the caller can see the document before asking what happened to it.
+   * Another company's order is not found, exactly as the detail read answers, per section 6.1.
+   *
+   * A DRAFT HAS AN EMPTY TRAIL, and that is the ruling rather than a gap. Document audit begins
+   * at confirmation, so an order nobody has confirmed has nothing recorded about it and the
+   * answer is an empty list rather than an invented entry.
+   *
+   * The actor name is resolved now and the roles are not. Section 7.3 is explicit: the role is
+   * captured as it was, because a record reporting today's role for last year's action is
+   * misleading. A name is not that: it identifies the same person however they are now called.
+   */
+  async auditTrail(
+    context: CompanyContext,
+    actorUserId: string,
+    salesOrderId: string,
+  ): Promise<SalesOrderAuditView[] | null> {
+    return this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        userId: actorUserId,
+      }),
+      async (repos) => {
+        const order = await repos.salesOrders.findById(salesOrderId);
+        if (!order) return null;
+
+        const events = await repos.audit.listForEntity('sales_order', order.id);
+
+        const trail: SalesOrderAuditView[] = [];
+        for (const event of events) {
+          // One at a time. A unit of work is one connection, so parallel reads would be
+          // pipelined onto it and the driver deprecates that.
+          const actor = event.actorUserId ? await repos.users.findById(event.actorUserId) : null;
+
+          trail.push({
+            id: event.id,
+            occurredAt: event.occurredAt.toISOString(),
+            action: event.action,
+            summary: event.summary,
+            actor: actor ? { id: actor.id, name: actor.name } : null,
+            actorRoles: event.actorRoles ?? [],
+          });
+        }
+
+        return trail;
+      },
+    );
   }
 
   /**

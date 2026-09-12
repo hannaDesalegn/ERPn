@@ -45,6 +45,7 @@ import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-
 import { SalesOrderDraftError } from './sales-order.service.js';
 import {
   SalesOrderService,
+  type SalesOrderAuditView,
   type SalesOrderPageView,
   type SalesOrderView,
 } from './sales-order.service.js';
@@ -365,6 +366,35 @@ export class SalesOrderController {
       /** What the order is now, so the screen can show the difference rather than guess at it. */
       current,
     });
+  }
+
+  /**
+   * What has happened to one sales order.
+   *
+   * `audit:view` rather than `sales:view`, because the catalogue already separates seeing a
+   * document from seeing who did what to it, and a salesperson holding the first does not
+   * necessarily hold the second.
+   *
+   * The order is resolved under the acting scope before its trail is read, so another company's
+   * order answers not found exactly as the detail read does. A trail is addressed by entity
+   * identifier, and an identifier alone decides nothing about who may see it.
+   */
+  @RequirePermission('audit:view')
+  @Get(':salesOrderId/audit-events')
+  async auditEvents(
+    @Param('salesOrderId') salesOrderId: string,
+    @Req() request: FastifyRequest,
+  ): Promise<SalesOrderAuditView[]> {
+    if (!identifier.safeParse(salesOrderId).success) throw new NotFoundException('Not found');
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    const trail = await this.sales.auditTrail(context, principal.userId, salesOrderId);
+    if (!trail) throw new NotFoundException('Not found');
+
+    return trail;
   }
 
   /**
