@@ -19,7 +19,7 @@
  * mass assignment is a route with nothing to assign.
  */
 
-import { Controller, Get, Param, Post, Req, HttpCode } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -41,7 +41,11 @@ import {
 } from '../http/idempotency.js';
 import { IdentityService } from '../identity/identity.service.js';
 import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-order.js';
-import { SalesOrderService, type SalesOrderView } from './sales-order.service.js';
+import {
+  SalesOrderService,
+  type SalesOrderPageView,
+  type SalesOrderView,
+} from './sales-order.service.js';
 import { IllegalSalesOrderTransitionError } from './sales-order-status.js';
 
 /**
@@ -62,6 +66,36 @@ const idempotencyKey = z
 
 const identifier = z.string().uuid();
 
+/**
+ * What the list accepts, and the shape of every refusal it does not make.
+ *
+ * Strict, so an unknown field is rejected rather than ignored, per section 14.2. There is
+ * deliberately no tenant or company here: both come from the session, and accepting either would
+ * be offering a caller a way to ask about somebody else's orders.
+ *
+ * The sort key is a union rather than a string. A column name taken from a query string is the
+ * usual way a list endpoint becomes an injection, and the repository is written so that it cannot
+ * receive one.
+ *
+ * The page size is bounded here rather than in the service, because this is where the untrusted
+ * number arrives. A caller asking for a million rows gets a hundred.
+ */
+const listQuery = z
+  .object({
+    search: z.string().max(200).optional(),
+    status: z.union([z.string(), z.array(z.string())]).optional(),
+    warehouseId: z.union([z.string(), z.array(z.string())]).optional(),
+    sortBy: z.enum(['docNumber', 'orderDate', 'customer', 'total', 'status']).default('orderDate'),
+    sortDir: z.enum(['asc', 'desc']).default('desc'),
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  })
+  .strict();
+
+/** A repeated query parameter arrives as an array and a single one as a string. */
+const many = (value: string | string[] | undefined): string[] | undefined =>
+  value === undefined ? undefined : Array.isArray(value) ? value : [value];
+
 /** The endpoint dimension of the key's identity, per section 11. Stable, not derived from a URL. */
 const ENDPOINT = 'POST sales-orders/:id/confirm';
 
@@ -79,6 +113,38 @@ export class SalesOrderController {
     private readonly sales: SalesOrderService,
     private readonly uow: UnitOfWork,
   ) {}
+
+  /**
+   * This company's sales orders, one page at a time.
+   *
+   * The company comes from the session and appears nowhere in the query, so there is no parameter
+   * through which a caller could ask about another one. `sales:view`, the same capability the
+   * detail read needs, because a list and the documents in it are the same thing to look at.
+   */
+  @RequirePermission('sales:view')
+  @Get()
+  async list(
+    @Query() rawQuery: unknown,
+    @Req() request: FastifyRequest,
+  ): Promise<SalesOrderPageView> {
+    const parsed = listQuery.safeParse(rawQuery ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException('That is not a query this list understands');
+    }
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    const { search, status, warehouseId, ...rest } = parsed.data;
+
+    return this.sales.list(context, principal.userId, {
+      ...rest,
+      ...(search ? { search } : {}),
+      ...(many(status) ? { statuses: many(status) } : {}),
+      ...(many(warehouseId) ? { warehouseIds: many(warehouseId) } : {}),
+    });
+  }
 
   /**
    * One sales order, as the detail screen shows it.

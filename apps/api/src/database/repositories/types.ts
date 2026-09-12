@@ -608,9 +608,65 @@ export interface NewDocumentNumberSequence {
  * no state transition here. Section 12.2 makes confirmation one transaction doing six things,
  * and five of them are not data access.
  */
+
+/**
+ * What the sales order list screen asks for.
+ *
+ * Every field is either a closed set or a bounded value, and `sortBy` in particular is a union
+ * rather than a column name. Section 14.2 allows no SQL assembled by concatenation, and a sort
+ * key taken from a query string is exactly where that rule is usually broken.
+ */
+export interface SalesOrderPageQuery {
+  /** Free text over the document number, the customer and the rep. */
+  search?: string;
+  statuses?: string[];
+  warehouseIds?: string[];
+  sortBy: 'docNumber' | 'orderDate' | 'customer' | 'total' | 'status';
+  sortDir: 'asc' | 'desc';
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * One row of that list.
+ *
+ * The line figures are aggregates rather than the lines themselves. The screen shows a count and
+ * a delivered percentage, so sending every line of every order would be shipping a document set
+ * to render two numbers.
+ */
+export interface SalesOrderPageRow {
+  id: string;
+  docNumber: string | null;
+  status: string;
+  orderDate: string;
+  currency: string;
+  total: string;
+  customerName: string;
+  warehouseName: string;
+  salesRepName: string | null;
+  lineCount: number;
+  orderedQuantity: string;
+  deliveredQuantity: string;
+}
+
+/**
+ * A page, and the aggregates over everything the filter matched.
+ *
+ * `total` and `totalValue` cover the whole filtered set rather than this page. Summing the
+ * visible rows would give a different and wrong answer the moment a second page exists, which is
+ * the class of mistake that makes a finance screen untrustworthy.
+ */
+export interface SalesOrderPage {
+  rows: SalesOrderPageRow[];
+  total: number;
+  totalValue: string;
+}
+
 export interface SalesOrderRepository {
   findById(id: string): Promise<SalesOrderRecord | null>;
   listForCompany(): Promise<SalesOrderRecord[]>;
+  /** One page of the list screen, with the aggregates over everything the filter matched. */
+  listPage(query: SalesOrderPageQuery): Promise<SalesOrderPage>;
   create(input: NewSalesOrder): Promise<SalesOrderRecord>;
   /**
    * Writes the document totals, which are a projection of the lines.

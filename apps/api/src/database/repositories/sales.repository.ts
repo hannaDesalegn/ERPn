@@ -27,9 +27,11 @@
  * is not here.
  */
 
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { customers, warehouses } from '../schema/master-data.js';
+import { users } from '../schema/identity.js';
 import {
   documentNumberSequences,
   salesOrderLines,
@@ -55,6 +57,8 @@ import type {
   SalesOrderLineRepository,
   SalesOrderRecord,
   SalesOrderRepository,
+  SalesOrderPage,
+  SalesOrderPageQuery,
   SalesOrderTotals,
   SalesOrderTransition,
 } from './types.js';
@@ -169,6 +173,118 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
     const row = rows[0];
     if (!row) throw new ConcurrencyConflictError('Sales order', input.id);
     return toSalesOrder(row);
+  }
+
+
+  /**
+   * One page of the sales order list, with the aggregates the screen shows beside it.
+   *
+   * THE SCOPE IS IN THE PREDICATE, like every other read here, so another company's orders are
+   * not filtered out afterwards; they are not among the rows the query can return.
+   *
+   * NOTHING FROM THE CALLER REACHES THE SQL AS SQL. The sort key is a union mapped to a column
+   * here, the direction is one of two functions, and the search term and the filter lists are
+   * bound as parameters. Section 14.2 forbids SQL assembled by concatenation, and a list endpoint
+   * taking a sort column from a query string is the usual place that rule dies.
+   *
+   * THE ORDER IS TOTAL. Whatever the caller sorts by, the identifier breaks the tie, so two rows
+   * with the same date cannot swap between page one and page two and leave an order invisible.
+   * A list without a tiebreaker is not stable under pagination even though it looks sorted.
+   *
+   * THREE STATEMENTS RATHER THAN ONE. The page, and a count and a sum over everything the filter
+   * matched. The aggregates deliberately do not come from the rows: section 3.3's list contract
+   * says they cover the whole filtered set, and computing them from a page would quietly answer a
+   * different question.
+   */
+  async listPage(query: SalesOrderPageQuery): Promise<SalesOrderPage> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const matches = and(
+      eq(salesOrders.tenantId, tenantId),
+      eq(salesOrders.companyId, companyId),
+      ...(query.statuses && query.statuses.length > 0
+        ? [inArray(salesOrders.status, query.statuses)]
+        : []),
+      ...(query.warehouseIds && query.warehouseIds.length > 0
+        ? [inArray(salesOrders.warehouseId, query.warehouseIds)]
+        : []),
+      ...(query.search
+        ? [
+            sql`(
+              coalesce(${salesOrders.docNumber}, '') ilike ${'%' + query.search + '%'}
+              or ${customers.name} ilike ${'%' + query.search + '%'}
+              or coalesce(${users.name}, '') ilike ${'%' + query.search + '%'}
+            )`,
+          ]
+        : []),
+    );
+
+    const sortable = {
+      docNumber: salesOrders.docNumber,
+      orderDate: salesOrders.orderDate,
+      customer: customers.name,
+      total: salesOrders.total,
+      status: salesOrders.status,
+    } as const;
+
+    const direction = query.sortDir === 'asc' ? asc : desc;
+    const primary = direction(sortable[query.sortBy]);
+
+    const rows = await this.db
+      .select({
+        id: salesOrders.id,
+        docNumber: salesOrders.docNumber,
+        status: salesOrders.status,
+        orderDate: salesOrders.orderDate,
+        currency: salesOrders.currency,
+        total: salesOrders.total,
+        customerName: customers.name,
+        warehouseName: warehouses.name,
+        salesRepName: users.name,
+        lineCount: sql<number>`(
+          select count(*)::int from ${salesOrderLines}
+          where ${salesOrderLines.salesOrderId} = ${salesOrders.id}
+        )`,
+        // Summed from the lines rather than carried on the header, because no column holds them
+        // and deriving rather than storing is the habit section 8.1 sets for quantities.
+        orderedQuantity: sql<string>`coalesce((
+          select sum(${salesOrderLines.quantity}) from ${salesOrderLines}
+          where ${salesOrderLines.salesOrderId} = ${salesOrders.id}
+        ), 0)::text`,
+        deliveredQuantity: sql<string>`coalesce((
+          select sum(${salesOrderLines.deliveredQuantity}) from ${salesOrderLines}
+          where ${salesOrderLines.salesOrderId} = ${salesOrders.id}
+        ), 0)::text`,
+      })
+      .from(salesOrders)
+      .innerJoin(customers, eq(customers.id, salesOrders.customerId))
+      .innerJoin(warehouses, eq(warehouses.id, salesOrders.warehouseId))
+      .leftJoin(users, eq(users.id, salesOrders.salesRepUserId))
+      .where(matches)
+      // The tiebreaker. See the note above.
+      .orderBy(primary, asc(salesOrders.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+
+    const [aggregates] = await this.db
+      .select({
+        total: sql<number>`count(*)::int`,
+        totalValue: sql<string>`coalesce(sum(${salesOrders.total}), 0)::text`,
+      })
+      .from(salesOrders)
+      .innerJoin(customers, eq(customers.id, salesOrders.customerId))
+      .leftJoin(users, eq(users.id, salesOrders.salesRepUserId))
+      .where(matches);
+
+    return {
+      rows: rows.map((row) => ({
+        ...row,
+        salesRepName: row.salesRepName ?? null,
+        lineCount: Number(row.lineCount),
+      })),
+      total: Number(aggregates?.total ?? 0),
+      totalValue: aggregates?.totalValue ?? '0',
+    };
   }
 
   async setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord> {

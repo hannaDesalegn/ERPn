@@ -39,6 +39,7 @@ import type {
   SalesOrderRecord,
 } from '../database/index.js';
 import type { CompanyContext } from '../identity/identity.service.js';
+import type { SalesOrderPageQuery } from '../database/index.js';
 import {
   add,
   compare,
@@ -161,6 +162,40 @@ export interface SalesOrderLineView {
   invoicedQuantity: string;
 }
 
+
+/**
+ * One page of the sales order list.
+ *
+ * The envelope is the one the rest of this application's collection reads already use: the rows,
+ * the count and the aggregate over everything the filter matched rather than over the page. A
+ * caller summing the visible rows would get a different and wrong answer the moment a second page
+ * existed, which is the mistake a finance screen cannot afford.
+ */
+export interface SalesOrderPageView {
+  rows: SalesOrderRowView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** The value of every order the filter matched, not of this page. */
+  totalValue: string;
+}
+
+export interface SalesOrderRowView {
+  id: string;
+  docNumber: string | null;
+  status: string;
+  orderDate: string;
+  currency: string;
+  total: string;
+  customer: { name: string };
+  warehouse: { name: string };
+  salesRep: { name: string } | null;
+  /** What the screen shows instead of the lines: a count and the two quantities. */
+  lineCount: number;
+  orderedQuantity: string;
+  deliveredQuantity: string;
+}
+
 @Injectable()
 export class SalesOrderService {
   constructor(private readonly uow: UnitOfWork) {}
@@ -257,6 +292,49 @@ export class SalesOrderService {
         return { order: await this.total(repos, order, lines), lines };
       },
     );
+  }
+
+  /**
+   * One page of this company's sales orders.
+   *
+   * Thin on purpose. The query is the repository's and the scope is the unit of work's; what is
+   * here is the shape a screen reads. Bounds on the page size belong at the HTTP boundary, where
+   * the untrusted number arrives.
+   */
+  async list(
+    context: CompanyContext,
+    actorUserId: string,
+    query: SalesOrderPageQuery,
+  ): Promise<SalesOrderPageView> {
+    const page = await this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        userId: actorUserId,
+      }),
+      (repos) => repos.salesOrders.listPage(query),
+    );
+
+    return {
+      rows: page.rows.map((row) => ({
+        id: row.id,
+        docNumber: row.docNumber,
+        status: row.status,
+        orderDate: row.orderDate,
+        currency: row.currency,
+        total: row.total,
+        customer: { name: row.customerName },
+        warehouse: { name: row.warehouseName },
+        salesRep: row.salesRepName ? { name: row.salesRepName } : null,
+        lineCount: row.lineCount,
+        orderedQuantity: row.orderedQuantity,
+        deliveredQuantity: row.deliveredQuantity,
+      })),
+      total: page.total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalValue: page.totalValue,
+    };
   }
 
   /**

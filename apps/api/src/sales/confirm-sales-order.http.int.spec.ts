@@ -338,6 +338,13 @@ describe('Confirming a sales order over HTTP', () => {
       headers: mutating(session, key === undefined ? extra : { 'idempotency-key': key, ...extra }),
     });
 
+  const listOrders = (session: BrowserSession, query = '') =>
+    app.inject({
+      method: 'GET',
+      url: `/api/sales-orders${query}`,
+      headers: { cookie: session.cookie },
+    });
+
   const readOrder = (session: BrowserSession, orderId: string) =>
     app.inject({
       method: 'GET',
@@ -834,6 +841,149 @@ describe('Confirming a sales order over HTTP', () => {
       await owner.query(`UPDATE sales_orders SET total = '777.0000' WHERE id = $1`, [orderId]);
 
       expect((await readOrder(seller, orderId)).json().total).toBe('777.0000');
+    });
+  });
+// -------------------------------------------------------------------------------------
+  // Listing orders over HTTP.
+  // -------------------------------------------------------------------------------------
+
+  describe('listing orders', () => {
+    it('returns only this company orders, with what the list screen renders', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await listOrders(seller);
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.total).toBe(1);
+      expect(body.rows[0]).toMatchObject({
+        id: orderId,
+        status: 'draft',
+        docNumber: null,
+        customer: { name: 'Buyer' },
+        warehouse: { name: 'Main' },
+        lineCount: 1,
+        orderedQuantity: '10.000000',
+        deliveredQuantity: '0.000000',
+      });
+    });
+
+    it('excludes a sibling company orders', async () => {
+      await draft(COMPANY, '10');
+      await draft(SIBLING, '10');
+
+      const body = (await listOrders(seller)).json();
+
+      // One, not two. The sibling's order is a real row in the same tenant.
+      expect(body.total).toBe(1);
+      expect(body.rows).toHaveLength(1);
+    });
+
+    it('shows each company only its own, under the same call', async () => {
+      const mine = await draft(COMPANY, '10');
+      const theirs = await draft(SIBLING, '10');
+
+      const ids = (await listOrders(seller)).json().rows.map((row: { id: string }) => row.id);
+
+      expect(ids).toContain(mine);
+      expect(ids).not.toContain(theirs);
+    });
+
+    it('answers an empty page rather than an error when there is nothing', async () => {
+      const body = (await listOrders(seller)).json();
+
+      expect(body).toMatchObject({ rows: [], total: 0, page: 1, totalValue: '0' });
+    });
+
+    it('totals the whole filtered set rather than the page', async () => {
+      // Three orders, a page of two. The value has to cover all three, because a user filtering a
+      // list wants the total of what they filtered to, not of what happens to be visible.
+      for (let index = 0; index < 3; index += 1) await draft(COMPANY, '10');
+      await ownerContext(TENANT, COMPANY);
+      await owner.query(`UPDATE sales_orders SET total = '100.0000'`);
+
+      const body = (await listOrders(seller, '?pageSize=2')).json();
+
+      expect(body.rows).toHaveLength(2);
+      expect(body.total).toBe(3);
+      expect(body.totalValue).toBe('300.0000');
+    });
+
+    it('orders deterministically, so pages do not overlap', async () => {
+      // Every order here shares an order date, which is exactly when an unstable sort loses a row
+      // between pages. The identifier is the tiebreaker that stops it.
+      for (let index = 0; index < 5; index += 1) await draft(COMPANY, '10');
+
+      const first = (await listOrders(seller, '?pageSize=2&page=1')).json();
+      const second = (await listOrders(seller, '?pageSize=2&page=2')).json();
+      const third = (await listOrders(seller, '?pageSize=2&page=3')).json();
+
+      const seen = [...first.rows, ...second.rows, ...third.rows].map((r: { id: string }) => r.id);
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it('filters by status without leaving the company', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const confirmed = await draft(COMPANY, '10');
+      await draft(COMPANY, '10');
+      await confirm(seller, confirmed, 'key-list-filter');
+
+      const body = (await listOrders(seller, '?status=confirmed')).json();
+
+      expect(body.total).toBe(1);
+      expect(body.rows[0]?.id).toBe(confirmed);
+    });
+
+    it('searches the document number and the customer', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const numbered = await draft(COMPANY, '10');
+      await draft(COMPANY, '10');
+      await confirm(seller, numbered, 'key-list-search');
+
+      expect((await listOrders(seller, '?search=SO-0001')).json().total).toBe(1);
+      expect((await listOrders(seller, '?search=Buyer')).json().total).toBe(2);
+      expect((await listOrders(seller, '?search=nobody')).json().total).toBe(0);
+    });
+
+    it('needs only sales:view', async () => {
+      await draft(COMPANY, '10');
+
+      expect((await listOrders(clerk)).statusCode).toBe(200);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const response = await app.inject({ method: 'GET', url: '/api/sales-orders' });
+
+      expect([401, 403]).toContain(response.statusCode);
+    });
+
+    it('refuses a query it does not understand rather than ignoring it', async () => {
+      // Section 14.2: unknown fields rejected rather than ignored. A caller naming a company is
+      // the case that matters, and it is refused rather than quietly dropped.
+      expect((await listOrders(seller, '?companyId=' + SIBLING)).statusCode).toBe(400);
+      expect((await listOrders(seller, '?sortBy=total_secret')).statusCode).toBe(400);
+      expect((await listOrders(seller, '?pageSize=100000')).statusCode).toBe(400);
+    });
+
+    it('leaks no database vocabulary when it refuses', async () => {
+      const body = JSON.stringify((await listOrders(seller, '?sortBy=; drop table')).json());
+
+      expect(body).not.toMatch(/sales_orders|relation|column|select |pg_/i);
+    });
+
+    it('returns identifiers the detail route actually serves', async () => {
+      // The regression this whole work package exists for. Every identifier the list hands back
+      // must be one the detail endpoint answers, or the navigation is broken again.
+      await draft(COMPANY, '10');
+      await draft(COMPANY, '10');
+
+      const rows = (await listOrders(seller)).json().rows as { id: string }[];
+
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect((await readOrder(seller, row.id)).statusCode).toBe(200);
+      }
     });
   });
 });
