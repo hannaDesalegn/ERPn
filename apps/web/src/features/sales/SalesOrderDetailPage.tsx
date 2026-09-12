@@ -13,9 +13,12 @@
  * other screens.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
+import { ApiError } from '@/services/client';
+import type { SalesOrder } from '@/domain';
 import {
   Badge,
   Button,
@@ -44,6 +47,22 @@ export function SalesOrderDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const { can } = useSession();
+  const queryClient = useQueryClient();
+
+  /**
+   * One idempotency key per intent, not per attempt.
+   *
+   * Contract section 11 is explicit about this: pressing the button once produces one key however
+   * many times the request is transmitted. So the key is made when this order is opened and reused
+   * by every retry, which is what lets the server tell a repeated intent from a new one. Making a
+   * fresh key inside the click handler would turn each retry into a new intent and defeat the
+   * mechanism the backend just built.
+   *
+   * Adjusted during render rather than in an effect, which is React's documented way to reset
+   * state when a prop changes: navigating to a different order is a different intent.
+   */
+  const [intent, setIntent] = useState(() => ({ orderId: id, key: newIdempotencyKey() }));
+  if (intent.orderId !== id) setIntent({ orderId: id, key: newIdempotencyKey() });
 
   const order = useQuery({
     queryKey: queryKeys.salesOrder(id),
@@ -53,6 +72,26 @@ export function SalesOrderDetailPage() {
   const auditTrail = useQuery({
     queryKey: queryKeys.auditForDocument(id),
     queryFn: () => api.admin.auditForDocument(id),
+  });
+
+  /**
+   * Confirming, which is the first write this application makes for real.
+   *
+   * Everything that decides the outcome happens on the server: the transition is checked against
+   * its table, the capability is re-read, every line is reserved under a row lock, the number is
+   * allocated and the audit record written, all in one transaction. None of that is repeated
+   * here, and the button being visible decides nothing, per section 6.7.
+   */
+  const confirmation = useMutation({
+    mutationFn: () => api.sales.confirmOrder(id, intent.key),
+    onSuccess: (result) => {
+      // From the server's answer, never worked out locally. The document number in particular is
+      // section 10.4's to issue, and a number invented here would be a second one.
+      queryClient.setQueryData<SalesOrder>(queryKeys.salesOrder(id), (current) =>
+        current ? { ...current, status: result.status as SalesOrder['status'], docNumber: result.docNumber } : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.auditForDocument(id) });
+    },
   });
 
   const customer = useQuery({
@@ -126,8 +165,14 @@ export function SalesOrderDetailPage() {
               workflow rather than just refusing.
             */}
             {can('sales:confirm') && isDraft && (
-              <Button variant="primary" icon="check" disabled title="Write actions arrive with the backend">
-                Confirm order
+              <Button
+                variant="primary"
+                icon="check"
+                onClick={() => confirmation.mutate()}
+                disabled={confirmation.isPending}
+                title="Reserves stock, allocates the document number and records the confirmation"
+              >
+                {confirmation.isPending ? 'Confirming...' : 'Confirm order'}
               </Button>
             )}
             {can('sales:view') && !isDraft && !isCancelled && (
@@ -148,6 +193,16 @@ export function SalesOrderDetailPage() {
           </>
         }
       />
+
+      {confirmation.isError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-line-strong bg-danger-soft px-3 py-2"
+        >
+          <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-danger" />
+          <p className="text-sm text-primary">{refusalText(confirmation.error)}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* ---------------- Document body ---------------- */}
@@ -417,4 +472,49 @@ export function SalesOrderDetailPage() {
       </div>
     </>
   );
+}
+
+/**
+ * A key for one confirmation intent.
+ *
+ * `crypto.randomUUID` where the browser has it, which is every browser this application supports
+ * over HTTPS, and a random fallback where it does not. The value only has to be unique per
+ * intent; it authenticates nothing and is never a secret.
+ */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * What to show when the server refuses a confirmation.
+ *
+ * The server's own words are used wherever it chose to explain: how much stock there actually
+ * was, or which two states a transition was between. Where it deliberately says little, because
+ * saying more would tell a caller about a record they may not see, this supplies a sentence that
+ * is useful without adding anything the server did not.
+ *
+ * NO BUSINESS RULE IS DECIDED HERE. Every branch is about wording. The refusal already happened.
+ */
+function refusalText(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return 'The order could not be confirmed. Check your connection and try again.';
+  }
+
+  if (error.status === 403) {
+    return 'You do not have permission to confirm orders in this company.';
+  }
+
+  if (error.status === 404) {
+    return 'This order is no longer available.';
+  }
+
+  if (error.status >= 500) {
+    return 'The server could not complete the confirmation. Nothing was changed.';
+  }
+
+  return error.message;
 }

@@ -2,7 +2,28 @@
 
 import type { Delivery, DocumentRef, SalesOrder } from '@/domain';
 import { db } from '@/mocks/db';
-import { delay, NotFoundError, queryList, type ListParams, type Paginated } from './client';
+import {
+  delay,
+  NotFoundError,
+  queryList,
+  request,
+  type ListParams,
+  type Paginated,
+} from './client';
+
+/**
+ * What the server says after confirming an order.
+ *
+ * Exactly the endpoint's response and nothing more. The status and the document number are the
+ * server's to decide, per contract sections 12.2 and 10.4, so they arrive rather than being
+ * worked out here.
+ */
+export interface ConfirmationResult {
+  id: string;
+  status: string;
+  docNumber: string;
+  reservations: number;
+}
 
 export const salesService = {
   async listOrders(params: ListParams = {}): Promise<Paginated<SalesOrder>> {
@@ -42,6 +63,30 @@ export const salesService = {
     const order = db.salesOrders.find((so) => so.id === id);
     if (!order) throw new NotFoundError('Sales order', id);
     return delay(order);
+  },
+
+  /**
+   * Confirms a sales order against the real backend.
+   *
+   * THE FIRST WRITE IN THIS FILE THAT IS NOT A FIXTURE. Everything above still reads from
+   * `@/mocks`; this reaches the endpoint that reserves the stock, allocates the number, writes
+   * the audit record and commits, all in one transaction. None of that is repeated here, and
+   * none of it could be: the rules live on the server and this is a caller.
+   *
+   * NO BODY. There is nothing about a confirmation for a caller to decide. The lines, their
+   * quantities, the warehouse, the number and the status all come from persisted records, per
+   * section 3.3, so the request carries an identifier in its path and a key in its header.
+   *
+   * THE KEY IS THE CALLER'S, AND IT IS ONE PER INTENT. Section 11 is explicit that a key belongs
+   * to a user intent rather than to a network attempt: pressing the button once produces one key
+   * however many times the request is transmitted. Generating one here, inside the call, would
+   * make every retry a fresh intent and defeat the whole mechanism, so it is an argument.
+   */
+  async confirmOrder(id: string, idempotencyKey: string): Promise<ConfirmationResult> {
+    return request<ConfirmationResult>(`/sales-orders/${id}/confirm`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    });
   },
 
   async listDeliveries(params: ListParams = {}): Promise<Paginated<Delivery>> {

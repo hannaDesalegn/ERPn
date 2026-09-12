@@ -165,6 +165,32 @@ function csrfToken(): string | null {
 }
 
 /**
+ * What to tell the user about a refusal.
+ *
+ * The server explains some refusals in a way only it can: how much stock was actually available,
+ * or which two states a transition was between. Discarding that and showing the status text would
+ * turn "only 5 available, and 10 was asked for" into "Unprocessable Entity", which tells the
+ * person nothing they can act on.
+ *
+ * The status is still carried on the error separately, so a caller that needs to branch does so
+ * on the number rather than by reading prose. A body that is missing, malformed, or carries no
+ * message falls back to the status line, because a refusal must still say something.
+ */
+async function refusalMessage(response: Response): Promise<string> {
+  const fallback = `Request failed: ${response.status} ${response.statusText}`;
+
+  try {
+    const body: unknown = await response.json();
+    const message =
+      typeof body === 'object' && body !== null ? (body as { message?: unknown }).message : null;
+
+    return typeof message === 'string' && message.length > 0 ? message : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * The real transport.
  *
  * `credentials: 'include'` is the whole authentication story on this side. The session is an
@@ -192,7 +218,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new ApiError(response.status, `Request failed: ${response.status} ${response.statusText}`);
+    throw new ApiError(response.status, await refusalMessage(response));
   }
 
   // 204 is a success with no body, which sign in and sign out both return. Asking for JSON
