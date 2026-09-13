@@ -27,7 +27,7 @@
  * because the ledger records what happened.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomUUID } from 'node:crypto';
 
@@ -166,6 +166,11 @@ export class DrizzleStockLedgerRepository implements StockLedgerRepository {
     // Step four: reserved, summed by the database from the reservation records. Summed in SQL
     // because `numeric` addition there is exact, and pulling the rows back to add them in
     // JavaScript would be the same arithmetic with a chance of a double in the middle.
+    //
+    // ACTIVE ROWS ONLY, which is what makes section 12.3's release mean anything. A released
+    // reservation is stock that came back, and it stays in the table so the history of what was
+    // held survives, so this is the one place that distinction has to be drawn. Summing every row
+    // would hold cancelled orders' stock forever.
     const [reservedRow] = await this.db
       .select({
         total: sql<string>`coalesce(sum(${stockReservations.quantity}), 0)::text`,
@@ -177,6 +182,7 @@ export class DrizzleStockLedgerRepository implements StockLedgerRepository {
           eq(stockReservations.companyId, companyId),
           eq(stockReservations.productId, productId),
           eq(stockReservations.warehouseId, warehouseId),
+          isNull(stockReservations.releasedAt),
         ),
       );
 

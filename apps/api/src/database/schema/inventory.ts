@@ -115,10 +115,19 @@ export const stockReservations = pgTable('stock_reservations', {
   /** Positive, in the product's stocking unit per section 8.4. */
   quantity: numeric('quantity', { precision: 19, scale: 6 }).notNull(),
   reservedAt: timestamp('reserved_at', { withTimezone: true }).notNull().defaultNow(),
+  /**
+   * When the stock stopped being held. Null while the reservation is active.
+   *
+   * Section 12.3's cancellation ruling: reservations are released, never deleted, so what was
+   * held and until when survives. Availability sums only the rows where this is null.
+   */
+  releasedAt: timestamp('released_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy: uuid('updated_by'),
+  /** Mutable since migration 0012, so versioned under the main rule of section 4.2. */
+  version: integer('version').notNull().default(1),
 });
 
 export const inventorySchema = { stockMovements, stockBalances, stockReservations };
@@ -140,11 +149,13 @@ export const INVENTORY_COMPANY_PARTITIONED_TABLES = [
 /**
  * The ledger is append only, which is section 4.2's second exempt shape.
  *
- * `stock_reservations` joins it for now: this increment only inserts rows, and the migration
- * withholds UPDATE and DELETE from the application role to match. If release turns out to reduce
- * a reservation in place, the table becomes mutable and gains `version` in that migration.
+ * `stock_reservations` left it in migration 0012. Section 12.3 ruled that cancelling releases
+ * a reservation by stamping `released_at`, which makes the row updatable, which is the only
+ * circumstance in which a lost update is possible. None of section 4.2's four exemptions fits a
+ * table availability is computed from, so it carries `version` under the main rule and the
+ * release predicate reads it.
  *
- * `stock_balances` is not here. It is mutable business data, so it carries `version` under the
- * main rule, and the balance write checks it.
+ * `stock_balances` is not here either. It is mutable business data, so it carries `version`
+ * under the same rule, and the balance write checks it.
  */
-export const INVENTORY_VERSION_EXEMPT_TABLES = ['stock_movements', 'stock_reservations'] as const;
+export const INVENTORY_VERSION_EXEMPT_TABLES = ['stock_movements'] as const;

@@ -9,22 +9,25 @@
  * `src/inventory/reservations.ts`, and the method here is named for the precondition it cannot
  * check so that a call from anywhere else fails review on the name.
  *
- * NO RELEASE AND NO UPDATE. The application role holds neither grant. Section 12.3 has not ruled
- * whether cancelling releases reserved stock, and partial delivery might reduce a reservation or
- * close it, so the shape of release is undecided and the schema says so by withholding the grant
- * rather than by guessing.
+ * RELEASE IS THE SAME SHAPE. `releaseUnderBalanceLock` stamps one row and says nothing about
+ * whether the balance row for its key was locked first. Section 12.3's ruling of 2026-09-13 made
+ * release a stamp rather than a delete, and migration 0012 grants UPDATE and still no DELETE, so
+ * the record of what was held survives every release the application can perform.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { salesOrderLines } from '../schema/sales.js';
 import { stockReservations } from '../schema/inventory.js';
 import type { Scope } from '../scope.js';
 import { actingUserId } from '../scope.js';
 import { requireCompanyScope } from './company-scope.js';
+import { ConcurrencyConflictError } from './types.js';
 import type {
   NewStockReservation,
   StockReservationRecord,
+  StockReservationRelease,
   StockReservationRepository,
 } from './types.js';
 
@@ -77,6 +80,63 @@ export class DrizzleStockReservationRepository implements StockReservationReposi
     return rows.map(toReservation);
   }
 
+  async listActiveForOrder(salesOrderId: string): Promise<StockReservationRecord[]> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Stock reservations');
+
+    // Joined to the lines rather than fetched line by line. A cancellation must release
+    // everything the order holds, and a caller looping over lines it read earlier releases
+    // everything it happened to know about, which is not the same list.
+    const rows = await this.db
+      .select({ reservation: stockReservations })
+      .from(stockReservations)
+      .innerJoin(salesOrderLines, eq(salesOrderLines.id, stockReservations.salesOrderLineId))
+      .where(
+        and(
+          eq(stockReservations.tenantId, tenantId),
+          eq(stockReservations.companyId, companyId),
+          eq(salesOrderLines.salesOrderId, salesOrderId),
+          // Active only. A released row is not held, so releasing it again would be a second
+          // stamp over the first and would lose when the stock actually came back.
+          isNull(stockReservations.releasedAt),
+        ),
+      )
+      // Deterministic, and it is the lock order the cancelling operation follows.
+      .orderBy(stockReservations.productId, stockReservations.warehouseId, stockReservations.id);
+
+    return rows.map((row) => toReservation(row.reservation));
+  }
+
+  async releaseUnderBalanceLock(input: StockReservationRelease): Promise<StockReservationRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Stock reservations');
+
+    const rows = await this.db
+      .update(stockReservations)
+      .set({
+        releasedAt: new Date(),
+        version: sql`${stockReservations.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(stockReservations.tenantId, tenantId),
+          eq(stockReservations.companyId, companyId),
+          eq(stockReservations.id, input.id),
+          // Section 10.1's guard, and it is read rather than merely carried: a release built on a
+          // stale read matches no row here.
+          eq(stockReservations.version, input.expectedVersion),
+          // And the row must still be held. Two cancellations that both passed the order's own
+          // guard resolve here, and the second releases nothing rather than restamping the first.
+          isNull(stockReservations.releasedAt),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new ConcurrencyConflictError('Stock reservation', input.id);
+    return toReservation(row);
+  }
+
   async createUnderBalanceLock(input: NewStockReservation): Promise<StockReservationRecord> {
     const { tenantId, companyId } = requireCompanyScope(this.scope, 'Stock reservations');
 
@@ -113,5 +173,7 @@ function toReservation(row: typeof stockReservations.$inferSelect): StockReserva
     warehouseId: row.warehouseId,
     quantity: row.quantity,
     reservedAt: row.reservedAt,
+    releasedAt: row.releasedAt,
+    version: row.version,
   };
 }

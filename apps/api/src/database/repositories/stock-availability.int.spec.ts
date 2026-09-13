@@ -311,6 +311,108 @@ describe('Stock availability', () => {
       ),
     );
 
+// -------------------------------------------------------------------------------------
+  // Released reservations, per section 12.3 as ruled 2026-09-13.
+  // -------------------------------------------------------------------------------------
+
+  describe('a released reservation holds nothing', () => {
+    const release = (scope: ActorScope, reservation: { id: string; version: number }) =>
+      uow.inActorScope(scope, (repositories) =>
+        repositories.stockReservations.releaseUnderBalanceLock({
+          id: reservation.id,
+          expectedVersion: reservation.version,
+        }),
+      );
+
+    it('gives the stock back to available', async () => {
+      // The whole point of the stamp. Cancelling an order must not leave its stock held, and
+      // this read is the only place section 8.5's reserved figure is computed.
+      const held = await hold(IN_A1, '30');
+      expect((await availability(IN_A1)).available).toBe('70.000000');
+
+      await release(IN_A1, held);
+
+      const result = await availability(IN_A1);
+      expect(result.reserved).toBe('0.000000');
+      expect(result.available).toBe('100.000000');
+    });
+
+    it('leaves the row behind, so what was held is still on the record', async () => {
+      // Released, never deleted. A delete would answer today's question just as well and leave
+      // nobody able to ask why the stock was unavailable yesterday.
+      const held = await hold(IN_A1, '30');
+      await release(IN_A1, held);
+
+      const rows = await uow.inActorScope(IN_A1, (repositories) =>
+        repositories.stockReservations.listForBalanceKey(
+          PRODUCT[COMPANY_A1]!,
+          WAREHOUSE[COMPANY_A1]!,
+        ),
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.quantity).toBe('30.000000');
+      expect(rows[0]?.releasedAt).toBeInstanceOf(Date);
+    });
+
+    it('releases only itself, leaving its siblings held', async () => {
+      const first = await hold(IN_A1, '30');
+      await hold(IN_A1, '25');
+
+      await release(IN_A1, first);
+
+      expect((await availability(IN_A1)).reserved).toBe('25.000000');
+    });
+
+    it('cannot be released twice', async () => {
+      // The active predicate, not merely the version. A second stamp would overwrite the first
+      // and lose the moment the stock actually came back.
+      const held = await hold(IN_A1, '30');
+      const released = await release(IN_A1, held);
+
+      await expect(release(IN_A1, { id: held.id, version: released.version })).rejects.toThrow(
+        /modified by someone else/i,
+      );
+      expect((await availability(IN_A1)).available).toBe('100.000000');
+    });
+
+    it('refuses a release built on a stale version', async () => {
+      // Section 10.1 applied to the row this table now updates.
+      const held = await hold(IN_A1, '30');
+
+      await expect(release(IN_A1, { id: held.id, version: held.version + 1 })).rejects.toThrow(
+        /modified by someone else/i,
+      );
+      expect((await availability(IN_A1)).reserved).toBe('30.000000');
+    });
+
+    it('refuses to release another company’s reservation', async () => {
+      // Scoped in the predicate, per section 6.3, so this matches no row rather than matching one
+      // and being refused afterwards. Section 6.1 answers it as a conflict rather than a denial,
+      // which tells the caller nothing about whether the identifier names anything.
+      const theirs = await hold(IN_A2, '30');
+
+      await expect(release(IN_A1, theirs)).rejects.toThrow(/modified by someone else/i);
+
+      const stillHeld = await uow.inActorScope(IN_A2, (repositories) =>
+        repositories.stockLedger.availabilityForUpdate(
+          PRODUCT[COMPANY_A2]!,
+          WAREHOUSE[COMPANY_A2]!,
+        ),
+      );
+      expect(stillHeld.reserved).toBe('30.000000');
+    });
+
+    it('bumps the version it checked', async () => {
+      const held = await hold(IN_A1, '30');
+
+      const released = await release(IN_A1, held);
+
+      expect(held.version).toBe(1);
+      expect(released.version).toBe(2);
+    });
+  });
+
   // -------------------------------------------------------------------------------------
   // 1 to 4. The arithmetic.
   // -------------------------------------------------------------------------------------

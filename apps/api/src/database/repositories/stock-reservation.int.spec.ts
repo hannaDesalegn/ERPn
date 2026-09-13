@@ -451,24 +451,113 @@ describe('Stock reservations', () => {
     });
   });
 
+// -------------------------------------------------------------------------------------
+  // What an order still holds, which is what cancelling it has to find.
+  // -------------------------------------------------------------------------------------
+
+  describe('listing what one order holds', () => {
+    const activeFor = (scope: ActorScope, salesOrderId: string) =>
+      uow.inActorScope(scope, (repositories) =>
+        repositories.stockReservations.listActiveForOrder(salesOrderId),
+      );
+
+    const releaseOne = (scope: ActorScope, reservation: { id: string; version: number }) =>
+      uow.inActorScope(scope, (repositories) =>
+        repositories.stockReservations.releaseUnderBalanceLock({
+          id: reservation.id,
+          expectedVersion: reservation.version,
+        }),
+      );
+
+    it('finds the reservations of every line, not of one', async () => {
+      // Reached through the lines rather than per line, because a cancellation that loops over
+      // the lines it happened to read releases what it knew about and not what the order holds.
+      await reserve(IN_A1, { quantity: '10' });
+      await reserve(IN_A1, { quantity: '15' });
+
+      const held = await activeFor(IN_A1, ORDER[COMPANY_A1]!);
+
+      expect(held.map((row) => row.quantity)).toEqual(['10.000000', '15.000000']);
+    });
+
+    it('is empty for an order that holds nothing', async () => {
+      expect(await activeFor(IN_A1, ORDER[COMPANY_A1]!)).toEqual([]);
+    });
+
+    it('leaves out what has already been released', async () => {
+      const first = await reserve(IN_A1, { quantity: '10' });
+      await reserve(IN_A1, { quantity: '15' });
+
+      await releaseOne(IN_A1, first);
+
+      const held = await activeFor(IN_A1, ORDER[COMPANY_A1]!);
+      expect(held).toHaveLength(1);
+      expect(held[0]?.quantity).toBe('15.000000');
+    });
+
+    it('is empty for an order in another company, rather than refusing', async () => {
+      // Section 6.1: the scope is in the predicate, so another company's order matches nothing
+      // and looks exactly like an order that holds nothing. Answering differently would let a
+      // caller learn that the identifier names something.
+      await reserve(IN_A2, { quantity: '10' });
+
+      expect(await activeFor(IN_A1, ORDER[COMPANY_A2]!)).toEqual([]);
+    });
+
+    it('is empty for an order in another tenant', async () => {
+      await reserve(scopeFor(TENANT_B, COMPANY_B1), { quantity: '10' });
+
+      expect(await activeFor(IN_A1, ORDER[COMPANY_B1]!)).toEqual([]);
+    });
+
+    it('returns them in the order a caller must take the locks in', async () => {
+      // Section 10.2 requires a documented and followed acquisition order. This read is where
+      // the cancelling operation gets its sequence, so the sequence is decided here rather than
+      // by whatever order the planner happened to return rows in.
+      const a = await reserve(IN_A1, { quantity: '1' });
+      const b = await reserve(IN_A1, { quantity: '2' });
+      const c = await reserve(IN_A1, { quantity: '3' });
+      const expected = [a, b, c]
+        .sort(
+          (x, y) =>
+            x.productId.localeCompare(y.productId) ||
+            x.warehouseId.localeCompare(y.warehouseId) ||
+            x.id.localeCompare(y.id),
+        )
+        .map((row) => row.id);
+
+      const held = await activeFor(IN_A1, ORDER[COMPANY_A1]!);
+
+      expect(held.map((row) => row.id)).toEqual(expected);
+    });
+  });
+
   // -------------------------------------------------------------------------------------
   // 10. What the schema guard should see, and what this increment refuses to offer.
   // -------------------------------------------------------------------------------------
 
   describe('the shape of the table', () => {
-    it('holds no status, because cancellation has not been ruled on', async () => {
-      // Section 12.3 requires cancellation rules per document type including whether cancelling
-      // releases reserved stock. A lifecycle invented here would be that unwritten rule guessed
-      // at in the schema.
+    it('holds a release stamp and a version, and still no status', async () => {
+      // Updated deliberately when section 12.3 was ruled on 2026-09-13, not weakened to pass.
+      // This test previously pinned the absence of all three, because the ruling did not exist.
+      //
+      // `released_at` is the whole of the lifecycle: a null stamp is active and a stamp is not.
+      // A status column beside it would be a second way to say the same thing, and two columns
+      // that can disagree about one fact is how a second source of truth starts.
+      //
+      // `version` is section 4.2's main rule, applied because the row is now updatable. The
+      // drift suite separately refuses a mutable table without it and an exempt table with it.
       await ownerContext(TENANT_A, COMPANY_A1);
       const columns = await owner.query<{ column_name: string }>(
         `SELECT column_name FROM information_schema.columns WHERE table_name = 'stock_reservations'`,
       );
       const names = columns.rows.map((row) => row.column_name);
 
+      expect(names).toContain('released_at');
+      expect(names).toContain('version');
       expect(names).not.toContain('status');
-      expect(names).not.toContain('released_at');
-      expect(names).not.toContain('version');
+      // The reason belongs to the cancelling order's audit record, per the same ruling.
+      expect(names).not.toContain('release_reason');
     });
 
     it('left the balance alone, with no reserved column', async () => {
@@ -484,33 +573,44 @@ describe('Stock reservations', () => {
       expect(names).toContain('on_hand');
     });
 
-    it('holds no update or delete grant, because release is undecided', async () => {
+    it('holds no delete grant, so a release can never become a delete', async () => {
+      // Also updated deliberately for the 2026-09-13 ruling, and this is the half of it the
+      // database enforces. Cancelling releases reservations, and the ruling says released and
+      // not deleted, so the UPDATE grant arrived in migration 0012 and the DELETE grant did not.
+      // Application code cannot discard the record of what was held even by mistake, which is
+      // the same posture section 7.1 takes for the audit table.
       const app = new Client({ connectionString: process.env['DATABASE_URL'] });
       await app.connect();
       try {
         await app.query(`SELECT set_config('app.tenant_id', $1, false)`, [TENANT_A]);
         await app.query(`SELECT set_config('app.company_id', $1, false)`, [COMPANY_A1]);
 
-        await expect(app.query('UPDATE stock_reservations SET quantity = 1')).rejects.toThrow(
-          /permission denied/i,
-        );
         await expect(app.query('DELETE FROM stock_reservations')).rejects.toThrow(
           /permission denied/i,
         );
+
+        // And the grant that did arrive is real, so the release is not relying on a permission
+        // the role happens to lack noticing.
+        await expect(
+          app.query('UPDATE stock_reservations SET released_at = now()'),
+        ).resolves.toBeDefined();
       } finally {
         await app.end();
       }
     });
 
-    it('offers no reserve or release operation through the repository', async () => {
+    it('offers no bare reserve or release through the repository', async () => {
       // Reserving is an availability check under a lock followed by this write, per sections 8.5
       // and 10.2. A method called `reserve` here would be the dangerous half of it on its own,
-      // and the write that does exist is named for the precondition it cannot check.
+      // and both writes that exist are named for the precondition they cannot check.
       const methods = await uow.inActorScope(IN_A1, async (repositories) =>
         Object.getOwnPropertyNames(Object.getPrototypeOf(repositories.stockReservations)),
       );
 
       expect(methods).toContain('createUnderBalanceLock');
+      // Release arrived with the 2026-09-13 ruling and is named the same way, for the same
+      // reason: it changes what available comes to, so it is only correct under the lock.
+      expect(methods).toContain('releaseUnderBalanceLock');
       expect(methods).not.toContain('create');
       expect(methods).not.toContain('reserve');
       expect(methods).not.toContain('release');

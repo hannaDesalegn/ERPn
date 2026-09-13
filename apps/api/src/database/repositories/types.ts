@@ -914,14 +914,23 @@ export interface StockReservationRecord {
   /** Positive, in the product's stocking unit. Subtracted from on hand to give available. */
   quantity: string;
   reservedAt: Date;
+  /**
+   * When the stock stopped being held, or null while it still is.
+   *
+   * Section 12.3's cancellation ruling, 2026-09-13: a release stamps this rather than removing
+   * the row, so what was held and until when survives. Availability counts only the nulls.
+   */
+  releasedAt: Date | null;
+  /** Section 10.1's token. Read by the release, which is the one update this table takes. */
+  version: number;
 }
 
 /**
  * A reservation to record.
  *
- * No tenant or company: both come from the scope. No status: section 12.3 has not ruled what
- * cancelling does to reserved stock, and a lifecycle invented here would be that unwritten rule
- * guessed at in a type.
+ * No tenant or company: both come from the scope. No `releasedAt` and no `version`: a new
+ * reservation is active by definition and starts at version one, and a caller able to say
+ * otherwise could write a reservation that was already released.
  */
 export interface NewStockReservation {
   id: string;
@@ -929,6 +938,17 @@ export interface NewStockReservation {
   productId: string;
   warehouseId: string;
   quantity: string;
+}
+
+/**
+ * A release to apply, guarded by what the caller read.
+ *
+ * Both guards are real. `expectedVersion` is section 10.1's, and the active requirement is the
+ * one that makes a repeated release a no-op rather than a second stamp overwriting the first.
+ */
+export interface StockReservationRelease {
+  id: string;
+  expectedVersion: number;
 }
 
 /**
@@ -940,14 +960,23 @@ export interface NewStockReservation {
  * belongs to the reservation operation, in the increment that owns it, alongside the availability
  * check it has to make first. What is here is the record and the ability to read it.
  *
- * No release and no update. The application role holds neither grant, because whether release
- * removes a reservation or reduces it is exactly what section 12.3 leaves open.
+ * RELEASE IS HERE AND IS STILL NOT THE OPERATION, for the same reason. `releaseUnderBalanceLock`
+ * stamps one row and checks nothing about the lock it was supposed to be holding. Cancelling an
+ * order is what decides a release should happen, and it takes the lock first.
  */
 export interface StockReservationRepository {
-  /** Everything currently held against one balance key, which is what reserved is summed from. */
+  /** Every reservation ever written against one balance key, released rows included. */
   listForBalanceKey(productId: string, warehouseId: string): Promise<StockReservationRecord[]>;
-  /** Everything one order line holds. What releasing it will need to find. */
+  /** Everything one order line holds, released rows included. */
   listForOrderLine(salesOrderLineId: string): Promise<StockReservationRecord[]>;
+  /**
+   * Everything one order still holds, across all of its lines.
+   *
+   * Active rows only, because a cancellation releases what is held and a row already released is
+   * not held. Joined to the lines in the query rather than fetched per line, so the caller cannot
+   * miss one, and scoped so an order in another company matches nothing.
+   */
+  listActiveForOrder(salesOrderId: string): Promise<StockReservationRecord[]>;
   /**
    * Writes one reservation row, checking nothing.
    *
@@ -958,6 +987,18 @@ export interface StockReservationRepository {
    * decision this write records. A call anywhere else should fail review on the name alone.
    */
   createUnderBalanceLock(input: NewStockReservation): Promise<StockReservationRecord>;
+  /**
+   * Stamps one reservation as released, checking nothing about the stock.
+   *
+   * NAMED FOR ITS PRECONDITION, like the write above and for the same reason. A release changes
+   * what section 8.5's available comes to, so a caller that has not locked the balance row for
+   * this reservation's key can release stock while another transaction is deciding, on the
+   * pre-release figure, whether there is enough. The only correct caller is `cancelSalesOrder`.
+   *
+   * Guarded by the version and by the row still being active. Throws `ConcurrencyConflictError`
+   * when neither matches, which is the same answer a lost update gets everywhere else here.
+   */
+  releaseUnderBalanceLock(input: StockReservationRelease): Promise<StockReservationRecord>;
 }
 
 
