@@ -2,9 +2,9 @@
  * The sales order transition table.
  *
  * Section 12.1 requires the legal transitions to be declared explicitly and enforced server
- * side. The test that matters is the exhaustive one: every ordered pair of states is checked,
- * and exactly one is legal. Testing only the pairs somebody thought of is how a table ends up
- * permitting a move nobody declared.
+ * side. The test that matters is the exhaustive one: every ordered pair of states is checked
+ * against the list of moves the contract describes. Testing only the pairs somebody thought of is
+ * how a table ends up permitting a move nobody declared.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,8 +25,17 @@ const ALL_PAIRS: [SalesOrderStatus, SalesOrderStatus][] = SALES_ORDER_STATUSES.f
   SALES_ORDER_STATUSES.map((to): [SalesOrderStatus, SalesOrderStatus] => [from, to]),
 );
 
-/** The only move the contract describes today. Section 12.2's confirming transaction. */
-const LEGAL: [SalesOrderStatus, SalesOrderStatus][] = [['draft', 'confirmed']];
+/**
+ * Every move the contract describes today.
+ *
+ * Section 12.2's confirming transaction, and the two cancellations section 12.3 ruled on
+ * 2026-09-13. Nothing else, and the exhaustive pair test below is what holds that to it.
+ */
+const LEGAL: [SalesOrderStatus, SalesOrderStatus][] = [
+  ['draft', 'confirmed'],
+  ['draft', 'cancelled'],
+  ['confirmed', 'cancelled'],
+];
 
 const isLegal = (from: SalesOrderStatus, to: SalesOrderStatus) =>
   LEGAL.some(([a, b]) => a === from && b === to);
@@ -41,7 +50,7 @@ describe('the transition table', () => {
     expect(canTransition(from, to)).toBe(isLegal(from, to));
   });
 
-  it('permits exactly one move in total', () => {
+  it('permits exactly the moves listed above and no others', () => {
     const declared = Object.values(SALES_ORDER_TRANSITIONS).flat();
 
     expect(declared).toHaveLength(LEGAL.length);
@@ -67,12 +76,30 @@ describe('the transition table', () => {
     expect(canTransition('draft', 'confirmed')).toBe(true);
   });
 
-  it('does not yet permit cancelling anything', () => {
-    // Section 12.3 requires cancellation rules to be explicit per document type, including
-    // whether cancelling releases reserved stock. No such rule is written for a sales order and
-    // reserved stock does not exist, so this stays refused rather than half specified.
+  it('lets a draft and a confirmed order be cancelled, which is what section 12.3 ruled', () => {
+    expect(canTransition('draft', 'cancelled')).toBe(true);
+    expect(canTransition('confirmed', 'cancelled')).toBe(true);
+  });
+
+  it('refuses to cancel a partially delivered order', () => {
+    // Not an oversight. Goods are with a customer by then, and undoing that is a return, which
+    // section 12.3 makes a new document rather than a status change.
+    expect(canTransition('partially_delivered', 'cancelled')).toBe(false);
+    expect(canTransition('delivered', 'cancelled')).toBe(false);
+    expect(canTransition('invoiced', 'cancelled')).toBe(false);
+  });
+
+  it('refuses to cancel an order that is already cancelled', () => {
+    // The state guard section 11 requires independently of any idempotency record. A second
+    // cancellation must fail on the state machine even after the stored response expires.
+    expect(canTransition('cancelled', 'cancelled')).toBe(false);
+  });
+
+  it('never lets a cancelled order come back', () => {
+    // Section 12.3 makes correction a new document. Reinstating one is not a transition this
+    // contract describes, and an empty destination list is the honest way to say so.
     for (const status of SALES_ORDER_STATUSES) {
-      expect(canTransition(status, 'cancelled')).toBe(false);
+      expect(canTransition('cancelled', status)).toBe(false);
     }
   });
 

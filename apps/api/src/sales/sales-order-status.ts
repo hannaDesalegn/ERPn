@@ -19,12 +19,15 @@
  * invoice was. Declaring those now would be declaring transitions nothing can perform, and
  * guessing at rules the contract has not made.
  *
- * Cancellation is the deliberate omission worth naming. `cancelled` is in the status union and
- * `sales:cancel` is in the permission catalogue, but section 12.3 requires cancellation rules to
- * be explicit per document type, including whether cancelling releases reserved stock, and no
- * such rule has been written for a sales order. Reserved stock does not exist yet either. So
- * cancellation is refused here rather than half specified, and the rule is recorded as an open
- * contract decision instead of invented in a transition table.
+ * Cancellation was the deliberate omission here until the rule existed. Section 12.3 now carries
+ * it, ruled 2026-09-13: a sales order may be cancelled from `draft` and from `confirmed`,
+ * cancelling releases every reservation the order holds, a cancelled draft keeps a null document
+ * number, and there is no accounting consequence. Those two moves are declared below because the
+ * contract states them, which is the same bar draft to confirmed had to meet.
+ *
+ * `partially_delivered` is still refused, and still for a reason rather than an oversight. Goods
+ * are with a customer by then and undoing that is a return, which section 12.3 makes a new
+ * document rather than a status change. Nothing can reach that state until deliveries exist.
  *
  * DENY BY DEFAULT. A pair that is not listed is illegal, in the same posture section 6.2 takes
  * for authorization. Adding a document type later means adding its transitions here, and
@@ -58,9 +61,13 @@ export type SalesOrderStatus = (typeof SALES_ORDER_STATUSES)[number];
 export const SALES_ORDER_TRANSITIONS: Readonly<
   Record<SalesOrderStatus, readonly SalesOrderStatus[]>
 > = {
-  // Section 12.2's confirming transaction, and the only move the contract describes today.
-  draft: ['confirmed'],
-  confirmed: [],
+  // Section 12.2's confirming transaction, and section 12.3's cancellation. A draft that is
+  // abandoned is cancelled rather than deleted, and keeps its null document number.
+  draft: ['confirmed', 'cancelled'],
+  // Cancelling a confirmed order releases what it reserved. The delivery and invoice moves
+  // arrive with the documents that perform them.
+  confirmed: ['cancelled'],
+  // Refused on purpose, not omitted: goods are with a customer, and undoing that is a return.
   partially_delivered: [],
   delivered: [],
   invoiced: [],

@@ -1396,6 +1396,51 @@ credit note, a reversing journal entry, a return.
 `[REQ]` Cancellation rules are explicit per document type, including whether cancelling
 releases reserved stock and what accounting consequence it carries.
 
+**The sales order's cancellation rule.** *Ruled 2026-09-13.* The clause above requires this to
+be written down per document type, and the sales order is the first document type that exists.
+
+`[DEC]` A sales order may be cancelled from `draft` and from `confirmed`. Every other state
+refuses, and `partially_delivered` refuses for a stated reason rather than an oversight: a
+partially delivered order has goods with a customer, and undoing that is a return, which the
+clause above already makes a new document. Nothing can reach that state until the delivery
+module exists, so the rule is written when the document that produces it is.
+
+`[DEC]` A cancelled draft keeps a null document number. Section 10.4's numbering is gapless
+because a number, once issued, is a fact about a document the business raised. A draft that was
+abandoned raised nothing, and spending a number on it would put a gap in the meaning of the
+series rather than in the series itself. The number and status check constraint is amended to
+admit exactly this pairing, and continues to refuse a confirmed order without a number.
+
+A cancelled draft is therefore cancelled and not deleted, which is the posture section 4.5
+prefers. That section permits deleting a draft that was never confirmed; it does not require it,
+and cancellation keeps the order, its lines and its trail where deletion would keep none of them.
+
+`[DEC]` Cancelling releases every reservation the order still holds. Reservations are released,
+never deleted: `stock_reservations` gains a `released_at` stamp, and section 8.5's reserved
+figure sums only the rows where it is null. The history of what was held, for which line, and
+until when, survives the release, which a delete would discard. The release runs under the same
+balance row lock section 10.2 requires of the reservation itself, so availability cannot be read
+between a release and the write that caused it.
+
+`[REQ]` The release and the status change are one transaction or neither, in the same shape
+section 12.2 gives confirming. A cancellation that released stock without cancelling the order
+would leave a confirmed order with no stock behind it.
+
+`[REQ]` Cancelling a sales order has no accounting consequence. A sales order posts to no
+ledger, so there is nothing to reverse: the accounting consequence of a sale begins at the
+invoice, and cancelling a document that never reached the ledger cannot reach it either. This is
+stated rather than left implicit because the clause above requires the statement, and an absent
+consequence is an answer to it.
+
+`[FUT]` Cancelling a document that has posted to the ledger, meaning an invoice, is the
+accounting slice's to rule. It will not be an amendment to this clause but a rule of its own,
+because a credit note is a new document rather than a status change.
+
+`[DEC]` A cancellation may carry a reason, and the reason is optional. It is kept in the audit
+record's payload and nowhere else. `sales_orders` gains no column for it: a reason is something
+somebody said once about a transition, which is what section 7.2's structured change payload is
+for, and a column would make it a mutable property of the order that a later edit could rewrite.
+
 ### 12.4 Relationships are edges
 
 `[DEC]` Document relationships are stored in a link table with a typed relation, and the
@@ -2084,3 +2129,5 @@ they are open.
 | 2026-09-10 | 14.4, 16.1 | Cross site request forgery implemented as the section already specified, with the one open decision recorded: the header carries a token bound to the session, derived from the stored hash rather than stored beside it. The last 16.1 entry discharged. | A plain double submit is satisfied by anyone who can write a cookie for the site, and the contract named the header and the origin check without saying what the header should carry |
 | 2026-09-11 | 2.9, 9.7 | The authoritative tax rate ruled to be a standard rate per company, beside the other fiscal settings, with the rate snapshotted onto each document line and resolved through one function. Per-product and per-customer rates rejected with reasons. | Section 3.3 required the server to recompute tax from its own master data and no section said which master data, which blocked sales order totals and would have blocked invoice posting |
 | 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |
+| 2026-09-13 | 12.3 | The sales order cancellation rule written: cancellable from draft and confirmed, a cancelled draft keeps a null document number, cancelling releases every reservation the order holds through a `released_at` stamp rather than a delete, no accounting consequence, and an optional reason kept in the audit payload alone. | Section 12.3 requires the rule per document type and no such rule existed, which is why the transition table refused every cancellation and `stock_reservations` was granted no way to release |
+| 2026-09-13 | 7.1, 12.2 | Document audit recorded as beginning at confirmation. Draft creation and draft editing are pre-confirmation mutations with no side effects and stay unaudited. | Section 12.2 makes confirming the lifecycle boundary, and retrofitting audit onto a draft would record a promise nobody made |
