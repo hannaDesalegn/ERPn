@@ -225,7 +225,7 @@ describe('Confirming a sales order over HTTP', () => {
       await owner.query(
         `INSERT INTO role_permissions (tenant_id, company_id, role_id, permission)
          VALUES ($1,$2,$3,'sales:confirm'), ($1,$2,$3,'sales:view'), ($1,$2,$3,'sales:create'),
-                ($1,$2,$3,'audit:view'),
+                ($1,$2,$3,'audit:view'), ($1,$2,$3,'sales:cancel'),
                 ($1,$2,$4,'sales:view')`,
         [TENANT, companyId, sellerRole, clerkRole],
       );
@@ -1546,6 +1546,288 @@ describe('Confirming a sales order over HTTP', () => {
       const body = JSON.stringify((await auditFor(seller, theirs)).json());
 
       expect(body).not.toMatch(/audit_events|sales_orders|relation|column|pg_|select /i);
+    });
+  });
+
+  // -------------------------------------------------------------------------------------
+  // Cancelling, per section 12.3 as ruled 2026-09-13.
+  // -------------------------------------------------------------------------------------
+
+  describe('cancelling an order', () => {
+    const cancelOrder = (
+      session: BrowserSession,
+      orderId: string,
+      key: string | null = 'key-cancel',
+      payload?: Record<string, unknown>,
+    ) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${orderId}/cancel`,
+        headers: mutating(session, key === null ? {} : { 'idempotency-key': key }),
+        ...(payload === undefined ? {} : { payload }),
+      });
+
+    const cancellationEvents = async () => {
+      await ownerContext(TENANT, COMPANY);
+      const rows = await owner.query<{ changes: Record<string, unknown>; summary: string }>(
+        `SELECT changes, summary FROM audit_events
+          WHERE action = 'sales_order_cancelled' AND company_id = $1`,
+        [COMPANY],
+      );
+      return rows.rows;
+    };
+
+    const orderRow = async (id: string) => {
+      await ownerContext(TENANT, COMPANY);
+      const rows = await owner.query<{ status: string; doc_number: string | null }>(
+        'SELECT status, doc_number FROM sales_orders WHERE id = $1',
+        [id],
+      );
+      return rows.rows[0];
+    };
+
+    const reservationRows = async () => {
+      await ownerContext(TENANT, COMPANY);
+      const rows = await owner.query<{ released_at: Date | null }>(
+        'SELECT released_at FROM stock_reservations',
+      );
+      return rows.rows;
+    };
+
+    it('cancels a confirmed order and says what came back', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-cancel-setup');
+
+      const response = await cancelOrder(seller, orderId);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        id: orderId,
+        status: 'cancelled',
+        docNumber: 'SO-0001',
+        releasedReservations: 1,
+        releasedQuantity: '10.000000',
+      });
+    });
+
+    it('cancels a draft and answers with a null number', async () => {
+      // Section 12.3: no number is issued to a document the business never raised, and the
+      // response says null rather than inventing an empty string for it.
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await cancelOrder(seller, orderId);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        status: 'cancelled',
+        docNumber: null,
+        releasedReservations: 0,
+        releasedQuantity: '0.000000',
+      });
+    });
+
+    it('releases the reservations rather than deleting them', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-cancel-release');
+
+      await cancelOrder(seller, orderId);
+
+      const rows = await reservationRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.released_at).toBeInstanceOf(Date);
+    });
+
+    it('records an optional reason in the audit payload', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      await cancelOrder(seller, orderId, 'key-cancel-reason', {
+        reason: 'Customer changed their mind',
+      });
+
+      const [event] = await cancellationEvents();
+      expect(event?.changes).toMatchObject({ reason: 'Customer changed their mind' });
+    });
+
+    it('accepts no body at all, because the reason is optional', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await cancelOrder(seller, orderId, 'key-cancel-nobody');
+
+      expect(response.statusCode).toBe(200);
+      const [event] = await cancellationEvents();
+      expect(event?.changes).not.toHaveProperty('reason');
+    });
+
+    it('refuses a field the body does not declare', async () => {
+      // Section 14.3. A caller cannot set the status, the number or the released quantity by
+      // sending one, and the schema refuses it outright rather than ignoring it.
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await cancelOrder(seller, orderId, 'key-cancel-extra', {
+        reason: 'Fine',
+        status: 'confirmed',
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('refuses a reason longer than the limit', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await cancelOrder(seller, orderId, 'key-cancel-long', {
+        reason: 'x'.repeat(501),
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('requires an idempotency key', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await cancelOrder(seller, orderId, null);
+
+      expect(response.statusCode).toBe(400);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('replays a retry with the same key without cancelling twice', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-cancel-replay-setup');
+
+      const first = await cancelOrder(seller, orderId, 'key-cancel-replay');
+      const second = await cancelOrder(seller, orderId, 'key-cancel-replay');
+
+      expect(second.statusCode).toBe(first.statusCode);
+      expect(second.json()).toEqual(first.json());
+      // One cancellation happened, whatever the network did.
+      expect(await cancellationEvents()).toHaveLength(1);
+    });
+
+    it('conflicts on the same key with a different reason', async () => {
+      // Section 11: a replay carrying the same key with a different request is a conflict. Two
+      // cancellations giving different reasons are two intents, however alike the outcome.
+      const orderId = await draft(COMPANY, '10');
+
+      await cancelOrder(seller, orderId, 'key-cancel-fingerprint', { reason: 'First' });
+      const second = await cancelOrder(seller, orderId, 'key-cancel-fingerprint', {
+        reason: 'Second',
+      });
+
+      expect(second.statusCode).toBe(409);
+      expect(await cancellationEvents()).toHaveLength(1);
+    });
+
+    it('refuses a second cancellation under a fresh key, on the state machine', async () => {
+      // The guard section 11 requires independently of any idempotency record, so an expired
+      // record cannot let a document be cancelled twice.
+      const orderId = await draft(COMPANY, '10');
+      await cancelOrder(seller, orderId, 'key-cancel-once');
+
+      const response = await cancelOrder(seller, orderId, 'key-cancel-twice');
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().message).toMatch(/cannot move from cancelled to cancelled/);
+    });
+
+    it('refuses a caller without sales:cancel', async () => {
+      // The clerk can read this order and cannot cancel it, which is the separation the
+      // permission catalogue draws.
+      const orderId = await draft(COMPANY, '10');
+
+      expect((await readOrder(clerk, orderId)).statusCode).toBe(200);
+      expect((await cancelOrder(clerk, orderId, 'key-cancel-clerk')).statusCode).toBe(403);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('refuses a caller with no session', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${orderId}/cancel`,
+        headers: { 'idempotency-key': 'key-cancel-anon' },
+      });
+
+      expect([401, 403]).toContain(response.statusCode);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('refuses a request with no forgery header', async () => {
+      // Section 14.4 applies to this route as to every other mutating one.
+      const orderId = await draft(COMPANY, '10');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${orderId}/cancel`,
+        headers: { cookie: seller.cookie, 'idempotency-key': 'key-cancel-csrf' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect((await orderRow(orderId))?.status).toBe('draft');
+    });
+
+    it('answers not found for a sibling company order', async () => {
+      const theirs = await draft(SIBLING, '10');
+
+      const response = await cancelOrder(seller, theirs, 'key-cancel-sibling');
+
+      expect(response.statusCode).toBe(404);
+      await ownerContext(TENANT, SIBLING);
+      const rows = await owner.query<{ status: string }>(
+        'SELECT status FROM sales_orders WHERE id = $1',
+        [theirs],
+      );
+      expect(rows.rows[0]?.status).toBe('draft');
+    });
+
+    it('answers not found for an identifier that is not a uuid', async () => {
+      expect((await cancelOrder(seller, 'not-a-uuid', 'key-cancel-bad')).statusCode).toBe(404);
+    });
+
+    it('leaks no database vocabulary when it refuses', async () => {
+      const theirs = await draft(SIBLING, '10');
+
+      const body = JSON.stringify((await cancelOrder(seller, theirs, 'key-cancel-leak')).json());
+
+      expect(body).not.toMatch(/stock_reservations|sales_orders|relation|column|pg_|select /i);
+    });
+
+    it('shows the cancellation in the order trail', async () => {
+      // The audit endpoint is entity scoped and action agnostic, so this needed no change to
+      // carry a second kind of event.
+      const orderId = await draft(COMPANY, '10');
+      await cancelOrder(seller, orderId, 'key-cancel-trail', { reason: 'Duplicate' });
+
+      const trail = (
+        await app.inject({
+          method: 'GET',
+          url: `/api/sales-orders/${orderId}/audit-events`,
+          headers: { cookie: seller.cookie },
+        })
+      ).json();
+
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'sales_order_cancelled',
+        summary: 'Cancelled a draft sales order',
+      });
+    });
+
+    it('leaves the detail read agreeing with what it did', async () => {
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+      await confirm(seller, orderId, 'key-cancel-detail-setup');
+      await cancelOrder(seller, orderId, 'key-cancel-detail');
+
+      const detail = (await readOrder(seller, orderId)).json();
+
+      expect(detail.status).toBe('cancelled');
+      expect(detail.docNumber).toBe('SO-0001');
     });
   });
 });

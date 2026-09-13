@@ -1,10 +1,10 @@
 /**
  * The sales order HTTP surface.
  *
- * One route, and it is deliberately thin. Everything it does is translate: a session into a
- * scope, a header into an idempotency key, a path parameter into an identifier, and a domain
- * error into a status code. The decisions all belong to `confirmSalesOrder`, which was built and
- * proved without any of this and stays callable without it.
+ * Deliberately thin. Everything it does is translate: a session into a scope, a header into an
+ * idempotency key, a path parameter into an identifier, and a domain error into a status code.
+ * The decisions belong to the operations beneath it, each of which was built and proved without
+ * any of this and stays callable without it.
  *
  * ONE TRANSACTION COVERS BOTH CONCERNS. The idempotency claim of section 11 and the confirming
  * transaction of section 12.2 run inside a single unit of work opened here. Claiming the key in a
@@ -12,11 +12,12 @@
  * retry after that would replay a success that did not happen. This is the one thing the endpoint
  * has to get right that the domain operation cannot get right on its own.
  *
- * WHAT THE CALLER MAY SEND. A path parameter and a header. There is no body, because there is
- * nothing about a confirmation for a caller to decide: the lines, their quantities, the products,
- * the warehouse, the number and the status all come from persisted records or from the server.
- * Section 14.3 warns about request bodies binding to entities, and the simplest defence against
- * mass assignment is a route with nothing to assign.
+ * WHAT THE CALLER MAY SEND. Confirming takes a path parameter and a header and no body at all,
+ * because there is nothing about a confirmation for a caller to decide: the lines, their
+ * quantities, the products, the warehouse, the number and the status all come from persisted
+ * records or from the server. Cancelling takes one optional sentence and nothing else. Section
+ * 14.3 warns about request bodies binding to entities, and the defence throughout is a body with
+ * almost nothing in it to assign.
  */
 
 import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, Req } from '@nestjs/common';
@@ -41,6 +42,11 @@ import {
   runIdempotently,
 } from '../http/idempotency.js';
 import { IdentityService, type CompanyContext } from '../identity/identity.service.js';
+import {
+  cancelSalesOrder,
+  MAX_REASON_LENGTH,
+  SalesOrderCancellationError,
+} from './cancel-sales-order.js';
 import { confirmSalesOrder, SalesOrderConfirmationError } from './confirm-sales-order.js';
 import { SalesOrderDraftError } from './sales-order.service.js';
 import {
@@ -155,11 +161,42 @@ const updateBody = createBody.extend({ version: z.number().int().min(1) });
 /** The endpoint dimension of the key's identity, per section 11. Stable, not derived from a URL. */
 const ENDPOINT = 'POST sales-orders/:id/confirm';
 
+/** The endpoint dimension of a cancellation key, per section 11. */
+const CANCEL_ENDPOINT = 'POST sales-orders/:id/cancel';
+
+/**
+ * What cancelling accepts.
+ *
+ * One optional sentence. Section 12.3 makes the reason the only thing a caller decides, so it
+ * is the only thing here, and `strict` refuses a status, a number or a released quantity
+ * rather than ignoring them.
+ */
+const cancelBody = z
+  .object({
+    reason: z.string().max(MAX_REASON_LENGTH).optional(),
+  })
+  .strict();
+
 export interface ConfirmationView {
   id: string;
   status: string;
   docNumber: string;
   reservations: number;
+}
+
+/**
+ * What cancelling answers with.
+ *
+ * `docNumber` is nullable where the confirmation view’s is not, because a cancelled draft
+ * keeps its null number and a confirmed order always has one.
+ */
+export interface CancellationView {
+  id: string;
+  status: string;
+  docNumber: string | null;
+  releasedReservations: number;
+  /** What came back to available, at the quantity scale. Zero for a draft. */
+  releasedQuantity: string;
 }
 
 @Controller('sales-orders')
@@ -529,6 +566,108 @@ export class SalesOrderController {
       throw translate(error);
     }
   }
+
+  /**
+   * Cancels a sales order.
+   *
+   * The guard has established a session and the `sales:cancel` capability in the acting company
+   * before this runs. What is left is the company context, which comes from the session, the key,
+   * and the translation below.
+   *
+   * ONE TRANSACTION COVERS BOTH CONCERNS, as it does for confirming. The idempotency claim and
+   * section 12.3's cancelling transaction run inside a single unit of work, so a stored response
+   * can never describe work that rolled back.
+   *
+   * THE BODY IS ONE OPTIONAL SENTENCE. A reason, and nothing else: the status is the transition
+   * table's, the stock released is read from the order, the actor is the session's. `strict`
+   * refuses anything further outright rather than ignoring it, which is section 14.3's defence
+   * against a body that binds to an entity.
+   *
+   * THE REASON IS IN THE FINGERPRINT, because it is part of the request. Section 11 rejects a
+   * replay that carries the same key with a different body, and two cancellations of one order
+   * giving different reasons are two different intents however alike their outcome.
+   */
+  @RequirePermission('sales:cancel')
+  @Post(':salesOrderId/cancel')
+  @HttpCode(200)
+  async cancel(
+    @Param('salesOrderId') salesOrderId: string,
+    @Body() body: unknown,
+    @Req() request: FastifyRequest,
+  ): Promise<CancellationView> {
+    if (!identifier.safeParse(salesOrderId).success) {
+      // Not a bad request, per section 6.1: an identifier that cannot name an order must answer
+      // exactly as one naming another company's does.
+      throw new NotFoundException('Not found');
+    }
+
+    const key = idempotencyKey.safeParse(request.headers[IDEMPOTENCY_HEADER]);
+    if (!key.success) {
+      throw new BadRequestException(
+        'This operation requires an Idempotency-Key header, per section 11',
+      );
+    }
+
+    // An absent body is a cancellation with no reason, which the ruling permits. Fastify gives
+    // undefined for no body at all, and the schema accepts that rather than demanding `{}`.
+    const parsed = cancelBody.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues[0]?.message ?? 'Invalid request');
+    }
+
+    const principal = principalOf(request);
+    const context = await this.identity.currentContext(principal);
+    if (!context) throw new ForbiddenException('Forbidden');
+
+    // The path parameter and the reason, which together are the whole of what the caller chose.
+    const fingerprint = fingerprintOf({ salesOrderId, reason: parsed.data.reason ?? null });
+
+    try {
+      const outcome = await this.uow.inActorScope(
+        actorScope({
+          tenantId: context.tenantId,
+          companyId: context.companyId,
+          userId: principal.userId,
+        }),
+        (repositories) =>
+          runIdempotently(
+            repositories,
+            { endpoint: CANCEL_ENDPOINT, key: key.data, fingerprint },
+            async () => {
+              const { order, releasedReservationIds, releasedQuantity } = await cancelSalesOrder(
+                repositories,
+                context,
+                { salesOrderId, reason: parsed.data.reason },
+              );
+
+              return {
+                status: 200,
+                body: {
+                  id: order.id,
+                  status: order.status,
+                  // Null on a cancelled draft, and that is the answer rather than a gap: section
+                  // 12.3 does not issue a number to a document the business never raised.
+                  docNumber: order.docNumber,
+                  releasedReservations: releasedReservationIds.length,
+                  releasedQuantity,
+                } satisfies CancellationView,
+              };
+            },
+          ),
+      );
+
+      return outcome.response.body as unknown as CancellationView;
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        // Section 10.1 wants the interface able to explain what changed, which it cannot do from
+        // a message. The same answer editing gives, for the same reason.
+        throw await this.conflict(context, principal.userId, salesOrderId, error.message);
+      }
+
+      throw translate(error);
+    }
+  }
+
 }
 
 /**
@@ -543,6 +682,16 @@ function translate(error: unknown): unknown {
     if (error.reason === 'not_found') return new NotFoundException('Not found');
     if (error.reason === 'forbidden') return new ForbiddenException('Forbidden');
     // A real order in a state that cannot be confirmed. The caller may see why.
+    return new UnprocessableEntityException(error.message);
+  }
+
+  if (error instanceof SalesOrderCancellationError) {
+    // The same three answers confirming gives, for the same reasons, plus the one refusal
+    // that is about the request rather than the order: a reason too long is the caller's to
+    // fix and is a bad request rather than a state the order is in.
+    if (error.reason === 'not_found') return new NotFoundException('Not found');
+    if (error.reason === 'forbidden') return new ForbiddenException('Forbidden');
+    if (error.reason === 'invalid_reason') return new BadRequestException(error.message);
     return new UnprocessableEntityException(error.message);
   }
 

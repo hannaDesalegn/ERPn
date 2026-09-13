@@ -2,12 +2,11 @@
  * Sales.
  *
  * Section 15.7 makes a module a business boundary rather than a folder. This one owns the sales
- * order, and at present owns exactly one operation on it: creating a draft.
+ * order and the operations on it: creating a draft, editing one, reading one, confirming, and
+ * cancelling under section 12.3.
  *
- * ONE ROUTE, AND IT IS CONFIRMATION. Draft creation is still not exposed: section 12.2's
- * confirming transaction is what the slice exists to prove, and an endpoint offering draft
- * creation alone would be a surface promising an order flow that stops halfway. The controller
- * holds no logic, only the translation between HTTP and the operations beneath it.
+ * THE CONTROLLER HOLDS NO LOGIC, only the translation between HTTP and the operations beneath it,
+ * each of which takes a transaction's repositories and is callable without any of this.
  */
 
 import { Module } from '@nestjs/common';
