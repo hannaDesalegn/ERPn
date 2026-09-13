@@ -732,7 +732,14 @@ export interface SalesOrderTransition {
   expectedVersion: number;
   expectedStatus: string;
   status: string;
-  docNumber: string;
+  /**
+   * The number the order carries after the move.
+   *
+   * Nullable because not every transition allocates one. Confirming passes the number section
+   * 10.4 just issued; cancelling passes back whatever the order already had, which is null for a
+   * draft. The check constraint is what decides whether the pairing is legal, not this type.
+   */
+  docNumber: string | null;
 }
 
 export interface SalesOrderTotals {
