@@ -35,6 +35,22 @@ export interface ConfirmationResult {
 
 
 /**
+ * What the server says after cancelling an order.
+ *
+ * Exactly the endpoint's response. `docNumber` is nullable where the confirmation's is not,
+ * because a cancelled draft keeps its null number: contract section 12.3 does not issue one to a
+ * document the business never raised.
+ */
+export interface CancellationResult {
+  id: string;
+  status: string;
+  docNumber: string | null;
+  releasedReservations: number;
+  /** What came back to available, as a decimal string. Zero for a draft, which held nothing. */
+  releasedQuantity: string;
+}
+
+/**
  * A sales order as the backend holds it.
  *
  * Exactly the endpoint's response. Figures are decimal strings because contract section 4.3 keeps
@@ -432,6 +448,35 @@ export const salesService = {
   async auditTrail(id: string): Promise<SalesOrderAuditEvent[]> {
     const events = await request<AuditEventResponse[]>(`/sales-orders/${id}/audit-events`);
     return events.map(toAuditEvent);
+  },
+
+  /**
+   * Cancels a sales order against the real backend.
+   *
+   * WHAT IT SENDS, AND WHAT IT DOES NOT. An identifier in the path, a key in the header, and a
+   * reason if the person gave one. The status it moves to, the stock it releases and the number
+   * it keeps are all the server's, per section 3.3, and there is no argument here for any of
+   * them.
+   *
+   * THE REASON IS PART OF THE REQUEST, so the server folds it into the idempotency fingerprint.
+   * Retrying with the same key and a different reason is a conflict rather than a replay, which
+   * is why the key belongs to the intent and is passed in rather than made here.
+   *
+   * NO BODY AT ALL WHEN THERE IS NO REASON. An empty object would be the same to the server, and
+   * sending nothing says plainly that nothing was chosen.
+   */
+  async cancelOrder(
+    id: string,
+    idempotencyKey: string,
+    reason?: string,
+  ): Promise<CancellationResult> {
+    const trimmed = reason?.trim();
+
+    return request<CancellationResult>(`/sales-orders/${id}/cancel`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(trimmed ? { body: JSON.stringify({ reason: trimmed }) } : {}),
+    });
   },
 
   async listDeliveries(params: ListParams = {}): Promise<Paginated<Delivery>> {

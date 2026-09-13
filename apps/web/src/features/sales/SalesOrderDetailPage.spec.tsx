@@ -30,6 +30,7 @@ const DRAFT_ORDER = 'so-055';
 const ORDER_URL = `/api/sales-orders/${DRAFT_ORDER}`;
 const CONFIRM_URL = ORDER_URL + '/confirm';
 const AUDIT_URL = ORDER_URL + '/audit-events';
+const CANCEL_URL = ORDER_URL + '/cancel';
 
 /**
  * The order as the backend serves it.
@@ -778,5 +779,289 @@ describe('the history it shows', () => {
     fireEvent.click(confirmButton());
 
     await waitFor(() => expect(screen.getByText('Confirmed sales order SO-0001')).toBeDefined());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancelling, per section 12.3 as ruled 2026-09-13.
+// ---------------------------------------------------------------------------
+
+/** Holds sales:cancel as well, which the seller deliberately does not. */
+const MANAGER: Me = {
+  ...SELLER,
+  roles: [{ key: 'manager', name: 'Manager' }],
+  permissions: ['sales:view', 'sales:confirm', 'sales:cancel'],
+};
+
+const CANCELLED = {
+  id: DRAFT_ORDER,
+  status: 'cancelled',
+  docNumber: null,
+  releasedReservations: 0,
+  releasedQuantity: '0.000000',
+};
+
+describe('cancelling an order', () => {
+  const cancelCalls = () => calls.filter((call) => call.url === CANCEL_URL);
+
+  const cancelButton = () => screen.getByRole('button', { name: /^cancel order$/i });
+
+  /** Mounts with the given session and order, answering the cancel endpoint with `answer`. */
+  function renderFor(
+    me: Me,
+    order: Record<string, unknown>,
+    answer: () => { status: number; body?: unknown } = () => ({ status: 200, body: CANCELLED }),
+  ) {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: me }),
+      [`GET ${ORDER_URL}`]: () => ({ status: 200, body: order }),
+      [`GET ${AUDIT_URL}`]: () => auditResponse(),
+      [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
+      [`POST ${CANCEL_URL}`]: answer,
+    });
+
+    return mount();
+  }
+
+  it('is offered on a draft to someone holding sales:cancel', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    expect(cancelButton()).toBeDefined();
+  });
+
+  it('is offered on a confirmed order, which still holds stock', async () => {
+    renderFor(MANAGER, { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0001' });
+    await waitForPage();
+
+    expect(cancelButton()).toBeDefined();
+  });
+
+  it('is not offered without the capability', async () => {
+    // Not a security control. The server refuses the same request whatever this drew; it is
+    // here so the interface does not offer work the person cannot do.
+    renderFor(SELLER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    expect(screen.queryByRole('button', { name: /^cancel order$/i })).toBeNull();
+  });
+
+  it('is not offered on an order that is already cancelled', async () => {
+    renderFor(MANAGER, { ...DRAFT_RESPONSE, status: 'cancelled', docNumber: 'SO-0001' });
+    await waitForPage();
+
+    expect(screen.queryByRole('button', { name: /^cancel order$/i })).toBeNull();
+  });
+
+  it('is not offered on a delivered order, which section 12.3 refuses', async () => {
+    // Goods are with a customer by then, and undoing that is a return rather than a status
+    // change. The transition table refuses it, and there is no control for it here either.
+    renderFor(MANAGER, { ...DRAFT_RESPONSE, status: 'delivered', docNumber: 'SO-0001' });
+    await waitForPage();
+
+    expect(screen.queryByRole('button', { name: /^cancel order$/i })).toBeNull();
+  });
+
+  it('asks before it does anything', async () => {
+    // Cancelling cannot be undone from this interface, so the step between the button and the
+    // request is real rather than ceremony.
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+
+    expect(screen.getByText(/cancel this draft\?/i)).toBeDefined();
+    expect(cancelCalls()).toHaveLength(0);
+  });
+
+  it('does nothing when the person keeps the order', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getByRole('button', { name: /keep order/i }));
+
+    expect(screen.queryByText(/cancel this draft\?/i)).toBeNull();
+    expect(cancelCalls()).toHaveLength(0);
+  });
+
+  it('posts to the cancellation endpoint with an idempotency key', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(cancelCalls()).toHaveLength(1));
+    expect(cancelCalls()[0]?.method).toBe('POST');
+    expect(cancelCalls()[0]?.headers['Idempotency-Key']).toMatch(/.+/);
+  });
+
+  it('sends no body when no reason was given', async () => {
+    // An empty object would say the same thing to the server. Sending nothing says plainly that
+    // nothing was chosen.
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(cancelCalls()).toHaveLength(1));
+    expect(cancelCalls()[0]?.body).toBeUndefined();
+  });
+
+  it('sends the reason when one was typed', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.change(screen.getByLabelText(/reason/i), {
+      target: { value: 'Customer changed their mind' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(cancelCalls()).toHaveLength(1));
+    expect(JSON.parse(String(cancelCalls()[0]?.body))).toEqual({
+      reason: 'Customer changed their mind',
+    });
+  });
+
+  it('reuses one key across retries, because a retry is the same intent', async () => {
+    // Section 11: one key per user intent, not per network attempt. The reason is part of the
+    // request the server fingerprints, so a fresh key on each attempt would turn a retry into a
+    // second intent.
+    let attempt = 0;
+    renderFor(MANAGER, DRAFT_RESPONSE, () => {
+      attempt += 1;
+      return attempt === 1
+        ? { status: 500, body: { message: 'boom' } }
+        : { status: 200, body: CANCELLED };
+    });
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+    await waitFor(() => expect(cancelCalls()).toHaveLength(1));
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+    await waitFor(() => expect(cancelCalls()).toHaveLength(2));
+
+    const keys = cancelCalls().map((call) => call.headers['Idempotency-Key']);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('shows the status the server answered with', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(screen.getAllByText('Cancelled').length).toBeGreaterThan(0));
+    // And the action is gone, because a cancelled order cannot be cancelled again.
+    expect(screen.queryByRole('button', { name: /^cancel order$/i })).toBeNull();
+  });
+
+  it('keeps the number the server kept, on a confirmed order', async () => {
+    renderFor(
+      MANAGER,
+      { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0001' },
+      () => ({
+        status: 200,
+        body: { ...CANCELLED, status: 'cancelled', docNumber: 'SO-0001', releasedReservations: 1 },
+      }),
+    );
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(screen.getAllByText('Cancelled').length).toBeGreaterThan(0));
+    expect(screen.getByText('SO-0001')).toBeDefined();
+  });
+
+  it('explains a refusal in the server’s words', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE, () => ({
+      status: 409,
+      body: { message: 'A sales order cannot move from cancelled to cancelled', statusCode: 409 },
+    }));
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    const alert = await waitFor(() => screen.getByRole('alert'));
+    expect(alert.textContent).toMatch(/cannot move from cancelled to cancelled/);
+  });
+
+  it('does not mark the order cancelled when the server refuses', async () => {
+    renderFor(MANAGER, DRAFT_RESPONSE, () => ({
+      status: 403,
+      body: { message: 'Forbidden', statusCode: 403 },
+    }));
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    const alert = await waitFor(() => screen.getByRole('alert'));
+    expect(alert.textContent).toMatch(/do not have permission/i);
+    expect(screen.getByText('Draft order')).toBeDefined();
+  });
+
+  it('does not mark the order cancelled when the request never arrives', async () => {
+    stubFetchWith((input, init) => {
+      if (input === CANCEL_URL) {
+        calls.push({ url: input, method: 'POST', headers: {}, body: init?.body ?? undefined });
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      if (input === AUDIT_URL) {
+        return Promise.resolve(
+          new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
+        );
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify(input === ORDER_URL ? DRAFT_RESPONSE : MANAGER), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    });
+
+    mount();
+    await waitForPage();
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    const alert = await waitFor(() => screen.getByRole('alert'));
+    expect(alert.textContent).toMatch(/check your connection/i);
+    expect(screen.getByText('Draft order')).toBeDefined();
+  });
+
+  it('refreshes the history, because cancelling writes to it', async () => {
+    auditResponse = () => ({ status: 200, body: [] });
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+    await waitFor(() => expect(calls.filter((c) => c.url === AUDIT_URL)).toHaveLength(1));
+
+    fireEvent.click(cancelButton());
+    fireEvent.click(screen.getAllByRole('button', { name: /^cancel order$/i })[1]!);
+
+    await waitFor(() => expect(calls.filter((c) => c.url === AUDIT_URL).length).toBeGreaterThan(1));
+  });
+
+  it('no longer claims a rule nobody had ruled on', async () => {
+    // The button used to be permanently disabled with the title "Cancelling releases reserved
+    // stock", written before section 12.3 said anything of the kind. It turned out to be right,
+    // and it was still a claim the product was making on its own. A disabled control that
+    // asserts a rule is exactly the fake functionality the project rules forbid.
+    renderFor(MANAGER, DRAFT_RESPONSE);
+    await waitForPage();
+
+    const button = cancelButton() as HTMLButtonElement;
+
+    expect(button.disabled).toBe(false);
   });
 });

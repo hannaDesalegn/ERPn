@@ -20,6 +20,7 @@ import { api, queryKeys } from '@/services';
 import { newIdempotencyKey, refusalText } from './refusalText';
 import { ApiError } from '@/services/client';
 import type { SalesOrder } from '@/domain';
+import type { SalesOrderDetail } from '@/services/sales.service';
 import {
   Badge,
   Button,
@@ -81,6 +82,18 @@ export function SalesOrderDetailPage() {
   const [intent, setIntent] = useState(() => ({ orderId: id, key: newIdempotencyKey() }));
   if (intent.orderId !== id) setIntent({ orderId: id, key: newIdempotencyKey() });
 
+  /**
+   * Cancelling, which is asked before it is done.
+   *
+   * `null` means nobody has asked to cancel. Opening the panel is what begins the intent, so
+   * that is where the key is made: pressing Cancel once produces one key, and every retry of
+   * the request that follows carries it, per section 11. Closing and reopening is a new
+   * intent and gets a new key, which is the honest reading of a person changing their mind
+   * and then changing it back.
+   */
+  const [cancelling, setCancelling] = useState<{ key: string; reason: string } | null>(null);
+  if (cancelling && intent.orderId !== id) setCancelling(null);
+
   const order = useQuery({
     queryKey: queryKeys.salesOrder(id),
     queryFn: () => api.sales.getOrder(id),
@@ -119,6 +132,34 @@ export function SalesOrderDetailPage() {
     },
   });
 
+  /**
+   * Cancelling, which releases whatever the order still holds.
+   *
+   * Everything that decides the outcome is the server’s: the transition is checked against
+   * section 12.1’s table, the capability is re-read, every reservation is released under its
+   * balance row lock, and the audit record is written, all in one transaction. None of it is
+   * repeated here, and the button being visible decides nothing.
+   */
+  const cancellation = useMutation({
+    mutationFn: ({ key, reason }: { key: string; reason: string }) =>
+      api.sales.cancelOrder(id, key, reason),
+    onSuccess: (result) => {
+      // From the server’s answer. The status is its to decide and the number is its to keep.
+      queryClient.setQueryData<SalesOrderDetail>(queryKeys.salesOrder(id), (current) =>
+        current
+          ? {
+              ...current,
+              status: result.status as SalesOrderDetail['status'],
+              docNumber: result.docNumber,
+            }
+          : current,
+      );
+      // The cancellation is an audit event, so the history panel has something new to show.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.salesOrderAudit(id) });
+      setCancelling(null);
+    },
+  });
+
   const customer = useQuery({
     queryKey: queryKeys.customer(order.data?.customer.id ?? ''),
     queryFn: () => api.parties.getCustomer(order.data!.customer.id),
@@ -149,6 +190,14 @@ export function SalesOrderDetailPage() {
   const so = order.data;
   const isDraft = so.status === 'draft';
   const isCancelled = so.status === 'cancelled';
+  /**
+   * The two states section 12.3's ruling permits cancelling from.
+   *
+   * Presentation, not enforcement. The server refuses the same request whatever this drew,
+   * and section 12.1’s table is the authority. This exists so the interface does not offer
+   * work that would be refused.
+   */
+  const isCancellable = so.status === 'draft' || so.status === 'confirmed';
   const totalOrdered = so.lines.reduce((a, l) => a + l.quantity, 0);
   const totalDelivered = so.lines.reduce((a, l) => a + l.deliveredQuantity, 0);
   const creditUsedPct = customer.data
@@ -225,15 +274,98 @@ export function SalesOrderDetailPage() {
                 Create invoice
               </Button>
             )}
-            {can('sales:cancel') && !isCancelled && (
-              <Button variant="danger" icon="close" disabled title="Cancelling releases reserved stock">
-                Cancel
+            {/*
+              Offered from the two states section 12.3 rules cancellable, and from no others.
+              A partially delivered order has goods with a customer, and undoing that is a
+              return rather than a status change, so there is no control for it here.
+            */}
+            {can('sales:cancel') && isCancellable && (
+              <Button
+                variant="danger"
+                icon="close"
+                onClick={() =>
+                  setCancelling({ key: newIdempotencyKey(), reason: '' })
+                }
+                disabled={Boolean(cancelling) || cancellation.isPending}
+                title="Releases any stock this order holds and records who cancelled it"
+              >
+                Cancel order
               </Button>
             )}
           </>
         }
       />
 
+      {/*
+        ASKED BEFORE IT IS DONE, because cancelling is not undoable from this interface. There
+        is no reinstating a cancelled order: section 12.3 makes correction a new document, and
+        no such document exists. So the step between pressing the button and the request is a
+        real one rather than ceremony.
+
+        The reason is optional, which is what the ruling says. It is stored in the audit
+        record and nowhere else, so the field says so rather than implying it becomes a
+        property of the order.
+      */}
+      {cancelling && (
+        <div className="rounded-lg border border-line-strong bg-surface p-4">
+          <h2 className="text-sm font-semibold text-primary">
+            {so.docNumber ? `Cancel ${so.docNumber}?` : 'Cancel this draft?'}
+          </h2>
+          <p className="mt-1 text-sm text-secondary">
+            {isDraft
+              ? 'The draft is kept and marked cancelled. It cannot be edited or confirmed afterwards.'
+              : 'Any stock this order is holding is released. The order keeps its number and cannot be reinstated.'}
+          </p>
+
+          <label className="mt-3 block text-xs font-medium text-secondary" htmlFor="cancel-reason">
+            Reason (optional)
+          </label>
+          <input
+            id="cancel-reason"
+            type="text"
+            value={cancelling.reason}
+            maxLength={500}
+            onChange={(event) =>
+              setCancelling((current) =>
+                current ? { ...current, reason: event.target.value } : current,
+              )
+            }
+            disabled={cancellation.isPending}
+            placeholder="Recorded in the order history"
+            className="mt-1 w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-primary"
+          />
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              variant="danger"
+              icon="close"
+              onClick={() => cancellation.mutate(cancelling)}
+              disabled={cancellation.isPending}
+            >
+              {cancellation.isPending ? 'Cancelling...' : 'Cancel order'}
+            </Button>
+            <Button
+              onClick={() => {
+                setCancelling(null);
+                cancellation.reset();
+              }}
+              disabled={cancellation.isPending}
+            >
+              Keep order
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {cancellation.isError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-line-strong bg-danger-soft px-3 py-2"
+        >
+          <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-danger" />
+          <p className="text-sm text-primary">{refusalText(cancellation.error)}</p>
+        </div>
+      )}
       {confirmation.isError && (
         <div
           role="alert"
