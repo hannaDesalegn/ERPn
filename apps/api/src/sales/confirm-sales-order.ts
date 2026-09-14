@@ -50,6 +50,9 @@ export type ConfirmationRepositories = Pick<
   ScopedRepositories,
   | 'salesOrders'
   | 'salesOrderLines'
+  | 'customers'
+  | 'warehouses'
+  | 'products'
   | 'stockLedger'
   | 'stockReservations'
   | 'documentNumberSequences'
@@ -76,7 +79,13 @@ export interface ConfirmationRequest {
  * 6.1 makes those one answer so that identifiers cannot be probed to learn what another company
  * holds. `forbidden` is separate because the actor has already proved membership of this company.
  */
-export type ConfirmationRefusal = 'not_found' | 'forbidden' | 'no_lines' | 'illegal_transition';
+export type ConfirmationRefusal =
+  | 'not_found'
+  | 'forbidden'
+  | 'no_lines'
+  | 'illegal_transition'
+  /** A record the order names has been archived since the draft was written. Section 12.2. */
+  | 'master_data_unusable';
 
 export class SalesOrderConfirmationError extends Error {
   readonly reason: ConfirmationRefusal;
@@ -121,6 +130,47 @@ export async function confirmSalesOrder(
     // Nothing to reserve and nothing to owe. An order promising nothing should never have been
     // written, but confirming one would produce a numbered document with no content.
     throw new SalesOrderConfirmationError('no_lines', 'A sales order needs at least one line');
+  }
+
+  // ---- Still step 1: validate against current master data. ------------------------------
+  //
+  // Section 12.2 names both halves, "current master data and current state", and this is the
+  // half a draft cannot do on its own. Draft creation checked all of this when the order was
+  // written; a draft can sit for weeks, and archiving is how a record stops being usable while
+  // staying referenced by the history that already names it. Confirming is the moment the
+  // business commits, so it is the moment the question has to be asked again.
+  //
+  // WHAT IS NOT RE-READ, DELIBERATELY: the price, the tax rate and the product name on the
+  // line. Section 3.4 has a document snapshot what applied when it was raised, so re-reading
+  // them would be the opposite of the rule. This checks that the records are still usable, not
+  // what they now say.
+  //
+  // Sequential, because a unit of work is one connection and parallel reads on it pipeline onto
+  // a single transaction.
+  const customer = await repositories.customers.findById(order.customerId);
+  if (!customer || customer.status !== 'active') {
+    throw new SalesOrderConfirmationError(
+      'master_data_unusable',
+      'The customer on this order is no longer active',
+    );
+  }
+
+  const warehouse = await repositories.warehouses.findById(order.warehouseId);
+  if (!warehouse || warehouse.status !== 'active') {
+    throw new SalesOrderConfirmationError(
+      'master_data_unusable',
+      'The warehouse on this order is no longer active',
+    );
+  }
+
+  for (const line of lines) {
+    const product = await repositories.products.findById(line.productId);
+    if (!product || product.status !== 'active') {
+      throw new SalesOrderConfirmationError(
+        'master_data_unusable',
+        `Product ${line.productSku} is no longer active and cannot be sold`,
+      );
+    }
   }
 
   // ---- Step 2: authorize. --------------------------------------------------------------

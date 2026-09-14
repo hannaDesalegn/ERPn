@@ -28,13 +28,13 @@ import { PasswordHasher } from '../auth/password-hasher.js';
 import { DatabaseModule } from '../database/database.module.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
 import { registerHttpPlugins } from '../http/plugins.js';
-import { RouteDeclarationAudit } from '../http/route-declarations.js';
+import { RouteDeclarationAudit, type DeclaredRoute } from '../http/route-declarations.js';
 import { CSRF_HEADER } from '../http/csrf.js';
 import { SESSION_COOKIE } from '../http/session-cookie.js';
 import { signIn } from '../testing/browser-session.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { AppModule } from '../app.module.js';
-import { ROLE_KEYS, templatePermissions, type RoleKey } from './permissions.js';
+import { PERMISSIONS, ROLE_KEYS, templatePermissions, type RoleKey } from './permissions.js';
 import { RoleProvisioningService } from './role-provisioning.service.js';
 import type { RouteAccess } from './route-access.js';
 
@@ -66,33 +66,197 @@ const PASSWORD = 'a perfectly ordinary passphrase';
 const MEMBERSHIP_HOME = 'dc100000-0000-4000-8000-00000000000a';
 const MEMBERSHIP_AWAY = 'dc200000-0000-4000-8000-00000000000b';
 
-/** Every protected route, described the way a caller reaches it. */
+/**
+ * Master data in the home company, so the sales cells of the matrix reach a real order.
+ *
+ * An allow cell has to be answered by the operation rather than by a missing record, or the
+ * matrix would pass while saying nothing: a 404 for an order nobody seeded looks the same
+ * whether the route authorized the caller or not.
+ */
+const MATRIX_CUSTOMER = 'ec100000-0000-4000-8000-00000000000a';
+const MATRIX_WAREHOUSE = 'ec200000-0000-4000-8000-00000000000b';
+const MATRIX_PRODUCT = 'ec300000-0000-4000-8000-00000000000c';
+const MATRIX_SEQUENCE = 'ec400000-0000-4000-8000-00000000000d';
+
+/**
+ * Every protected route, described the way a caller reaches it.
+ *
+ * `controller` and `handler` name the route this entry covers, and the test below reads the
+ * same list the guard reads and refuses any protected route that has no entry. Section 13.1
+ * requires a new route with no matrix entry to fail the build, and a list matched by nothing
+ * cannot do that: it agrees with the code until someone adds a route, and then agrees with the
+ * bug. This list is checked against the registry rather than trusted.
+ */
 interface Call {
   label: string;
-  method: 'GET' | 'POST' | 'DELETE';
-  url: string;
-  payload?: Record<string, unknown>;
+  controller: string;
+  handler: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  /** A function, because the sales routes address an order seeded fresh for each test. */
+  url: () => string;
+  payload?: () => Record<string, unknown>;
+  /** Section 11's header, which the mutating sales routes require before they will do anything. */
+  idempotent?: boolean;
   permission: string;
 }
 
+/** The order every sales route in the matrix acts on, replaced before each test. */
+let matrixOrder = '00000000-0000-4000-8000-000000000000';
+
+/** A fresh key per invocation, so an allow cell is never answered by a replay of an earlier one. */
+let keySequence = 0;
+
+let idSequence = 0;
+const nextOrderId = () =>
+  `fc${(idSequence += 1).toString().padStart(6, '0')}-0000-4000-8000-00000000000a`;
+
 const CALLS: Call[] = [
-  { label: 'list members', method: 'GET', url: '/api/members', permission: 'admin:users' },
-  { label: 'list roles', method: 'GET', url: '/api/roles', permission: 'admin:users' },
+  {
+    label: 'list members',
+    controller: 'AdministrationController',
+    handler: 'members',
+    method: 'GET',
+    url: () => '/api/members',
+    permission: 'admin:users',
+  },
+  {
+    label: 'list roles',
+    controller: 'AdministrationController',
+    handler: 'roles',
+    method: 'GET',
+    url: () => '/api/roles',
+    permission: 'admin:users',
+  },
   {
     label: 'assign a role',
+    controller: 'AdministrationController',
+    handler: 'assignRole',
     method: 'POST',
-    url: `/api/members/${MEMBERSHIP_HOME}/roles`,
-    payload: { roleKey: 'warehouse' },
+    url: () => `/api/members/${MEMBERSHIP_HOME}/roles`,
+    payload: () => ({ roleKey: 'warehouse' }),
     permission: 'admin:users',
   },
   {
     label: 'remove a role',
+    controller: 'AdministrationController',
+    handler: 'removeRole',
     method: 'DELETE',
-    url: `/api/members/${MEMBERSHIP_HOME}/roles/warehouse`,
+    url: () => `/api/members/${MEMBERSHIP_HOME}/roles/warehouse`,
     permission: 'admin:users',
   },
-  { label: 'read the audit trail', method: 'GET', url: '/api/audit-events', permission: 'audit:view' },
+  {
+    label: 'read the audit trail',
+    controller: 'AdministrationController',
+    handler: 'auditEvents',
+    method: 'GET',
+    url: () => '/api/audit-events',
+    permission: 'audit:view',
+  },
+  {
+    label: 'list customers',
+    controller: 'MasterDataController',
+    handler: 'customers',
+    method: 'GET',
+    url: () => '/api/customers',
+    permission: 'customers:view',
+  },
+  {
+    label: 'list products',
+    controller: 'MasterDataController',
+    handler: 'products',
+    method: 'GET',
+    url: () => '/api/products',
+    permission: 'inventory:view',
+  },
+  {
+    label: 'list warehouses',
+    controller: 'MasterDataController',
+    handler: 'warehouses',
+    method: 'GET',
+    url: () => '/api/warehouses',
+    permission: 'inventory:view',
+  },
+  {
+    label: 'create a sales order',
+    controller: 'SalesOrderController',
+    handler: 'create',
+    method: 'POST',
+    url: () => '/api/sales-orders',
+    payload: () => ({
+      customerId: MATRIX_CUSTOMER,
+      warehouseId: MATRIX_WAREHOUSE,
+      orderDate: '2026-09-12',
+      lines: [{ productId: MATRIX_PRODUCT, quantity: '1' }],
+    }),
+    idempotent: true,
+    permission: 'sales:create',
+  },
+  {
+    label: 'list sales orders',
+    controller: 'SalesOrderController',
+    handler: 'list',
+    method: 'GET',
+    url: () => '/api/sales-orders',
+    permission: 'sales:view',
+  },
+  {
+    label: 'read a sales order',
+    controller: 'SalesOrderController',
+    handler: 'get',
+    method: 'GET',
+    url: () => `/api/sales-orders/${matrixOrder}`,
+    permission: 'sales:view',
+  },
+  {
+    label: 'edit a sales order',
+    controller: 'SalesOrderController',
+    handler: 'update',
+    method: 'PUT',
+    url: () => `/api/sales-orders/${matrixOrder}`,
+    payload: () => ({
+      customerId: MATRIX_CUSTOMER,
+      warehouseId: MATRIX_WAREHOUSE,
+      orderDate: '2026-09-12',
+      version: 1,
+      lines: [{ productId: MATRIX_PRODUCT, quantity: '2' }],
+    }),
+    idempotent: true,
+    permission: 'sales:create',
+  },
+  {
+    label: 'confirm a sales order',
+    controller: 'SalesOrderController',
+    handler: 'confirm',
+    method: 'POST',
+    url: () => `/api/sales-orders/${matrixOrder}/confirm`,
+    idempotent: true,
+    permission: 'sales:confirm',
+  },
+  {
+    label: 'cancel a sales order',
+    controller: 'SalesOrderController',
+    handler: 'cancel',
+    method: 'POST',
+    url: () => `/api/sales-orders/${matrixOrder}/cancel`,
+    idempotent: true,
+    permission: 'sales:cancel',
+  },
+  {
+    label: 'read a sales order trail',
+    controller: 'SalesOrderController',
+    handler: 'auditEvents',
+    method: 'GET',
+    url: () => `/api/sales-orders/${matrixOrder}/audit-events`,
+    permission: 'audit:view',
+  },
 ];
+
+/** A route that requires a capability, which is what the matrix has to cover. */
+type ProtectedRoute = DeclaredRoute & { access: Extract<RouteAccess, { kind: 'permission' }> };
+
+/** Whether a matrix entry and a registered route are the same route. */
+const matches = (call: Call, route: ProtectedRoute) =>
+  call.controller === route.controller && call.handler === route.handler;
 
 describe('Deny by default', () => {
   let app: NestFastifyApplication;
@@ -154,7 +318,36 @@ describe('Deny by default', () => {
     await owner.query('DELETE FROM sessions WHERE user_id = $1', [SUBJECT]);
     await owner.query('DELETE FROM auth_throttle');
     await clearRoles(MEMBERSHIP_HOME, TENANT_HOME, HOME);
+    await freshOrder();
   });
+
+  /**
+   * One draft sales order, replaced before every test.
+   *
+   * The mutating cells of the matrix confirm and cancel it, so a shared order would leave
+   * later cells answering 409 about a state an earlier cell put it in. That would not be the
+   * matrix failing, and it would not be the matrix passing either.
+   */
+  async function freshOrder(): Promise<void> {
+    await scopedOwner(TENANT_HOME, HOME);
+    await owner.query('DELETE FROM stock_reservations WHERE company_id = $1', [HOME]);
+    await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [HOME]);
+    await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [HOME]);
+
+    matrixOrder = nextOrderId();
+    await owner.query(
+      `INSERT INTO sales_orders (id, tenant_id, company_id, status, customer_id, warehouse_id, order_date, currency)
+       VALUES ($1,$2,$3,'draft',$4,$5,current_date,'USD')`,
+      [matrixOrder, TENANT_HOME, HOME, MATRIX_CUSTOMER, MATRIX_WAREHOUSE],
+    );
+    await owner.query(
+      `INSERT INTO sales_order_lines
+         (id, tenant_id, company_id, sales_order_id, line_number, product_id, product_sku, product_name,
+          quantity, unit_price, currency)
+       VALUES ($1,$2,$3,$4,1,$5,'SKU-M','Matrix widget','1.000000','10.000000','USD')`,
+      [nextOrderId(), TENANT_HOME, HOME, matrixOrder, MATRIX_PRODUCT],
+    );
+  }
 
   async function seed(hasher: PasswordHasher): Promise<void> {
     await owner.query('INSERT INTO tenants (id, slug, name) VALUES ($1,$2,$3), ($4,$5,$6)', [
@@ -186,6 +379,40 @@ describe('Deny by default', () => {
 
     homeRoles = await provisioning.seedDefaultRoles({ tenantId: TENANT_HOME, companyId: HOME });
     awayRoles = await provisioning.seedDefaultRoles({ tenantId: TENANT_AWAY, companyId: AWAY });
+
+    // Master data and stock in the home company, so an allowed sales call is answered by the
+    // operation rather than by a missing record.
+    await scopedOwner(TENANT_HOME, HOME);
+    await owner.query(
+      'INSERT INTO customers (id, tenant_id, company_id, code, name) VALUES ($1,$2,$3,$4,$5)',
+      [MATRIX_CUSTOMER, TENANT_HOME, HOME, 'CUST-M', 'Matrix customer'],
+    );
+    await owner.query(
+      'INSERT INTO warehouses (id, tenant_id, company_id, code, name, is_default) VALUES ($1,$2,$3,$4,$5,true)',
+      [MATRIX_WAREHOUSE, TENANT_HOME, HOME, 'WH-M', 'Matrix warehouse'],
+    );
+    await owner.query(
+      `INSERT INTO products (id, tenant_id, company_id, sku, name, stocking_uom, sales_price, sales_price_currency)
+       VALUES ($1,$2,$3,'SKU-M','Matrix widget','unit','10.000000','USD')`,
+      [MATRIX_PRODUCT, TENANT_HOME, HOME],
+    );
+    await owner.query(
+      `INSERT INTO document_number_sequences (id, tenant_id, company_id, doc_type, prefix, gapless, next_value)
+       VALUES ($1,$2,$3,'sales_order','SO-',true,1)`,
+      [MATRIX_SEQUENCE, TENANT_HOME, HOME],
+    );
+    // Enough stock that a confirm cell is answered by authorization rather than by an oversell.
+    await owner.query(
+      `INSERT INTO stock_movements (id, tenant_id, company_id, product_id, warehouse_id, quantity, reason,
+          source_doc_type, source_doc_id)
+       VALUES ($1,$2,$3,$4,$5,'1000.000000','purchase_receipt','purchase_order',$6)`,
+      [nextOrderId(), TENANT_HOME, HOME, MATRIX_PRODUCT, MATRIX_WAREHOUSE, nextOrderId()],
+    );
+    await owner.query(
+      `INSERT INTO stock_balances (id, tenant_id, company_id, product_id, warehouse_id, on_hand)
+       VALUES ($1,$2,$3,$4,$5,'1000.000000')`,
+      [nextOrderId(), TENANT_HOME, HOME, MATRIX_PRODUCT, MATRIX_WAREHOUSE],
+    );
   }
 
   async function purge(): Promise<void> {
@@ -197,6 +424,16 @@ describe('Deny by default', () => {
 
     for (const [tenantId, companyId] of scopes) {
       await scopedOwner(tenantId, companyId);
+      await owner.query('DELETE FROM idempotency_records WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM stock_reservations WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM stock_movements WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM stock_balances WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM products WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM warehouses WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM customers WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM membership_roles WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM role_permissions WHERE tenant_id = $1', [tenantId]);
       await owner.query('DELETE FROM roles WHERE tenant_id = $1', [tenantId]);
@@ -270,13 +507,27 @@ describe('Deny by default', () => {
   const invoke = (call: Call, cookie?: string, extra: Record<string, string> = {}) =>
     app.inject({
       method: call.method,
-      url: call.url,
+      url: call.url(),
       headers: {
         ...(cookie ? { cookie, [CSRF_HEADER]: csrfOf(cookie) } : {}),
+        // A fresh key each time. A reused one would answer a later cell with an earlier
+        // cell's stored response, which is section 11 working and the matrix not.
+        ...(call.idempotent ? { 'idempotency-key': `matrix-${(keySequence += 1)}` } : {}),
         ...extra,
       },
-      ...(call.payload ? { payload: call.payload } : {}),
+      ...(call.payload ? { payload: call.payload() } : {}),
     });
+
+  /**
+   * Every route the guard will demand a capability for, read from the registry.
+   *
+   * The same list the startup audit walks and the same metadata the guard reads, so a route
+   * cannot be covered here and enforced differently there.
+   */
+  const protectedRoutes = (): ProtectedRoute[] =>
+    audit
+      .inspect()
+      .declared.filter((route): route is ProtectedRoute => route.access.kind === 'permission');
 
   /** Signs in, enters the home company, and holds exactly the named role there. */
   const asRole = async (roleKey: RoleKey): Promise<string> => {
@@ -292,10 +543,46 @@ describe('Deny by default', () => {
 
   describe('every registered route declares its access', () => {
     it('finds no undeclared route in the application', () => {
-      const { declared, undeclared } = audit.inspect();
+      const { undeclared } = audit.inspect();
 
       expect(undeclared).toEqual([]);
-      expect(declared.length).toBeGreaterThanOrEqual(CALLS.length);
+    });
+
+    it('has a matrix entry for every protected route the application registers', () => {
+      // SECTION 13.1, AND THE REASON THIS TEST EXISTS. A new protected route with no matrix
+      // entry must fail the build. The previous assertion compared list lengths, which is
+      // satisfied by adding routes and no entries, so ten routes went uncovered without a
+      // single test going red. This reads the registry the guard reads and names the offender.
+      const uncovered = protectedRoutes()
+        .filter((route) => !CALLS.some((call) => matches(call, route)))
+        .map((route) => `${route.controller}.${route.handler}`);
+
+      expect(uncovered).toEqual([]);
+    });
+
+    it('has no matrix entry for a route the application does not register', () => {
+      // The other direction. An entry left behind after a route is renamed or removed would
+      // otherwise keep passing against nothing.
+      const orphaned = CALLS.filter(
+        (call) => !protectedRoutes().some((route) => matches(call, route)),
+      ).map((call) => `${call.controller}.${call.handler}`);
+
+      expect(orphaned).toEqual([]);
+    });
+
+    it('expects the permission each route actually declares', () => {
+      // An entry naming the right route and the wrong permission would compute every allow
+      // and deny cell below from a capability the route does not require.
+      for (const route of protectedRoutes()) {
+        const call = CALLS.find((entry) => matches(entry, route));
+        expect(call?.permission).toBe(route.access.permission);
+      }
+    });
+
+    it('covers each protected route exactly once', () => {
+      const seen = CALLS.map((call) => `${call.controller}.${call.handler}`);
+
+      expect(new Set(seen).size).toBe(seen.length);
     });
 
     it('refuses to start when a route declares nothing', () => {
@@ -312,16 +599,9 @@ describe('Deny by default', () => {
       );
     });
 
-    it('declares each protected route with the permission the matrix expects', () => {
-      const { declared } = audit.inspect();
-      const byPermission = declared
-        .filter((route): route is typeof route & { access: Extract<RouteAccess, { kind: 'permission' }> } =>
-          route.access.kind === 'permission',
-        )
-        .map((route) => route.access.permission);
-
-      for (const call of CALLS) {
-        expect(byPermission).toContain(call.permission);
+    it('declares every protected route with a permission from the catalogue', () => {
+      for (const route of protectedRoutes()) {
+        expect(PERMISSIONS).toContain(route.access.permission);
       }
     });
   });
@@ -366,9 +646,13 @@ describe('Deny by default', () => {
 
         const response = await app.inject({
           method: call.method,
-          url: call.url,
-          headers: { cookie: `erp_csrf=${issued}`, [CSRF_HEADER]: issued },
-          ...(call.payload ? { payload: call.payload } : {}),
+          url: call.url(),
+          headers: {
+            cookie: `erp_csrf=${issued}`,
+            [CSRF_HEADER]: issued,
+            ...(call.idempotent ? { 'idempotency-key': `matrix-${(keySequence += 1)}` } : {}),
+          },
+          ...(call.payload ? { payload: call.payload() } : {}),
         });
 
         expect(response.statusCode).toBe(401);
@@ -542,11 +826,26 @@ describe('Deny by default', () => {
       await grant('administrator', 'away');
       const cookie = await login();
 
+      // Read with a wide limit rather than through the matrix entry, which asks for the default
+      // page. The records this asserts on are the seeding records, written once when the suite
+      // started, and every login and company switch since has pushed them further down the list.
+      // The claim being tested is about isolation, not about what fits on the first page.
+      const trail = async (): Promise<{ entityId: string }[]> =>
+        JSON.parse(
+          (
+            await app.inject({
+              method: 'GET',
+              url: '/api/audit-events?limit=500',
+              headers: { cookie, [CSRF_HEADER]: csrfOf(cookie) },
+            })
+          ).body,
+        ) as { entityId: string }[];
+
       await enter(cookie, HOME);
-      const home = JSON.parse((await invoke(CALLS[4]!, cookie)).body) as { entityId: string }[];
+      const home = await trail();
 
       await enter(cookie, AWAY);
-      const away = JSON.parse((await invoke(CALLS[4]!, cookie)).body) as { entityId: string }[];
+      const away = await trail();
 
       // Each company sees its own switch records and its own seeding record, and neither sees
       // the other's, which is section 2.10 rather than a filter someone remembered.

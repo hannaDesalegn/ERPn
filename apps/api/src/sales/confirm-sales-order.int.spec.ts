@@ -390,6 +390,138 @@ describe('Confirming a sales order', () => {
   // 1, 5, 8, 10 and 12. A confirmation that works.
   // -------------------------------------------------------------------------------------
 
+// -------------------------------------------------------------------------------------
+  // Section 12.2 step one, the master data half.
+  // -------------------------------------------------------------------------------------
+
+  describe('master data that stopped being usable while the draft sat', () => {
+    /**
+     * Archives one record, runs the body, and puts it back.
+     *
+     * Restored in a `finally` because the seed is built once for the whole file. A test that
+     * left a customer archived would change what every later test is confirming against.
+     */
+    async function whileArchived(
+      table: 'customers' | 'warehouses' | 'products',
+      id: string,
+      body: () => Promise<void>,
+    ): Promise<void> {
+      await ownerContext(TENANT_A, COMPANY_A1);
+      await owner.query(`UPDATE ${table} SET status = 'archived' WHERE id = $1`, [id]);
+      try {
+        await body();
+      } finally {
+        await ownerContext(TENANT_A, COMPANY_A1);
+        await owner.query(`UPDATE ${table} SET status = 'active' WHERE id = $1`, [id]);
+      }
+    }
+
+    it('refuses when the customer has been archived since the draft was written', async () => {
+      // Section 12.2 names both halves of step one, and this is the half a draft cannot do on
+      // its own. Creation checked the customer weeks ago; confirming is the moment the business
+      // commits, so the question is asked again.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await whileArchived('customers', CUSTOMER[COMPANY_A1]!, async () => {
+        const error = await refusal(confirm(IN_A1, CONTEXT_A1, orderId));
+
+        expect(error).toBeInstanceOf(SalesOrderConfirmationError);
+        expect((error as SalesOrderConfirmationError).reason).toBe('master_data_unusable');
+      });
+
+      // And nothing happened: no number, no reservation, no audit row, still a draft.
+      expect((await orderRow(TENANT_A, COMPANY_A1, orderId))?.status).toBe('draft');
+      expect(await reservationsIn(TENANT_A, COMPANY_A1)).toEqual([]);
+      expect(await counterFor(TENANT_A, COMPANY_A1)).toBe('1');
+      expect(await auditIn(TENANT_A, COMPANY_A1)).toEqual([]);
+    });
+
+    it('refuses when the warehouse has been archived', async () => {
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await whileArchived('warehouses', WAREHOUSE[COMPANY_A1]!, async () => {
+        const error = await refusal(confirm(IN_A1, CONTEXT_A1, orderId));
+
+        expect((error as SalesOrderConfirmationError).reason).toBe('master_data_unusable');
+      });
+
+      expect((await orderRow(TENANT_A, COMPANY_A1, orderId))?.status).toBe('draft');
+    });
+
+    it('refuses when a product on any line has been archived', async () => {
+      // The second line, so the check cannot pass by looking only at the first.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      await stock(IN_A1, GADGET, '100');
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+        { productId: GADGET, quantity: '4' },
+      ]);
+
+      await whileArchived('products', GADGET, async () => {
+        const error = await refusal(confirm(IN_A1, CONTEXT_A1, orderId));
+
+        expect((error as SalesOrderConfirmationError).reason).toBe('master_data_unusable');
+      });
+
+      // Not one line reserved. Refusing after reserving the first would be the partial post
+      // section 12.2 forbids.
+      expect(await reservationsIn(TENANT_A, COMPANY_A1)).toEqual([]);
+    });
+
+    it('confirms normally once the record is active again', async () => {
+      // The refusal is about the record's current state, not about the order, so restoring the
+      // record restores the order's ability to be confirmed.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await whileArchived('products', WIDGET[COMPANY_A1]!, async () => {
+        await refusal(confirm(IN_A1, CONTEXT_A1, orderId));
+      });
+
+      const { order } = await confirm(IN_A1, CONTEXT_A1, orderId);
+      expect(order.status).toBe('confirmed');
+      expect(order.docNumber).toBe('SO-0001');
+    });
+
+    it('does not re-read the price a line snapshotted', async () => {
+      // Section 3.4: a document snapshots what applied when it was raised. Step one checks that
+      // the record is still usable, not what it now says, so a price change after drafting must
+      // not follow through to the confirmed document.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      await owner.query(`UPDATE products SET sales_price = '999.000000' WHERE id = $1`, [
+        WIDGET[COMPANY_A1],
+      ]);
+      try {
+        await confirm(IN_A1, CONTEXT_A1, orderId);
+
+        await ownerContext(TENANT_A, COMPANY_A1);
+        const rows = await owner.query<{ unit_price: string }>(
+          'SELECT unit_price FROM sales_order_lines WHERE sales_order_id = $1',
+          [orderId],
+        );
+        expect(rows.rows[0]?.unit_price).toBe('10.000000');
+      } finally {
+        await ownerContext(TENANT_A, COMPANY_A1);
+        await owner.query(`UPDATE products SET sales_price = '10.000000' WHERE id = $1`, [
+          WIDGET[COMPANY_A1],
+        ]);
+      }
+    });
+  });
+
   describe('a valid draft', () => {
     it('becomes confirmed with a document number', async () => {
       await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
