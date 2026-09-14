@@ -26,10 +26,11 @@
  * check constraint amended in migration 0012 permits for exactly this status and no other.
  *
  * THE LOCK ORDER, per section 10.2's requirement that it be documented and followed. This takes
- * the balance row lock for each reservation's product and warehouse, in the order
- * `listActiveForOrder` returns them, which is sorted by product then warehouse then reservation.
- * That is the same rule `confirmSalesOrder` follows through its lines, so a cancellation and a
- * confirmation competing for the same two keys queue rather than deadlock.
+ * the balance row lock for each reservation's key, in the order `inLockOrder` states, which is the
+ * one order every operation in the system uses over these rows. Confirmation sorts its lines
+ * through the same comparator, so a cancellation and a confirmation competing for the same two
+ * keys queue rather than deadlock. The query orders the same way; the sort in code is what keeps
+ * that true when a plan changes.
  *
  * WHY THE LOCK IS TAKEN AT ALL, when the release writes to the reservation row rather than to the
  * balance. Because availability is on hand minus active reservations, and a reader deciding
@@ -42,6 +43,7 @@
 import type { CompanyContext } from '../identity/identity.service.js';
 import { grantsIn } from '../authorization/authorization.service.js';
 import type { ScopedRepositories, SalesOrderRecord } from '../database/index.js';
+import { inLockOrder } from '../inventory/lock-order.js';
 import { add, parseDecimal, toFixed, zero } from '../shared/decimal.js';
 import { assertTransition, statusOf } from './sales-order-status.js';
 
@@ -166,7 +168,10 @@ export async function cancelSalesOrder(
   // Read from the order rather than from anything the caller said, and read now rather than
   // earlier, so a reservation written between the caller's screen and this transaction is
   // released too. A draft holds nothing and this is simply empty, which is not a special case.
-  const held = await repositories.stockReservations.listActiveForOrder(order.id);
+  // Sorted here as well as in the query. The query orders by the same key, and stating the
+  // rule in code is what keeps it true if a plan changes: an ordering nobody asserts is an
+  // ordering nobody keeps. Same comparator confirmation uses, which is the point of it.
+  const held = inLockOrder(await repositories.stockReservations.listActiveForOrder(order.id));
 
   const releasedReservationIds: string[] = [];
   // Summed through the shared arithmetic of section 4.3 rather than in a double. The figure is

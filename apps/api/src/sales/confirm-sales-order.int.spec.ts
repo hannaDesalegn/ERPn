@@ -522,6 +522,106 @@ describe('Confirming a sales order', () => {
     });
   });
 
+// -------------------------------------------------------------------------------------
+  // Section 10.2's acquisition order.
+  // -------------------------------------------------------------------------------------
+
+  describe('the order balance locks are taken in', () => {
+    /** The two products, lowest identifier first, which is the order the locks must follow. */
+    const canonical = [WIDGET[COMPANY_A1]!, GADGET].sort();
+
+    it('follows the balance key, not the order the lines happen to be in', async () => {
+      // THE REGRESSION TEST FOR THE DEADLOCK. Section 10.2 requires the acquisition order to be
+      // documented and followed, and this loop used to follow line order, which is an order
+      // within one document and none at all across two. Two orders naming the same two products
+      // in opposite line order would acquire the same two locks in opposite sequences.
+      //
+      // The sequence is observable because a reservation is written immediately after its lock
+      // is taken, and `reservationIds` comes back in the order they were written. Confirming an
+      // order whose lines are deliberately in reverse canonical order must still reserve in
+      // canonical order.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      await stock(IN_A1, GADGET, '100');
+
+      const reversed = [...canonical].reverse();
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: reversed[0]!, quantity: '1' },
+        { productId: reversed[1]!, quantity: '1' },
+      ]);
+
+      const { reservationIds } = await confirm(IN_A1, CONTEXT_A1, orderId);
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const rows = await owner.query<{ id: string; product_id: string }>(
+        'SELECT id, product_id FROM stock_reservations',
+      );
+      const productOf = new Map(rows.rows.map((row) => [row.id, row.product_id]));
+
+      expect(reservationIds.map((id) => productOf.get(id))).toEqual(canonical);
+    });
+
+    it('is the same sequence whichever way the lines were written', async () => {
+      // The property that makes a deadlock unreachable rather than unlikely: two documents
+      // listing the same two products in opposite orders lock them in one sequence.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      await stock(IN_A1, GADGET, '100');
+
+      const forwards = await draft(TENANT_A, COMPANY_A1, [
+        { productId: canonical[0]!, quantity: '1' },
+        { productId: canonical[1]!, quantity: '1' },
+      ]);
+      const backwards = await draft(TENANT_A, COMPANY_A1, [
+        { productId: canonical[1]!, quantity: '1' },
+        { productId: canonical[0]!, quantity: '1' },
+      ]);
+
+      const first = await confirm(IN_A1, CONTEXT_A1, forwards);
+      const second = await confirm(IN_A1, CONTEXT_A1, backwards);
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const rows = await owner.query<{ id: string; product_id: string }>(
+        'SELECT id, product_id FROM stock_reservations',
+      );
+      const productOf = new Map(rows.rows.map((row) => [row.id, row.product_id]));
+
+      expect(first.reservationIds.map((id) => productOf.get(id))).toEqual(canonical);
+      expect(second.reservationIds.map((id) => productOf.get(id))).toEqual(canonical);
+    });
+
+    it('lets two orders with opposite lines confirm together without deadlocking', async () => {
+      // The failure the ordering exists to prevent, run for real. With the canonical order both
+      // transactions queue on the same first row and both commit. Without it, PostgreSQL
+      // detects a cycle and aborts one, which surfaces here as a confirmation that failed for
+      // no business reason.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '1000');
+      await stock(IN_A1, GADGET, '1000');
+
+      const forwards = await draft(TENANT_A, COMPANY_A1, [
+        { productId: canonical[0]!, quantity: '1' },
+        { productId: canonical[1]!, quantity: '1' },
+      ]);
+      const backwards = await draft(TENANT_A, COMPANY_A1, [
+        { productId: canonical[1]!, quantity: '1' },
+        { productId: canonical[0]!, quantity: '1' },
+      ]);
+
+      const outcomes = await Promise.all(
+        [forwards, backwards].map((id) =>
+          uow
+            .inActorScope(IN_A1, (repositories) =>
+              confirmSalesOrder(repositories, CONTEXT_A1, { salesOrderId: id }),
+            )
+            .then(
+              () => 'ok' as const,
+              (error: unknown) => (error instanceof Error ? error.message : String(error)),
+            ),
+        ),
+      );
+
+      expect(outcomes).toEqual(['ok', 'ok']);
+    });
+  });
+
   describe('a valid draft', () => {
     it('becomes confirmed with a document number', async () => {
       await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');

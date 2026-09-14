@@ -41,6 +41,7 @@
 import type { CompanyContext } from '../identity/identity.service.js';
 import { grantsIn } from '../authorization/authorization.service.js';
 import type { ScopedRepositories, SalesOrderRecord } from '../database/index.js';
+import { inLockOrder } from '../inventory/lock-order.js';
 import { reserveForOrderLine } from '../inventory/reservations.js';
 import { allocateSalesOrderNumber } from './document-numbers.js';
 import { assertTransition, statusOf } from './sales-order-status.js';
@@ -99,7 +100,12 @@ export class SalesOrderConfirmationError extends Error {
 
 export interface ConfirmedSalesOrder {
   order: SalesOrderRecord;
-  /** One reservation per line, in line order. */
+  /**
+   * One reservation per line, in the order the balance locks were taken.
+   *
+   * Lock order rather than line order, and stated rather than incidental: it is what makes the
+   * acquisition sequence observable from outside, which is what the regression test reads.
+   */
   reservationIds: string[];
 }
 
@@ -190,15 +196,20 @@ export async function confirmSalesOrder(
   // ---- Step 3: apply the side effects. -------------------------------------------------
   //
   // One reservation per line, each taking its own balance row lock and refusing an oversell
-  // inside this transaction per section 8.5. Sequential rather than parallel, which is what
-  // section 10.2's documented lock order asks for: locks are acquired in line order, the same
-  // order for every transaction confirming any order, so two confirmations competing for the
-  // same two products queue rather than deadlock.
+  // inside this transaction per section 8.5. Sequential rather than parallel, because a unit of
+  // work is one connection and because the locks have to be taken in a stated order.
+  //
+  // IN CANONICAL LOCK ORDER, NOT LINE ORDER. Section 10.2 requires the acquisition order to be
+  // documented and followed, and this loop used to claim line order satisfied it. It does not.
+  // Line order is an order within one document and nothing across two: an order listing widget
+  // then gadget and another listing gadget then widget acquire the same two locks in opposite
+  // sequences, and deadlock. `inLockOrder` sorts by the balance key itself, which is the same
+  // sequence for every transaction in the system touching the same rows.
   //
   // A line that cannot be reserved throws, and the lines already reserved go with it. Section
   // 12.2 permits no partial post, and this is where that is most easily gotten wrong.
   const reservationIds: string[] = [];
-  for (const line of lines) {
+  for (const line of inLockOrder(lines.map((line) => ({ ...line, warehouseId: order.warehouseId })))) {
     const reservation = await reserveForOrderLine(repositories, {
       salesOrderLineId: line.id,
       // From the persisted line, never from the request. The request has no quantity field.
