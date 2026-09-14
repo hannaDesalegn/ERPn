@@ -68,6 +68,9 @@ describe('Secret handling in the authentication files', () => {
       'principal.ts',
       'session-cookie.ts',
       'session-policy.ts',
+      // Section 10.3's retry boundary. It sees whatever error the transaction raised, which on
+      // an authentication path could carry anything, so it is scanned like the rest.
+      'serialization-retry.ts',
       'session-token.ts',
     ].sort());
   });

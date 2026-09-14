@@ -36,6 +36,7 @@ import { RequirePermission } from '../authorization/route-access.js';
 import { actorScope, ConcurrencyConflictError, UnitOfWork } from '../database/index.js';
 import { StockReservationError } from '../inventory/reservations.js';
 import { principalOf } from '../http/principal.js';
+import { withSerializationRetry } from '../http/serialization-retry.js';
 import {
   fingerprintOf,
   IdempotencyConflictError,
@@ -249,7 +250,7 @@ export class SalesOrderController {
     const fingerprint = fingerprintOf(parsed.data);
 
     try {
-      const outcome = await this.uow.inActorScope(
+      const outcome = await withSerializationRetry(() => this.uow.inActorScope(
         actorScope({
           tenantId: context.tenantId,
           companyId: context.companyId,
@@ -282,7 +283,7 @@ export class SalesOrderController {
               return { status: 201, body: view as unknown as Record<string, unknown> };
             },
           ),
-      );
+      ));
 
       return outcome.response.body as unknown as SalesOrderView;
     } catch (error) {
@@ -341,7 +342,7 @@ export class SalesOrderController {
     const fingerprint = fingerprintOf({ salesOrderId, ...parsed.data });
 
     try {
-      const outcome = await this.uow.inActorScope(scope, (repositories) =>
+      const outcome = await withSerializationRetry(() => this.uow.inActorScope(scope, (repositories) =>
         runIdempotently(
           repositories,
           { endpoint: UPDATE_ENDPOINT, key: key.data, fingerprint },
@@ -366,7 +367,7 @@ export class SalesOrderController {
             return { status: 200, body: view as unknown as Record<string, unknown> };
           },
         ),
-      );
+      ));
 
       return outcome.response.body as unknown as SalesOrderView;
     } catch (error) {
@@ -532,7 +533,7 @@ export class SalesOrderController {
     const fingerprint = fingerprintOf({ salesOrderId });
 
     try {
-      const outcome = await this.uow.inActorScope(
+      const outcome = await withSerializationRetry(() => this.uow.inActorScope(
         actorScope({
           tenantId: context.tenantId,
           companyId: context.companyId,
@@ -559,7 +560,7 @@ export class SalesOrderController {
               };
             },
           ),
-      );
+      ));
 
       return outcome.response.body as unknown as ConfirmationView;
     } catch (error) {
@@ -623,7 +624,7 @@ export class SalesOrderController {
     const fingerprint = fingerprintOf({ salesOrderId, reason: parsed.data.reason ?? null });
 
     try {
-      const outcome = await this.uow.inActorScope(
+      const outcome = await withSerializationRetry(() => this.uow.inActorScope(
         actorScope({
           tenantId: context.tenantId,
           companyId: context.companyId,
@@ -654,7 +655,7 @@ export class SalesOrderController {
               };
             },
           ),
-      );
+      ));
 
       return outcome.response.body as unknown as CancellationView;
     } catch (error) {
