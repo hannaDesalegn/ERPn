@@ -103,6 +103,17 @@ interface Call {
 /** The order every sales route in the matrix acts on, replaced before each test. */
 let matrixOrder = '00000000-0000-4000-8000-000000000000';
 
+/**
+ * The confirmed order the invoice cells bill, and the draft invoice they read and edit.
+ *
+ * Separate from `matrixOrder`, which the sales cells confirm and cancel: an invoice can only be
+ * raised from a confirmed order, and the cancel cell would otherwise leave nothing to bill. Both
+ * are replaced before every test, so an allow cell is answered by the operation rather than by a
+ * state an earlier cell left behind.
+ */
+let matrixInvoiceOrder = '00000000-0000-4000-8000-000000000001';
+let matrixInvoice = '00000000-0000-4000-8000-000000000002';
+
 /** A fresh key per invocation, so an allow cell is never answered by a replay of an earlier one. */
 let keySequence = 0;
 
@@ -242,6 +253,41 @@ const CALLS: Call[] = [
     permission: 'sales:cancel',
   },
   {
+    label: 'create a customer invoice',
+    controller: 'CustomerInvoiceController',
+    handler: 'create',
+    method: 'POST',
+    url: () => '/api/customer-invoices',
+    payload: () => ({
+      salesOrderIds: [matrixInvoiceOrder],
+      invoiceDate: '2026-09-15',
+    }),
+    idempotent: true,
+    permission: 'invoices:create',
+  },
+  {
+    label: 'edit a customer invoice',
+    controller: 'CustomerInvoiceController',
+    handler: 'update',
+    method: 'PUT',
+    url: () => `/api/customer-invoices/${matrixInvoice}`,
+    payload: () => ({
+      salesOrderIds: [matrixInvoiceOrder],
+      invoiceDate: '2026-09-16',
+      version: 1,
+    }),
+    idempotent: true,
+    permission: 'invoices:create',
+  },
+  {
+    label: 'read a customer invoice',
+    controller: 'CustomerInvoiceController',
+    handler: 'get',
+    method: 'GET',
+    url: () => `/api/customer-invoices/${matrixInvoice}`,
+    permission: 'invoices:view',
+  },
+  {
     label: 'read a sales order trail',
     controller: 'SalesOrderController',
     handler: 'auditEvents',
@@ -331,6 +377,9 @@ describe('Deny by default', () => {
   async function freshOrder(): Promise<void> {
     await scopedOwner(TENANT_HOME, HOME);
     await owner.query('DELETE FROM stock_reservations WHERE company_id = $1', [HOME]);
+    // Invoice rows first: their lines reference the order lines deleted below.
+    await owner.query('DELETE FROM customer_invoice_lines WHERE company_id = $1', [HOME]);
+    await owner.query('DELETE FROM customer_invoices WHERE company_id = $1', [HOME]);
     await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [HOME]);
     await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [HOME]);
 
@@ -346,6 +395,48 @@ describe('Deny by default', () => {
           quantity, unit_price, currency)
        VALUES ($1,$2,$3,$4,1,$5,'SKU-M','Matrix widget','1.000000','10.000000','USD')`,
       [nextOrderId(), TENANT_HOME, HOME, matrixOrder, MATRIX_PRODUCT],
+    );
+
+    // A confirmed order for the invoice cells to bill, and a draft invoice for them to read and
+    // edit. Written directly, because what the invoice routes need is the stored state rather
+    // than a confirmation this suite is not testing.
+    matrixInvoiceOrder = nextOrderId();
+    const invoiceOrderLine = nextOrderId();
+    await owner.query(
+      `INSERT INTO sales_orders (id, tenant_id, company_id, status, doc_number, customer_id, warehouse_id, order_date, currency)
+       VALUES ($1,$2,$3,'confirmed','SO-M001',$4,$5,current_date,'USD')`,
+      [matrixInvoiceOrder, TENANT_HOME, HOME, MATRIX_CUSTOMER, MATRIX_WAREHOUSE],
+    );
+    await owner.query(
+      `INSERT INTO sales_order_lines
+         (id, tenant_id, company_id, sales_order_id, line_number, product_id, product_sku, product_name,
+          quantity, unit_price, currency)
+       VALUES ($1,$2,$3,$4,1,$5,'SKU-M','Matrix widget','5.000000','10.000000','USD')`,
+      [invoiceOrderLine, TENANT_HOME, HOME, matrixInvoiceOrder, MATRIX_PRODUCT],
+    );
+
+    matrixInvoice = nextOrderId();
+    await owner.query(
+      `INSERT INTO customer_invoices
+         (id, tenant_id, company_id, customer_id, invoice_date, currency, subtotal, tax_total, total)
+       VALUES ($1,$2,$3,$4,current_date,'USD','10.0000','0.0000','10.0000')`,
+      [matrixInvoice, TENANT_HOME, HOME, MATRIX_CUSTOMER],
+    );
+    await owner.query(
+      `INSERT INTO customer_invoice_lines
+         (id, tenant_id, company_id, customer_invoice_id, line_number, source_sales_order_id,
+          source_sales_order_line_id, product_id, product_sku, product_name, quantity, unit_price,
+          currency, line_subtotal, line_tax, line_total)
+       VALUES ($1,$2,$3,$4,1,$5,$6,$7,'SKU-M','Matrix widget','1.000000','10.000000','USD','10.0000','0.0000','10.0000')`,
+      [
+        nextOrderId(),
+        TENANT_HOME,
+        HOME,
+        matrixInvoice,
+        matrixInvoiceOrder,
+        invoiceOrderLine,
+        MATRIX_PRODUCT,
+      ],
     );
   }
 
@@ -428,6 +519,8 @@ describe('Deny by default', () => {
       await owner.query('DELETE FROM stock_reservations WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM stock_movements WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM stock_balances WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM customer_invoice_lines WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM customer_invoices WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
