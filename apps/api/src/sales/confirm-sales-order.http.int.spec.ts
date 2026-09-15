@@ -1830,4 +1830,103 @@ describe('Confirming a sales order over HTTP', () => {
       expect(detail.docNumber).toBe('SO-0001');
     });
   });
+
+  // -------------------------------------------------------------------------------------
+  // Section 7.3, over a real request.
+  // -------------------------------------------------------------------------------------
+
+  describe('what the audit record carries when the request is a real one', () => {
+    const recordFor = async (action: string) => {
+      await ownerContext(TENANT, COMPANY);
+      const rows = await owner.query<{
+        actor_user_id: string;
+        actor_roles: string[];
+        request_id: string | null;
+        txid: string;
+      }>(
+        `SELECT actor_user_id, actor_roles, request_id, txid::text AS txid
+           FROM audit_events WHERE action = $1 AND company_id = $2`,
+        [action, COMPANY],
+      );
+      return rows.rows[0];
+    };
+
+    it('names the actor, their roles, and the request, on a confirmation', async () => {
+      // The three fields section 7.3 lists that nothing populated before. Asserted through HTTP
+      // rather than by handing the operation a literal, because the plumbing from the framework
+      // to the record is the part that can be wrong.
+      await stock(COMPANY, WIDGET, '100');
+      const orderId = await draft(COMPANY, '10');
+
+      await confirm(seller, orderId, 'key-audit-fields');
+
+      const record = await recordFor('sales_order_confirmed');
+      expect(record?.actor_user_id).toBe(SELLER);
+      expect(record?.actor_roles).toEqual(['sales']);
+      expect(record?.request_id).toMatch(/.+/);
+      expect(record?.txid).toMatch(/^\d+$/);
+    });
+
+    it('names them on a cancellation too', async () => {
+      const orderId = await draft(COMPANY, '10');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${orderId}/cancel`,
+        headers: mutating(seller, { 'idempotency-key': 'key-audit-fields-cancel' }),
+      });
+
+      const record = await recordFor('sales_order_cancelled');
+      expect(record?.actor_roles).toEqual(['sales']);
+      expect(record?.request_id).toMatch(/.+/);
+    });
+
+    it('does not let the caller choose the request id', async () => {
+      // A forged correlation id in an append-only log is worth exactly as much as a forged
+      // actor. Fastify 5 defaults `requestIdHeader` to false, so the header below is ignored,
+      // and this is what holds that true if the adapter is ever configured differently.
+      const orderId = await draft(COMPANY, '10');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${orderId}/cancel`,
+        headers: mutating(seller, {
+          'idempotency-key': 'key-audit-forged',
+          'request-id': 'forged-by-the-client',
+          'x-request-id': 'also-forged',
+        }),
+      });
+
+      const record = await recordFor('sales_order_cancelled');
+      expect(record?.request_id).not.toBe('forged-by-the-client');
+      expect(record?.request_id).not.toBe('also-forged');
+      expect(record?.request_id).toMatch(/.+/);
+    });
+
+    it('gives two requests two different ids', async () => {
+      // A correlation id that never changes correlates nothing.
+      const first = await draft(COMPANY, '10');
+      const second = await draft(COMPANY, '10');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${first}/cancel`,
+        headers: mutating(seller, { 'idempotency-key': 'key-audit-id-1' }),
+      });
+      await app.inject({
+        method: 'POST',
+        url: `/api/sales-orders/${second}/cancel`,
+        headers: mutating(seller, { 'idempotency-key': 'key-audit-id-2' }),
+      });
+
+      await ownerContext(TENANT, COMPANY);
+      const rows = await owner.query<{ request_id: string }>(
+        `SELECT request_id FROM audit_events WHERE action = 'sales_order_cancelled' AND company_id = $1`,
+        [COMPANY],
+      );
+
+      expect(rows.rows).toHaveLength(2);
+      expect(rows.rows[0]?.request_id).not.toBe(rows.rows[1]?.request_id);
+    });
+  });
 });

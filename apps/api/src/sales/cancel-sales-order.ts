@@ -218,6 +218,12 @@ export async function cancelSalesOrder(
   // Same transaction as the change it describes, actor from the session, per section 7.1. The
   // reason lives here and only here, alongside the structured before and after of section 7.2.
   await repositories.audit.append({
+    // Section 7.3: the roles as they were, not looked up later. These are the same grants step
+    // two authorized against, read in this transaction, so the record says what was true at the
+    // moment the decision was made rather than what a later read would find.
+    actorRoles: grants.roles.map((role) => role.key),
+    // Framework supplied, never client supplied. Section 7.3 lists it among the eleven.
+    requestId: context.requestId ?? null,
     action: 'sales_order_cancelled',
     entityType: 'sales_order',
     entityId: order.id,

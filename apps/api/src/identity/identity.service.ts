@@ -46,6 +46,18 @@ export interface CompanyContext {
   tenantId: string;
   companyId: string;
   membershipId: string;
+  /**
+   * The request this context was built for, which section 7.3 requires every audit record to
+   * carry.
+   *
+   * Framework supplied and never client supplied. Fastify generates it per request, and version
+   * 5 defaults `requestIdHeader` to false, so a caller sending a request-id header does not
+   * choose it. That was verified rather than assumed, because a forged correlation id in an
+   * append-only log is worth exactly as much as a forged actor.
+   *
+   * Optional because a context can be built outside a request, which the tests do.
+   */
+  requestId?: string | undefined;
 }
 
 export interface MeView {

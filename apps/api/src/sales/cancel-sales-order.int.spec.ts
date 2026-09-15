@@ -637,6 +637,74 @@ describe('Cancelling a sales order', () => {
       expect(event?.xmin).toBe(order.rows[0]?.xmin);
     });
 
+it('records the roles the actor held at the time', async () => {
+      // Section 7.3: the roles as they were, not looked up later. These are the same grants the
+      // authorization step read in this transaction, so the record says what was true at the
+      // moment the decision was made.
+      await stock(IN_A1, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await confirmed(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await cancel(IN_A1, CONTEXT_A1, orderId);
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const rows = await owner.query<{ actor_roles: string[] }>(
+        `SELECT actor_roles FROM audit_events WHERE action = 'sales_order_cancelled'`,
+      );
+      expect(rows.rows[0]?.actor_roles).toEqual(['manager']);
+    });
+
+    it('records the request the change was made by', async () => {
+      // The eleventh field section 7.3 lists. Framework supplied rather than client supplied,
+      // which matters because a forged correlation id in an append-only log is worth as much as
+      // a forged actor.
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await uow.inActorScope(IN_A1, (repositories) =>
+        cancelSalesOrder(repositories, { ...CONTEXT_A1, requestId: 'req-4242' }, {
+          salesOrderId: orderId,
+        }),
+      );
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const rows = await owner.query<{ request_id: string | null }>(
+        `SELECT request_id FROM audit_events WHERE action = 'sales_order_cancelled'`,
+      );
+      expect(rows.rows[0]?.request_id).toBe('req-4242');
+    });
+
+    it('records the transaction it was written in, so it ties to the commit', async () => {
+      // Section 7.3's last field, and the database supplies it. An application that could set it
+      // could claim a change belonged to a transaction that never ran.
+      const orderId = await draft(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await cancel(IN_A1, CONTEXT_A1, orderId);
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      const rows = await owner.query<{ txid: string | null }>(
+        `SELECT txid::text AS txid FROM audit_events WHERE action = 'sales_order_cancelled'`,
+      );
+      expect(rows.rows[0]?.txid).toMatch(/^\d+$/);
+    });
+
+    it('writes no record at all when the change fails', async () => {
+      // The other half of section 7.1: an audit record can never exist without its change. A
+      // refusal after the reason was checked and the order was read must leave nothing.
+      await stock(AS_SELLER, WIDGET[COMPANY_A1]!, '100');
+      const orderId = await confirmed(TENANT_A, COMPANY_A1, [
+        { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
+      ]);
+
+      await refusal(cancel(AS_SELLER, CONTEXT_SELLER, orderId, 'Not mine to cancel'));
+
+      expect(await cancellationAudit(TENANT_A, COMPANY_A1)).toEqual([]);
+    });
+
     it('carries the reason when one was given', async () => {
       const orderId = await draft(TENANT_A, COMPANY_A1, [
         { productId: WIDGET[COMPANY_A1]!, quantity: '10' },

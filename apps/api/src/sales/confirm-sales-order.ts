@@ -242,6 +242,12 @@ export async function confirmSalesOrder(
   // 7.1. A failure here takes the confirmation with it, which is the point of it being here
   // rather than after the commit.
   await repositories.audit.append({
+    // Section 7.3: the roles as they were, not looked up later. These are the same grants step
+    // two authorized against, read in this transaction, so the record says what was true at the
+    // moment the decision was made rather than what a later read would find.
+    actorRoles: grants.roles.map((role) => role.key),
+    // Framework supplied, never client supplied. Section 7.3 lists it among the eleven.
+    requestId: context.requestId ?? null,
     action: 'sales_order_confirmed',
     entityType: 'sales_order',
     entityId: order.id,

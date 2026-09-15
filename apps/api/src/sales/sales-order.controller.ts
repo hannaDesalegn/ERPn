@@ -244,8 +244,10 @@ export class SalesOrderController {
     }
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     const fingerprint = fingerprintOf(parsed.data);
 
@@ -329,8 +331,10 @@ export class SalesOrderController {
     }
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     const scope = actorScope({
       tenantId: context.tenantId,
@@ -426,8 +430,10 @@ export class SalesOrderController {
     if (!identifier.safeParse(salesOrderId).success) throw new NotFoundException('Not found');
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     const trail = await this.sales.auditTrail(context, principal.userId, salesOrderId);
     if (!trail) throw new NotFoundException('Not found');
@@ -454,8 +460,10 @@ export class SalesOrderController {
     }
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     const { search, status, warehouseId, ...rest } = parsed.data;
 
@@ -487,8 +495,10 @@ export class SalesOrderController {
     if (!identifier.safeParse(salesOrderId).success) throw new NotFoundException('Not found');
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     const order = await this.sales.getById(context, principal.userId, salesOrderId);
     if (!order) throw new NotFoundException('Not found');
@@ -525,8 +535,10 @@ export class SalesOrderController {
     }
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     // The request's identity, for the replay comparison. The path parameter is the whole of what
     // the caller chose, so it is the whole of the fingerprint.
@@ -617,8 +629,10 @@ export class SalesOrderController {
     }
 
     const principal = principalOf(request);
-    const context = await this.identity.currentContext(principal);
-    if (!context) throw new ForbiddenException('Forbidden');
+    const resolved = await this.identity.currentContext(principal);
+    if (!resolved) throw new ForbiddenException('Forbidden');
+    // Section 7.3 wants the request id on the audit record, and this is where the request is.
+    const context: CompanyContext = { ...resolved, requestId: request.id };
 
     // The path parameter and the reason, which together are the whole of what the caller chose.
     const fingerprint = fingerprintOf({ salesOrderId, reason: parsed.data.reason ?? null });
