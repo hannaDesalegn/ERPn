@@ -23,9 +23,20 @@ import { ROLE_KEYS } from '../authorization/permissions.js';
 import { actorScope, systemScope, UnitOfWork } from '../database/index.js';
 import {
   allocateSalesOrderNumber,
+  CUSTOMER_INVOICE_DOC_TYPE,
+  provisionCustomerInvoiceSequence,
   provisionSalesOrderSequence,
   SALES_ORDER_DOC_TYPE,
 } from '../sales/document-numbers.js';
+import {
+  DEFAULT_CHART_OF_ACCOUNTS,
+  provisionChartOfAccounts,
+} from '../accounting/chart-of-accounts.js';
+import {
+  DEFAULT_POSTING_ACCOUNTS,
+  POSTING_ACCOUNT_PURPOSES,
+  provisionPostingAccounts,
+} from '../accounting/posting-accounts.js';
 import { CompaniesModule } from './companies.module.js';
 import { CompanyProvisioningService } from './company-provisioning.service.js';
 
@@ -122,6 +133,8 @@ describe('Company provisioning', () => {
     for (const [tenantId, companyId] of COMPANY_SCOPES) {
       await ownerContext(tenantId, companyId);
       await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM company_posting_accounts WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM accounts WHERE company_id = $1', [companyId]);
       await owner.query(
         'DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE company_id = $1)',
         [companyId],
@@ -157,6 +170,28 @@ describe('Company provisioning', () => {
       gapless: boolean;
       next_value: string;
     }>('SELECT * FROM document_number_sequences ORDER BY doc_type');
+    return rows.rows;
+  };
+
+  /** One company's sequence for a document type, by name rather than by position. */
+  const sequenceOf = async (tenantId: string, companyId: string, docType: string) =>
+    (await sequencesOf(tenantId, companyId)).find((row) => row.doc_type === docType);
+
+  /** Every account row a company holds. */
+  const accountsOf = async (tenantId: string, companyId: string) => {
+    await ownerContext(tenantId, companyId);
+    const rows = await owner.query<{ id: string; code: string; name: string; type: string }>(
+      'SELECT * FROM accounts ORDER BY code',
+    );
+    return rows.rows;
+  };
+
+  /** Every posting account mapping a company holds. */
+  const postingAccountsOf = async (tenantId: string, companyId: string) => {
+    await ownerContext(tenantId, companyId);
+    const rows = await owner.query<{ purpose: string; account_id: string }>(
+      'SELECT * FROM company_posting_accounts ORDER BY purpose',
+    );
     return rows.rows;
   };
 
@@ -229,32 +264,43 @@ describe('Company provisioning', () => {
 
       expect(company.id).toBe(COMPANY_A1);
       expect(salesOrderSequence.docType).toBe(SALES_ORDER_DOC_TYPE);
-
-      const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored).toHaveLength(1);
-      expect(stored[0]?.doc_type).toBe(SALES_ORDER_DOC_TYPE);
+      expect(await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE)).toBeDefined();
     });
 
-    it('starts the counter at one, unspent', async () => {
+    it('receives a customer invoice sequence, before any invoice exists to use it', async () => {
+      // Numbering is company configuration under section 2.9, so it is written when the company
+      // is created rather than when the first invoice is raised. Allocation deliberately refuses
+      // to invent a missing counter, and a counter created on first use would issue number one
+      // to a company that has been trading for a year.
+      const { customerInvoiceSequence } = await provisionA1();
+
+      expect(customerInvoiceSequence.docType).toBe(CUSTOMER_INVOICE_DOC_TYPE);
+      expect(await sequenceOf(TENANT_A, COMPANY_A1, CUSTOMER_INVOICE_DOC_TYPE)).toBeDefined();
+    });
+
+    it('starts both counters at one, unspent', async () => {
       await provisionA1();
 
-      const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored[0]?.next_value).toBe('1');
+      for (const docType of [SALES_ORDER_DOC_TYPE, CUSTOMER_INVOICE_DOC_TYPE]) {
+        expect((await sequenceOf(TENANT_A, COMPANY_A1, docType))?.next_value).toBe('1');
+      }
     });
 
-    it('is gapless by default, because a sales order becomes an invoice', async () => {
+    it('makes both gapless by default, because an invoice series must not have holes', async () => {
       // Section 10.4 makes the choice a per sequence setting. Starting at the stricter one means
       // a company has to opt out of a legal requirement rather than remember to opt in.
       await provisionA1();
 
-      const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored[0]?.gapless).toBe(true);
+      for (const docType of [SALES_ORDER_DOC_TYPE, CUSTOMER_INVOICE_DOC_TYPE]) {
+        expect((await sequenceOf(TENANT_A, COMPANY_A1, docType))?.gapless).toBe(true);
+      }
     });
 
     it('carries the prefix the rest of the system already prints', async () => {
-      const { salesOrderSequence } = await provisionA1();
+      const { salesOrderSequence, customerInvoiceSequence } = await provisionA1();
 
       expect(salesOrderSequence.prefix).toBe('SO-');
+      expect(customerInvoiceSequence.prefix).toBe('INV-');
     });
   });
 
@@ -266,19 +312,24 @@ describe('Company provisioning', () => {
     it('is stamped with the tenant and company it was created for', async () => {
       await provisionA1();
 
-      const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored[0]?.tenant_id).toBe(TENANT_A);
-      expect(stored[0]?.company_id).toBe(COMPANY_A1);
+      for (const row of await sequencesOf(TENANT_A, COMPANY_A1)) {
+        expect({ tenant: row.tenant_id, company: row.company_id }).toEqual({
+          tenant: TENANT_A,
+          company: COMPANY_A1,
+        });
+      }
     });
 
-    it('is the only sequence in the company, so no other type is invented', async () => {
-      // Provisioning what confirmation needs, not a catalogue of every document type the product
-      // will eventually have. A delivery sequence created now would be configuration nobody
-      // chose, for a document that cannot yet be raised.
+    it('holds those two sequences and no others, so no type is invented', async () => {
+      // Provisioning what the sales path needs, not a catalogue of every document type the
+      // product will eventually have. A delivery sequence created now would be configuration
+      // nobody chose, for a document that cannot be raised.
       await provisionA1();
 
       const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored.map((row) => row.doc_type)).toEqual([SALES_ORDER_DOC_TYPE]);
+      expect(stored.map((row) => row.doc_type)).toEqual(
+        [CUSTOMER_INVOICE_DOC_TYPE, SALES_ORDER_DOC_TYPE].sort(),
+      );
     });
   });
 
@@ -292,11 +343,43 @@ describe('Company provisioning', () => {
 
       await uow.inSystemScope(
         systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_A1 }),
-        (repositories) => provisionSalesOrderSequence(repositories),
+        async (repositories) => {
+          await provisionSalesOrderSequence(repositories);
+          await provisionCustomerInvoiceSequence(repositories);
+        },
       );
 
       const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored).toHaveLength(1);
+      expect(stored).toHaveLength(2);
+    });
+
+    it('does not create a second invoice counter, which would issue one number twice', async () => {
+      const first = await provisionA1();
+
+      const again = await uow.inSystemScope(
+        systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_A1 }),
+        (repositories) => provisionCustomerInvoiceSequence(repositories),
+      );
+
+      expect(again.id).toBe(first.customerInvoiceSequence.id);
+      expect(
+        (await sequencesOf(TENANT_A, COMPANY_A1)).filter(
+          (row) => row.doc_type === CUSTOMER_INVOICE_DOC_TYPE,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('is refused by the database if a second invoice counter is ever attempted', async () => {
+      await provisionA1();
+
+      await ownerContext(TENANT_A, COMPANY_A1);
+      await expect(
+        owner.query(
+          `INSERT INTO document_number_sequences (id, tenant_id, company_id, doc_type)
+           VALUES ($1,$2,$3,$4)`,
+          ['a4300000-0000-4000-8000-00000000000c', TENANT_A, COMPANY_A1, CUSTOMER_INVOICE_DOC_TYPE],
+        ),
+      ).rejects.toThrow(/document_number_sequences_company_doc_type_key/);
     });
 
     it('returns the sequence that already exists rather than a new one', async () => {
@@ -339,8 +422,7 @@ describe('Company provisioning', () => {
 
       // Still two. Re-provisioning a trading company must not reset it to one and reissue
       // numbers that are already on documents.
-      const stored = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(stored[0]?.next_value).toBe('2');
+      expect((await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE))?.next_value).toBe('2');
     });
   });
 
@@ -371,7 +453,7 @@ describe('Company provisioning', () => {
       expect(await sequencesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
     });
 
-    it('writes the company and the sequence in one transaction', async () => {
+    it('writes the company and both sequences in one transaction', async () => {
       // `xmin` is the transaction that last wrote the row. Two different values would mean two
       // transactions, and a company could then exist for a moment with no sequence. This is the
       // same proof the audit trail uses in section 7.1.
@@ -383,10 +465,12 @@ describe('Company provisioning', () => {
         [COMPANY_A1],
       );
       const sequence = await owner.query<{ xmin: string }>(
-        'SELECT xmin::text AS xmin FROM document_number_sequences WHERE company_id = $1',
+        'SELECT DISTINCT xmin::text AS xmin FROM document_number_sequences WHERE company_id = $1',
         [COMPANY_A1],
       );
 
+      // One distinct value across both counters, and the same one the company row carries.
+      expect(sequence.rows).toHaveLength(1);
       expect(company.rows[0]?.xmin).toBe(sequence.rows[0]?.xmin);
     });
 
@@ -432,7 +516,11 @@ describe('Company provisioning', () => {
 
       expect(allocated.value).toBe(1n);
       expect(allocated.formatted).toBe('SO-0001');
-      expect((await sequencesOf(TENANT_A, COMPANY_A1))[0]?.next_value).toBe('2');
+      expect((await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE))?.next_value).toBe('2');
+      // The invoice counter is untouched. Allocating one document type must not spend another's.
+      expect((await sequenceOf(TENANT_A, COMPANY_A1, CUSTOMER_INVOICE_DOC_TYPE))?.next_value).toBe(
+        '1',
+      );
     });
 
     it('lets a brand new company confirm its first order without a manual step', async () => {
@@ -463,12 +551,12 @@ describe('Company provisioning', () => {
         administratorUserId: USER,
       });
 
-      const first = await sequencesOf(TENANT_A, COMPANY_A1);
-      const second = await sequencesOf(TENANT_A, COMPANY_A2);
+      const first = await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE);
+      const second = await sequenceOf(TENANT_A, COMPANY_A2, SALES_ORDER_DOC_TYPE);
 
-      expect(first[0]?.id).not.toBe(second[0]?.id);
-      expect(first[0]?.next_value).toBe('1');
-      expect(second[0]?.next_value).toBe('1');
+      expect(first?.id).not.toBe(second?.id);
+      expect(first?.next_value).toBe('1');
+      expect(second?.next_value).toBe('1');
     });
 
     it('does not let one company advance another, in the same tenant', async () => {
@@ -486,8 +574,13 @@ describe('Company provisioning', () => {
         (repositories) => allocateSalesOrderNumber(repositories),
       );
 
-      expect((await sequencesOf(TENANT_A, COMPANY_A1))[0]?.next_value).toBe('2');
-      expect((await sequencesOf(TENANT_A, COMPANY_A2))[0]?.next_value).toBe('1');
+      expect((await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE))?.next_value).toBe('2');
+      expect((await sequenceOf(TENANT_A, COMPANY_A2, SALES_ORDER_DOC_TYPE))?.next_value).toBe('1');
+      // And neither company's invoice counter moved, because allocating one document type must
+      // not spend another's number.
+      expect(
+        (await sequenceOf(TENANT_A, COMPANY_A1, CUSTOMER_INVOICE_DOC_TYPE))?.next_value,
+      ).toBe('1');
     });
 
     it('keeps tenants apart, and both may hold number one at once', async () => {
@@ -513,8 +606,8 @@ describe('Company provisioning', () => {
       // never across the platform.
       expect(here.formatted).toBe('SO-0001');
       expect(there.formatted).toBe('SO-0001');
-      expect((await sequencesOf(TENANT_A, COMPANY_A1))[0]?.next_value).toBe('2');
-      expect((await sequencesOf(TENANT_B, COMPANY_B1))[0]?.next_value).toBe('2');
+      expect((await sequenceOf(TENANT_A, COMPANY_A1, SALES_ORDER_DOC_TYPE))?.next_value).toBe('2');
+      expect((await sequenceOf(TENANT_B, COMPANY_B1, SALES_ORDER_DOC_TYPE))?.next_value).toBe('2');
     });
   });
 
@@ -584,7 +677,7 @@ describe('Company provisioning', () => {
 
       // Read back from the database, not from what the service returned.
       expect(await rolesOf(TENANT_A, COMPANY_A1)).toHaveLength(ROLE_KEYS.length);
-      expect(await sequencesOf(TENANT_A, COMPANY_A1)).toHaveLength(1);
+      expect(await sequencesOf(TENANT_A, COMPANY_A1)).toHaveLength(2);
       expect(await companyRows(TENANT_A, COMPANY_A1)).toHaveLength(1);
     });
 
@@ -610,9 +703,10 @@ describe('Company provisioning', () => {
       }
     });
 
-    it('writes all three in a single transaction', async () => {
-      // One `xmin` across the company, a role and the sequence. Three values would mean three
-      // transactions and three windows in which a company exists half configured.
+    it('writes every part of the company in a single transaction', async () => {
+      // One `xmin` across the company, its roles, both sequences, every account and every
+      // posting account mapping. More than one value would mean more than one transaction, and
+      // therefore a window in which a company exists half configured.
       await provisionA1();
 
       await ownerContext(TENANT_A, COMPANY_A1);
@@ -621,11 +715,128 @@ describe('Company provisioning', () => {
          UNION
          SELECT xmin::text FROM roles WHERE company_id = $1
          UNION
-         SELECT xmin::text FROM document_number_sequences WHERE company_id = $1`,
+         SELECT xmin::text FROM document_number_sequences WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM accounts WHERE company_id = $1
+         UNION
+         SELECT xmin::text FROM company_posting_accounts WHERE company_id = $1`,
         [COMPANY_A1],
       );
 
       expect(written.rows).toHaveLength(1);
+    });
+
+    it('creates the chart of accounts and the mapping onto it', async () => {
+      const { chartOfAccounts, postingAccounts } = await provisionA1();
+
+      expect(chartOfAccounts.map((account) => account.code)).toEqual(
+        DEFAULT_CHART_OF_ACCOUNTS.map((account) => account.code),
+      );
+      expect(postingAccounts.map((mapping) => mapping.purpose).sort()).toEqual(
+        [...POSTING_ACCOUNT_PURPOSES].sort(),
+      );
+
+      // Read back from the database, not from what the service returned.
+      expect(await accountsOf(TENANT_A, COMPANY_A1)).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length);
+      expect(await postingAccountsOf(TENANT_A, COMPANY_A1)).toHaveLength(
+        POSTING_ACCOUNT_PURPOSES.length,
+      );
+    });
+
+    it('points every posting purpose at one of this company own accounts', async () => {
+      await provisionA1();
+
+      const own = await accountsOf(TENANT_A, COMPANY_A1);
+      const codeOf = new Map(own.map((row) => [row.id, row.code]));
+      const mapped = Object.fromEntries(
+        (await postingAccountsOf(TENANT_A, COMPANY_A1)).map((row) => [
+          row.purpose,
+          codeOf.get(row.account_id),
+        ]),
+      );
+
+      // Every account identifier resolved through this company's own chart, and onto the codes
+      // the defaults name. A mapping pointing elsewhere would leave a hole in this map.
+      expect(mapped).toEqual(DEFAULT_POSTING_ACCOUNTS);
+    });
+
+    it('leaves nothing behind when the accounting provisioning is what fails', async () => {
+      // The chart is written after the company, the roles and both sequences. A failure here has
+      // already written all of those, and every one of them must go.
+      const failure = new Error('accounting provisioning refused by test');
+
+      await expect(
+        uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_DOOMED }),
+          async (repositories) => {
+            await repositories.companies.create({
+              id: COMPANY_DOOMED,
+              name: 'Doomed',
+              baseCurrency: 'USD',
+            });
+            await seedDefaultRolesIn(repositories, COMPANY_DOOMED);
+            await provisionSalesOrderSequence(repositories);
+            await provisionCustomerInvoiceSequence(repositories);
+            const chart = await provisionChartOfAccounts(repositories);
+            await provisionPostingAccounts(repositories, chart);
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await rolesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await sequencesOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await accountsOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await postingAccountsOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('leaves no chart behind when a later write fails', async () => {
+      // The reverse order: the accounting rows are written and something after them is refused.
+      // A company holding a chart of accounts and no administrator is not a company anyone can
+      // use, so it must not survive either.
+      await expect(
+        uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId: TENANT_A, companyId: COMPANY_DOOMED }),
+          async (repositories) => {
+            await repositories.companies.create({
+              id: COMPANY_DOOMED,
+              name: 'Doomed',
+              baseCurrency: 'USD',
+            });
+            const chart = await provisionChartOfAccounts(repositories);
+            await provisionPostingAccounts(repositories, chart);
+            // A membership for a user that does not exist, which the foreign key refuses.
+            await repositories.memberships.create({
+              id: 'a4400000-0000-4000-8000-00000000000d',
+              userId: 'a4500000-0000-4000-8000-00000000000e',
+            });
+          },
+        ),
+      ).rejects.toThrow();
+
+      expect(await companyRows(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await accountsOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+      expect(await postingAccountsOf(TENANT_A, COMPANY_DOOMED)).toEqual([]);
+    });
+
+    it('gives each company in a tenant its own chart, not a shared one', async () => {
+      await provisionA1();
+      await provisioning.provision({
+        tenantId: TENANT_A,
+        id: COMPANY_A2,
+        name: 'A Two',
+        baseCurrency: 'USD',
+        administratorUserId: USER,
+      });
+
+      const first = await accountsOf(TENANT_A, COMPANY_A1);
+      const second = await accountsOf(TENANT_A, COMPANY_A2);
+
+      // The same codes twice over as different rows. Section 2.2 makes master data shared across
+      // the companies of a tenant a future decision, not the current one.
+      expect(first.map((row) => row.code)).toEqual(second.map((row) => row.code));
+      expect(first.some((row) => second.some((other) => other.id === row.id))).toBe(false);
     });
 
     it('leaves nothing behind when role seeding fails', async () => {
@@ -687,8 +898,10 @@ describe('Company provisioning', () => {
       // Still exactly one of each, and the same rows as before.
       expect(await rolesOf(TENANT_A, COMPANY_A1)).toHaveLength(ROLE_KEYS.length);
       const sequences = await sequencesOf(TENANT_A, COMPANY_A1);
-      expect(sequences).toHaveLength(1);
-      expect(sequences[0]?.id).toBe(first.salesOrderSequence.id);
+      expect(sequences).toHaveLength(2);
+      expect(sequences.map((row) => row.id).sort()).toEqual(
+        [first.salesOrderSequence.id, first.customerInvoiceSequence.id].sort(),
+      );
     });
 
     it('provisions each company in a tenant separately and completely', async () => {

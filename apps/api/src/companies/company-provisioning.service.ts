@@ -17,11 +17,22 @@
  * would issue number one to a company that has been trading for a year.
  *
  * ONE TRANSACTION, AND WHY ALL OF IT AT ONCE. Section 2.7 requires the default role templates
- * to be seeded when a company is created. Section 2.9 holds the numbering series as company
- * configuration. Section 2.6 makes a membership the thing that links a person to a company, and
- * a company with no member is one nobody can act in. None of that is optional, and a company
- * missing any of it is not a company anyone can use, so every write shares one transaction and a
- * failure in any of them leaves nothing behind to be puzzled over later.
+ * to be seeded when a company is created. Section 2.9 holds the numbering series, the chart of
+ * accounts and the accounts that document postings map to as company configuration. Section 2.6
+ * makes a membership the thing that links a person to a company, and a company with no member is
+ * one nobody can act in. None of that is optional, and a company missing any of it is not a
+ * company anyone can use, so every write shares one transaction and a failure in any of them
+ * leaves nothing behind to be puzzled over later.
+ *
+ * WHAT THIS NOW WRITES, in one transaction or none of it: the company, its roles and their
+ * permissions, the sales order sequence, the customer invoice sequence, the chart of accounts,
+ * the mapping from posting purpose to account, and the first administrator's membership and role.
+ *
+ * THE INVOICE SEQUENCE AND THE CHART ARE PROVISIONED BEFORE ANYTHING USES THEM, deliberately.
+ * Neither an invoice nor a posting exists yet. They are here because both are configuration a
+ * company owns from creation under section 2.9, and because the alternative is the one the
+ * sequence machinery already refuses by design: creating them on first use, which would give a
+ * trading company invoice number one and a chart of accounts it never chose.
  *
  * ORDER FOLLOWS THE SCHEMA. The company row first, because everything else names it by foreign
  * key. The membership and its role assignment last, because the assignment needs both a
@@ -44,12 +55,19 @@ import type { SeededRole } from '../authorization/role-provisioning.service.js';
 import { ADMINISTRATOR_ROLE_KEY } from '../authorization/permissions.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
 import type {
+  AccountRecord,
+  CompanyPostingAccountRecord,
   CompanyRecord,
   DocumentNumberSequenceRecord,
   MembershipRecord,
   SystemRepositories,
 } from '../database/index.js';
-import { provisionSalesOrderSequence } from '../sales/document-numbers.js';
+import { provisionChartOfAccounts } from '../accounting/chart-of-accounts.js';
+import { provisionPostingAccounts } from '../accounting/posting-accounts.js';
+import {
+  provisionCustomerInvoiceSequence,
+  provisionSalesOrderSequence,
+} from '../sales/document-numbers.js';
 
 export interface NewCompany {
   /**
@@ -63,6 +81,11 @@ export interface NewCompany {
   name: string;
   legalName?: string | null;
   baseCurrency: string;
+  /**
+   * The company's tax registration number, per section 2.9. Optional, because a company that is
+   * not registered has none and a placeholder would be a number an invoice would print.
+   */
+  taxRegistrationNumber?: string | null;
   /**
    * The existing user account that becomes the company's first administrator.
    *
@@ -90,6 +113,12 @@ export interface ProvisionedCompany {
   /** The company's own copies of the default templates, per section 2.7. */
   roles: SeededRole[];
   salesOrderSequence: DocumentNumberSequenceRecord;
+  /** Provisioned now although nothing allocates from it yet; see the note on the service. */
+  customerInvoiceSequence: DocumentNumberSequenceRecord;
+  /** The company's own chart, per section 2.9. Three accounts, per section 18.2. */
+  chartOfAccounts: AccountRecord[];
+  /** Which of those accounts each kind of posting uses. */
+  postingAccounts: CompanyPostingAccountRecord[];
   administrator: FirstAdministrator;
 }
 
@@ -114,18 +143,34 @@ export class CompanyProvisioningService {
           name: input.name,
           legalName: input.legalName ?? null,
           baseCurrency: input.baseCurrency,
+          taxRegistrationNumber: input.taxRegistrationNumber ?? null,
         });
 
         // All of these after the company, because each names it by foreign key, and all inside
         // this transaction, so a failure in any of them takes the company with it.
         const roles = await seedDefaultRolesIn(repositories, company.id);
         const salesOrderSequence = await provisionSalesOrderSequence(repositories);
+        const customerInvoiceSequence = await provisionCustomerInvoiceSequence(repositories);
+
+        // The chart before the mapping, because a mapping names an account by foreign key. That
+        // is the only ordering between these two, and it is the schema's rather than a
+        // preference.
+        const chartOfAccounts = await provisionChartOfAccounts(repositories);
+        const postingAccounts = await provisionPostingAccounts(repositories, chartOfAccounts);
 
         // Last, because the role assignment needs both a membership and a seeded role to point
         // at. The ordering is the schema's, not a preference.
         const administrator = await this.admit(repositories, roles, input.administratorUserId);
 
-        return { company, roles, salesOrderSequence, administrator };
+        return {
+          company,
+          roles,
+          salesOrderSequence,
+          customerInvoiceSequence,
+          chartOfAccounts,
+          postingAccounts,
+          administrator,
+        };
       },
     );
   }

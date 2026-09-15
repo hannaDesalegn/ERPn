@@ -19,9 +19,12 @@
  * described above, reachable from anywhere, one call away from an HTTP handler. Confirmation
  * will call this from inside its own unit of work, alongside the writes that justify the number.
  *
- * NOT A FRAMEWORK. Purchase orders, invoices and deliveries will each need their own line here
- * when they arrive. The `doc_type` column already carries the dimension, so what they need is a
- * constant, not an abstraction invented in advance of its second caller.
+ * NOT A FRAMEWORK. The customer invoice is the second document type here and it is written out
+ * in full beside the first, rather than folded into a loop over a table of types. Purchase
+ * orders and deliveries will each add their own when they arrive. The `doc_type` column already
+ * carries the dimension, so what a new document needs is a constant, not an abstraction: the two
+ * types differ in prefix and will differ in who allocates from them, and a shared helper would
+ * have to grow a parameter for each difference.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -73,6 +76,56 @@ export async function provisionSalesOrderSequence(
     id: randomUUID(),
     docType: SALES_ORDER_DOC_TYPE,
     ...SALES_ORDER_SEQUENCE_DEFAULTS,
+  });
+}
+
+/** The `doc_type` a customer invoice sequence is configured under. */
+export const CUSTOMER_INVOICE_DOC_TYPE = 'customer_invoice';
+
+/**
+ * What a new company's customer invoice numbering starts as.
+ *
+ * Gapless, and here the setting is the reason section 10.4 gives for the whole mechanism rather
+ * than a cautious default: open question 4 assumes at least one jurisdiction this product serves
+ * requires an unbroken invoice series, and an invoice number is the one a tax authority reads.
+ *
+ * A SEPARATE COUNTER FROM THE SALES ORDER, deliberately. Section 10.4 makes a sequence per
+ * company and per document type, and an invoice raised from two orders, or from none, has no
+ * order number to borrow. Sharing one counter would also mean a rolled back order confirmation
+ * left a hole in the invoice series, which is exactly what gapless forbids.
+ */
+export const CUSTOMER_INVOICE_SEQUENCE_DEFAULTS = {
+  prefix: 'INV-',
+  gapless: true,
+} as const;
+
+/**
+ * Gives a company the customer invoice sequence that invoice posting will require.
+ *
+ * Provisioned now, with the rest of the company's configuration, and not by the increment that
+ * first posts an invoice. The reason is the one stated above `provisionSalesOrderSequence`:
+ * allocation deliberately refuses to invent a missing sequence, because a counter created on
+ * demand issues number one to a company that has been trading for a year. Numbering a document
+ * type is company configuration under section 2.9, and a company is configured when it is
+ * created.
+ *
+ * NOTHING ALLOCATES FROM IT YET, and that is the whole shape of this increment: the customer
+ * invoice document does not exist. There is no `allocateCustomerInvoiceNumber` here for that
+ * reason. It arrives with the transaction that writes an invoice and can therefore be called
+ * from inside it, which is the property that makes the allocation safe.
+ */
+export async function provisionCustomerInvoiceSequence(
+  repositories: Pick<ScopedRepositories, 'documentNumberSequences'>,
+): Promise<DocumentNumberSequenceRecord> {
+  const existing = await repositories.documentNumberSequences.findForDocType(
+    CUSTOMER_INVOICE_DOC_TYPE,
+  );
+  if (existing) return existing;
+
+  return repositories.documentNumberSequences.create({
+    id: randomUUID(),
+    docType: CUSTOMER_INVOICE_DOC_TYPE,
+    ...CUSTOMER_INVOICE_SEQUENCE_DEFAULTS,
   });
 }
 
