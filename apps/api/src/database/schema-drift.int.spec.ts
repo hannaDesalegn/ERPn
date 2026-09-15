@@ -213,6 +213,13 @@ describe('Schema drift', () => {
         'stock_reservations',
         'journal_entries',
         'journal_lines',
+        // `customer_invoice_lines` claims the FIRST shape rather than the second: insert and
+        // delete only. Editing an invoice draft replaces its lines, as editing a sales order
+        // draft does, and nothing amends one in place. Migration 0015 grants SELECT, INSERT and
+        // DELETE and withholds UPDATE, which is what makes the claim structural rather than a
+        // description of today's code. `sales_order_lines` is not exempt, because deliveries and
+        // invoices raised against an order update its quantities.
+        'customer_invoice_lines',
       ];
       const claimingFourthShape = VERSION_EXEMPT_TABLES.filter(
         (table) => !associationOrAppendOnly.includes(table),
