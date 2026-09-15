@@ -9,7 +9,6 @@ export { NotFoundError, type ListParams, type Paginated } from './client';
 export { resolveDocumentRefs, type RelatedDocument } from './sales.service';
 export type { ProductWithStock } from './inventory.service';
 
-import { setClock } from '@/lib/clock';
 import { REFERENCE_TODAY } from '@/mocks/rng';
 
 import { adminService } from './admin.service';
@@ -22,13 +21,21 @@ import { purchasingService } from './purchasing.service';
 import { salesService } from './sales.service';
 
 /**
- * MOCK-ONLY: point the application clock at the fixture anchor.
+ * MOCK-ONLY: the date fixture derived figures are measured from.
  *
- * The fixtures are generated around a fixed date, so relative timestamps and
- * overdue calculations must be measured from that same date. Delete this line
- * when the real backend lands and the default system clock takes over.
+ * The fixtures are generated around a fixed date, so an overdue calculation over fixture
+ * data has to be measured from that same date or a screen shows a row aged from today beside
+ * a summary bucketed from the anchor.
+ *
+ * THIS USED TO PIN THE APPLICATION CLOCK, and that stopped being right the moment one figure
+ * on screen came from the server. A real audit event measured against a date weeks in the
+ * past renders as "just now" forever. Section 16.1 gave that override the removal trigger
+ * "when the API supplies dates"; the clock is now real and the anchor is asked for by name.
+ *
+ * Every caller is a screen still reading fixtures, so each one is a line to delete when its
+ * module gets an endpoint. A screen reading the server must never call this.
  */
-setClock(() => REFERENCE_TODAY);
+export const agingReference = (): Date => REFERENCE_TODAY;
 
 export const api = {
   dashboard: dashboardService,

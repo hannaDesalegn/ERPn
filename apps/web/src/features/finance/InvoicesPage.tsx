@@ -8,7 +8,7 @@
 
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, queryKeys } from '@/services';
+import { api, queryKeys, agingReference } from '@/services';
 import type { CustomerInvoice } from '@/domain';
 import { Badge, Button, Card, CardHeader, ErrorState, Field, Icon, PageHeader, SearchInput, Select, Toolbar } from '@/components/ui';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
@@ -73,7 +73,7 @@ export function InvoicesPage() {
       width: '140px',
       numeric: true,
       render: (i) => {
-        const days = daysUntil(i.dueDate);
+        const days = daysUntil(i.dueDate, agingReference());
         const late = days < 0 && i.balanceDue.amount > 0;
         return (
           <span className={cn(late && 'font-medium text-danger-text')}>
@@ -195,7 +195,7 @@ export function InvoiceDetailPage() {
   if (invoice.isLoading || !invoice.data) return <DetailSkeleton />;
 
   const inv = invoice.data;
-  const days = daysUntil(inv.dueDate);
+  const days = daysUntil(inv.dueDate, agingReference());
   const late = days < 0 && inv.balanceDue.amount > 0;
   const isDraft = inv.status === 'draft';
 

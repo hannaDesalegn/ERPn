@@ -22,7 +22,6 @@ import { ApiError } from '@/services/client';
 import type { SalesOrder } from '@/domain';
 import type { SalesOrderDetail } from '@/services/sales.service';
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
@@ -160,11 +159,6 @@ export function SalesOrderDetailPage() {
     },
   });
 
-  const customer = useQuery({
-    queryKey: queryKeys.customer(order.data?.customer.id ?? ''),
-    queryFn: () => api.parties.getCustomer(order.data!.customer.id),
-    enabled: Boolean(order.data?.customer.id),
-  });
 
   if (order.isError) {
     return (
@@ -200,9 +194,7 @@ export function SalesOrderDetailPage() {
   const isCancellable = so.status === 'draft' || so.status === 'confirmed';
   const totalOrdered = so.lines.reduce((a, l) => a + l.quantity, 0);
   const totalDelivered = so.lines.reduce((a, l) => a + l.deliveredQuantity, 0);
-  const creditUsedPct = customer.data
-    ? (customer.data.balance.amount / Math.max(1, customer.data.creditLimit.amount)) * 100
-    : 0;
+
 
   return (
     <>
@@ -396,9 +388,13 @@ export function SalesOrderDetailPage() {
               {/* Nullable in the column, so nullable here. "Not assigned" is the wording the customer
                   screen already uses for the same absence. */}
               <Field label="Sales rep">{so.salesRep?.name ?? 'Not assigned'}</Field>
-              <Field label="Payment terms">
-                {customer.data?.paymentTerms.label ?? <Skeleton className="h-4 w-16" />}
-              </Field>
+              {/*
+                Not on the order and not asked for. Payment terms are a property of the
+                customer, the customer module has no read endpoint, and the field used to hold
+                a skeleton that never resolved because the query behind it could not succeed.
+                An empty cell is what the project rules call for while a value is absent; a
+                loading state that never ends is a claim that something is coming.
+              */}
               <Field label="Currency">{so.currency}</Field>
               <Field label="Fulfilment">
                 <span className="tabular">
@@ -535,78 +531,36 @@ export function SalesOrderDetailPage() {
             <RelatedDocuments links={[]} />
           </Card>
 
-          {/* Customer context — credit exposure is a sales decision, so it
-              belongs on the order, not buried in the customer record. */}
+          {/*
+            CUSTOMER CONTEXT, AND WHAT IS HONESTLY AVAILABLE OF IT.
+
+            Credit exposure on the order is the right idea and the wrong moment. The panel
+            wanted a balance, a credit limit, an address and payment terms, and the sales
+            order response carries an identifier and a name, because that is what a document
+            snapshots. Everything else belongs to a customer read endpoint that does not
+            exist: section 16.1 removes the fixture layer per module as endpoints land, and
+            the customer module has a list and nothing else.
+
+            Until this was changed the page asked the fixture layer about a real backend
+            identifier. The lookup could never match, so the card drew its header over
+            nothing. Mixing real document data with fixture party data on one screen is the
+            failure worth avoiding here, and the smallest correct answer is to show what the
+            document actually carries and link to the rest.
+          */}
           <Card padded={false}>
-            <CardHeader
-              title="Customer"
-              action={
-                <Link
-                  to={`/sales/customers/${so.customer.id}`}
-                  className="text-xs text-accent-text hover:underline"
-                >
-                  Open
-                </Link>
-              }
-            />
-            {customer.isLoading ? (
-              <div className="space-y-2 p-4">
-                <Skeleton className="h-4" />
-                <Skeleton className="h-4 w-2/3" />
-              </div>
-            ) : customer.data ? (
-              <div className="space-y-3 p-4">
-                <div>
-                  <p className="text-sm font-medium text-primary">{customer.data.name}</p>
-                  <p className="text-xs text-muted">
-                    {customer.data.code} · {customer.data.address?.city}, {customer.data.address?.country}
-                  </p>
-                </div>
-
-                <dl className="space-y-1.5 text-sm">
-                  <div className="flex justify-between">
-                    <dt className="text-secondary">Outstanding balance</dt>
-                    <dd>
-                      <MoneyText value={customer.data.balance} strong />
-                    </dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-secondary">Credit limit</dt>
-                    <dd>
-                      <MoneyText value={customer.data.creditLimit} muted />
-                    </dd>
-                  </div>
-                </dl>
-
-                {/* Credit utilisation bar */}
-                <div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-sunken">
-                    <div
-                      className={cn(
-                        'h-full rounded-full',
-                        creditUsedPct > 100
-                          ? 'bg-danger'
-                          : creditUsedPct > 80
-                            ? 'bg-warning'
-                            : 'bg-success',
-                      )}
-                      style={{ width: `${Math.min(100, creditUsedPct)}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-muted">{creditUsedPct.toFixed(0)}% of credit used</span>
-                    {creditUsedPct > 100 && <Badge tone="danger">Over limit</Badge>}
-                  </p>
-                </div>
-
-                <p className="border-t border-line pt-2 text-xs text-muted">
-                  Terms: {customer.data.paymentTerms.label} · invoices fall due{' '}
-                  {customer.data.paymentTerms.daysUntilDue} days after issue
-                </p>
-              </div>
-            ) : null}
+            <CardHeader title="Customer" />
+            <div className="space-y-2 p-4">
+              <Link
+                to={`/sales/customers/${so.customer.id}`}
+                className="text-sm font-medium text-accent-text hover:underline"
+              >
+                {so.customer.name}
+              </Link>
+              <p className="text-xs text-muted">
+                Credit exposure and payment terms arrive with the customer module.
+              </p>
+            </div>
           </Card>
-
           {/* History: what the server recorded about this document, per section 7.1 */}
           <Card padded={false}>
             <CardHeader title="History" />

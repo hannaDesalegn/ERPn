@@ -25,6 +25,9 @@ import { SessionGate } from '@/app/SessionGate';
 import { SessionProvider } from '@/app/session';
 import type { Me } from '@/services/session.service';
 import { SalesOrderDetailPage } from './SalesOrderDetailPage';
+// The page's own source, so the test below can assert about what it reaches rather than about
+// what happened to render. Vite serves this and the typecheck knows it through vite/client.
+import detailPageSource from './SalesOrderDetailPage.tsx?raw';
 
 const DRAFT_ORDER = 'so-055';
 const ORDER_URL = `/api/sales-orders/${DRAFT_ORDER}`;
@@ -525,7 +528,7 @@ describe('the order it shows', () => {
     renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
     await waitForPage();
 
-    expect(screen.getByText('North Supply')).toBeDefined();
+    expect(screen.getAllByText('North Supply').length).toBeGreaterThan(0);
     expect(screen.getByText('Main depot')).toBeDefined();
     expect(screen.getByText('Widget at order time')).toBeDefined();
   });
@@ -740,7 +743,7 @@ describe('the history it shows', () => {
       expect(screen.getByText(/do not have permission to view this history/i)).toBeDefined(),
     );
     // The order itself is still on screen. A refused panel is not a refused page.
-    expect(screen.getByText('North Supply')).toBeDefined();
+    expect(screen.getAllByText('North Supply').length).toBeGreaterThan(0);
   });
 
   it('reports a failed read instead of showing an empty trail', async () => {
@@ -1063,5 +1066,132 @@ describe('cancelling an order', () => {
     const button = cancelButton() as HTMLButtonElement;
 
     expect(button.disabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The clock the history is measured against.
+// ---------------------------------------------------------------------------
+
+describe('how recently the history says things happened', () => {
+  /** An event that happened `minutes` ago in real time. */
+  const minutesAgo = (minutes: number) => ({
+    ...CONFIRMATION_EVENT,
+    occurredAt: new Date(Date.now() - minutes * 60_000).toISOString(),
+  });
+
+  const showing = (me: Me, events: unknown[]) => {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: me }),
+      [`GET ${ORDER_URL}`]: () => ({ status: 200, body: DRAFT_RESPONSE }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: events }),
+      [`POST ${CONFIRM_URL}`]: () => ({ status: 200, body: CONFIRMED }),
+    });
+
+    return mount();
+  };
+
+  it('measures a real event against real time, not against the fixture anchor', async () => {
+    // THE REGRESSION TEST FOR THE PINNED CLOCK. The fixture layer used to point the application
+    // clock at 2026-08-14, so an event the server recorded a minute ago was measured against a
+    // date weeks in the past. The interval came out negative and every real event on the trail
+    // read "just now", forever, whenever it had happened.
+    showing(SELLER, [minutesAgo(15)]);
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText('15m ago')).toBeDefined());
+  });
+
+  it('still says just now for something that just happened', async () => {
+    showing(SELLER, [minutesAgo(0)]);
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText('just now')).toBeDefined());
+  });
+
+  it('reads an older event as the day it happened', async () => {
+    // Beyond the relative window the formatter keeps, so it falls back to the date. A trail
+    // going back months must not read as a month of minutes.
+    showing(SELLER, [minutesAgo(60 * 24 * 45)]);
+    await waitForPage();
+
+    const expected = new Date(Date.now() - 45 * 24 * 60 * 60_000).toISOString().slice(0, 10);
+    await waitFor(() =>
+      expect(screen.getByTitle(new RegExp(expected.slice(0, 7)))).toBeDefined(),
+    );
+    expect(screen.queryByText('just now')).toBeNull();
+  });
+
+  it('orders the day it happened before the day it was rendered', async () => {
+    // A future timestamp is what a pinned clock produces, and it is never a real answer. If the
+    // clock were pinned behind the data again, this is the shape it would take.
+    showing(SELLER, [minutesAgo(90)]);
+    await waitForPage();
+
+    await waitFor(() => expect(screen.getByText(/ago$/)).toBeDefined());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where the customer information on this page comes from.
+// ---------------------------------------------------------------------------
+
+describe('the customer panel', () => {
+  it('shows the name the order carries', async () => {
+    // What a document snapshots, per section 3.4, and the whole of what the sales order
+    // response has to say about the party.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    expect(screen.getAllByText('North Supply').length).toBeGreaterThan(0);
+  });
+
+  it('reaches no endpoint but the ones this page owns', async () => {
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+    await waitFor(() => expect(calls.some((call) => call.url === AUDIT_URL)).toBe(true));
+
+    const asked = [...new Set(calls.map((call) => call.url))].sort();
+    expect(asked).toEqual([AUDIT_URL, ORDER_URL, '/api/me'].sort());
+  });
+
+  it('asks no other service for the party on this page', () => {
+    // THE REGRESSION TEST FOR THE FIXTURE LEAK, and it reads the source rather than the screen
+    // on purpose. The page used to ask the fixture customer layer about a real backend
+    // identifier. That lookup could never match, so the panel drew its header over nothing and
+    // the payment terms field held a skeleton that never resolved.
+    //
+    // A behavioural test cannot catch it coming back. The fixture layer answers from memory, so
+    // a reintroduced call makes no request to observe and changes nothing on screen until
+    // somebody also renders it. What can be caught is the call itself.
+    const source = detailPageSource;
+
+    expect(source).not.toMatch(/api\.parties\b/);
+    expect(source).not.toMatch(/api\.finance\b/);
+    expect(source).not.toMatch(/api\.inventory\b/);
+    expect(source).not.toMatch(/from '@\/mocks/);
+    // What it may reach: the sales order, its trail, and nothing else.
+    expect(source).toMatch(/api\.sales\./);
+  });
+
+  it('promises no figure it cannot produce', async () => {
+    // A credit bar computed from nothing would read as zero per cent used, which is a claim
+    // about this customer rather than an absence.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    expect(screen.queryByText(/of credit used/i)).toBeNull();
+    expect(screen.queryByText(/credit limit/i)).toBeNull();
+    expect(screen.queryByText(/outstanding balance/i)).toBeNull();
+  });
+
+  it('draws no loading state that will never resolve', async () => {
+    // The payment terms field held a skeleton forever, because the query behind it could not
+    // succeed. A loading state that never ends is a claim that something is coming.
+    renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
+    await waitForPage();
+
+    // The field label itself, not the sentence that explains where the value went.
+    expect(screen.queryByText('Payment terms')).toBeNull();
   });
 });

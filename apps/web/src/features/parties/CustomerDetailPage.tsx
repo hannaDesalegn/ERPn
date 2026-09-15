@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { api, queryKeys } from '@/services';
+import { api, queryKeys, agingReference } from '@/services';
 import { Badge, Card, CardHeader, ErrorState, Field, PageHeader, Tabs } from '@/components/ui';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { MoneyText } from '@/components/domain/MoneyText';
@@ -91,7 +91,7 @@ export function CustomerDetailPage() {
       width: '130px',
       numeric: true,
       render: (i) => {
-        const days = daysUntil(i.dueDate);
+        const days = daysUntil(i.dueDate, agingReference());
         const overdue = days < 0 && i.balanceDue.amount > 0;
         return (
           <span className={cn(overdue && 'text-danger-text')}>

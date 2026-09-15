@@ -9,7 +9,7 @@
 
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, queryKeys } from '@/services';
+import { api, queryKeys, agingReference } from '@/services';
 import type { SupplierBill } from '@/domain';
 import { Badge, Button, Card, CardHeader, ErrorState, Field, Icon, PageHeader, SearchInput, Select, Toolbar } from '@/components/ui';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
@@ -66,7 +66,7 @@ export function BillsPage() {
       width: '140px',
       numeric: true,
       render: (b) => {
-        const days = daysUntil(b.dueDate);
+        const days = daysUntil(b.dueDate, agingReference());
         const late = days < 0 && b.balanceDue.amount > 0;
         return (
           <span className={cn(late && 'font-medium text-danger-text')}>
@@ -185,7 +185,7 @@ export function BillDetailPage() {
   if (bill.isLoading || !bill.data) return <DetailSkeleton />;
 
   const b = bill.data;
-  const days = daysUntil(b.dueDate);
+  const days = daysUntil(b.dueDate, agingReference());
   const late = days < 0 && b.balanceDue.amount > 0;
   const blocked = b.matchStatus !== 'matched';
 

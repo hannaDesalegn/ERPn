@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, queryKeys } from '@/services';
+import { api, queryKeys, agingReference } from '@/services';
 import type { AgingBand, Payment, PurchaseOrder, Supplier, SupplierBill } from '@/domain';
 import { Card, CardHeader, ErrorState, Field, PageHeader, SearchInput, Tabs, Toolbar } from '@/components/ui';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
@@ -173,7 +173,7 @@ export function SupplierDetailPage() {
       width: '125px',
       numeric: true,
       render: (b) => {
-        const days = daysUntil(b.dueDate);
+        const days = daysUntil(b.dueDate, agingReference());
         const late = days < 0 && b.balanceDue.amount > 0;
         return (
           <span className={cn(late && 'text-danger-text')}>
