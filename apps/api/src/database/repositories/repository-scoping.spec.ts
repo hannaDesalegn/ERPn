@@ -1,5 +1,5 @@
 /**
- * A source level guardrail on the scope predicates in the accounting repositories.
+ * A source level guardrail on the scope predicates in the newest repositories.
  *
  * WHY THIS IS NOT A BEHAVIOURAL TEST, and the finding that led to it. Removing the tenant and
  * company predicates from `DrizzleJournalRepository.findById` leaves every integration test in
@@ -12,6 +12,10 @@
  * It is a blunt instrument, deliberately, in the shape `auth/secret-handling.spec.ts` already
  * established for a rule that behaviour cannot demonstrate. If a query here ever legitimately
  * needs to reach across a company, the change has to come to this file and be argued for.
+ *
+ * IT COVERS THE FILES IT NAMES, and the list is pinned below so that adding a repository without
+ * adding it here fails rather than going unchecked. The older repositories are not covered yet;
+ * bringing them in is a change worth making deliberately rather than as a side effect of this.
  */
 
 import { readFileSync } from 'node:fs';
@@ -19,13 +23,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SOURCE = readFileSync(join(HERE, 'accounting.repository.ts'), 'utf8');
+
+/** The repositories this guard covers. */
+const GUARDED = ['accounting.repository.ts', 'billing.repository.ts'] as const;
 
 /** Comments are exempt: the rule is about what the query does, not about what explains it. */
 const withoutComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 interface Method {
+  file: string;
   name: string;
   body: string;
 }
@@ -36,8 +43,8 @@ interface Method {
  * Split on the method signature rather than parsed, which is enough: each chunk runs to the start
  * of the next method, so a predicate belonging to one cannot be counted for another.
  */
-const methods: Method[] = (() => {
-  const source = withoutComments(SOURCE);
+const methodsOf = (file: string): Method[] => {
+  const source = withoutComments(readFileSync(join(HERE, file), 'utf8'));
   const signature = /^\s{2}(?:private\s+)?async\s+(\w+)\s*\(/gm;
   const found: Method[] = [];
   let match: RegExpExecArray | null;
@@ -50,23 +57,33 @@ const methods: Method[] = (() => {
   for (let i = 0; i < starts.length; i += 1) {
     const start = starts[i]!;
     const end = starts[i + 1]?.index ?? source.length;
-    found.push({ name: start.name, body: source.slice(start.index, end) });
+    found.push({ file, name: start.name, body: source.slice(start.index, end) });
   }
 
   return found;
-})();
+};
+
+const methods: Method[] = GUARDED.flatMap(methodsOf);
 
 /** A method that reads or writes a table, as opposed to one that maps a row. */
 const touchesTheDatabase = (method: Method) =>
-  /\.from\(|\.insert\(|\.update\(/.test(method.body);
+  /\.from\(|\.insert\(|\.update\(|\.delete\(/.test(method.body);
 
-/** A method whose scope has to be a predicate: it selects rows, or it narrows an update. */
-const reads = (method: Method) => /\.from\(|\.update\(/.test(method.body);
+/**
+ * A method whose scope has to be a predicate: it selects rows, narrows an update, or narrows a
+ * delete. A delete belongs here rather than with the writes below: what makes it safe is the
+ * predicate that stops it reaching another company's row, not a column it stamps.
+ */
+const reads = (method: Method) => /\.from\(|\.update\(|\.delete\(/.test(method.body);
 
 /** A method whose scope has to be stamped onto the row it writes. */
 const writes = (method: Method) => /\.insert\(/.test(method.body);
 
-describe('Scope predicates in the accounting repositories', () => {
+describe('Scope predicates in the guarded repositories', () => {
+  it('covers the files it claims to, so a new repository is not silently unguarded', () => {
+    expect([...GUARDED]).toEqual(['accounting.repository.ts', 'billing.repository.ts']);
+  });
+
   it('found the methods it is meant to be guarding', () => {
     // Without this, a rename or a refactor turns the whole suite into a vacuous pass over an
     // empty list, and it would still be green. The list is pinned so that adding a method is a
@@ -88,6 +105,17 @@ describe('Scope predicates in the accounting repositories', () => {
       'findById',
       'listForSourceDocument',
       'linesOf',
+      // Customer invoices
+      'findById',
+      'listForCompany',
+      'create',
+      'updateDraft',
+      'setTotals',
+      // Customer invoice lines
+      'listForInvoice',
+      'listForSourceOrder',
+      'create',
+      'remove',
     ]);
   });
 
@@ -95,7 +123,7 @@ describe('Scope predicates in the accounting repositories', () => {
     expect(methods.filter(touchesTheDatabase)).toHaveLength(methods.length);
   });
 
-  it.each(methods.map((method) => [method.name, method] as const))(
+  it.each(methods.map((method) => [`${method.file} ${method.name}`, method] as const))(
     '%s takes its scope from the scope rather than from an argument',
     (_name, method) => {
       // The scope is read once, from the scope object, and throws when there is none. A method
@@ -104,7 +132,7 @@ describe('Scope predicates in the accounting repositories', () => {
     },
   );
 
-  it.each(methods.filter(reads).map((method) => [method.name, method] as const))(
+  it.each(methods.filter(reads).map((method) => [`${method.file} ${method.name}`, method] as const))(
     '%s filters on both scope columns in the query itself',
     (_name, method) => {
       // Section 6.3: the predicate goes in the query, never applied to the rows afterwards. Row
@@ -118,7 +146,7 @@ describe('Scope predicates in the accounting repositories', () => {
     },
   );
 
-  it.each(methods.filter(writes).map((method) => [method.name, method] as const))(
+  it.each(methods.filter(writes).map((method) => [`${method.file} ${method.name}`, method] as const))(
     '%s stamps both scope columns onto the row it writes',
     (_name, method) => {
       // The other half of the rule: a write takes its tenant and company from the scope rather
@@ -127,9 +155,11 @@ describe('Scope predicates in the accounting repositories', () => {
     },
   );
 
-  it('never takes a tenant or a company as a method argument', () => {
+  it.each([...GUARDED])('never takes a tenant or a company as an argument in %s', (file) => {
     // The vulnerability this layer exists to prevent: a caller reading an identifier out of a
     // request body and handing it in as authority.
-    expect(withoutComments(SOURCE)).not.toMatch(/\b(tenantId|companyId)\s*:\s*string/);
+    const source = withoutComments(readFileSync(join(HERE, file), 'utf8'));
+
+    expect(source).not.toMatch(/\b(tenantId|companyId)\s*:\s*string/);
   });
 });

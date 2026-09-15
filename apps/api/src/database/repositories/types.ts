@@ -1088,6 +1088,136 @@ export interface IdempotencyRepository {
 }
 
 /**
+ * BILLING. The customer invoice and its lines.
+ *
+ * WHERE THE RELATIONSHIP TO A SALES ORDER LIVES. On the line, not on the header. The domain model
+ * states `salesOrderIds: ID[]` and this layer answers it by reading the distinct source orders
+ * behind an invoice's lines, so there is no stored set to drift from the lines it describes.
+ * Section 12.4 names that drift as the reason a stored graph is refused elsewhere.
+ */
+export interface CustomerInvoiceRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** Null while the invoice is a draft. Allocated by the posting transaction, per section 10.4. */
+  docNumber: string | null;
+  status: string;
+  customerId: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  currency: string;
+  subtotal: string;
+  taxTotal: string;
+  total: string;
+  version: number;
+}
+
+export interface CustomerInvoiceLineRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  customerInvoiceId: string;
+  lineNumber: number;
+  /** What this line bills. The pair is pinned to each other by a composite key in 0015. */
+  sourceSalesOrderId: string;
+  sourceSalesOrderLineId: string;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: string;
+  unitPrice: string;
+  discountPercent: string;
+  taxRatePercent: string;
+  currency: string;
+  lineSubtotal: string;
+  lineTax: string;
+  lineTotal: string;
+}
+
+/**
+ * A new invoice.
+ *
+ * No status, no document number and no totals. The status is the column default, the number
+ * belongs to a posting transaction that does not exist yet, and the totals are written from the
+ * lines once they are stored. None of the three is a caller's to state.
+ */
+export interface NewCustomerInvoice {
+  id: string;
+  customerId: string;
+  invoiceDate: string;
+  dueDate?: string | null;
+  currency: string;
+}
+
+export interface NewCustomerInvoiceLine {
+  id: string;
+  customerInvoiceId: string;
+  lineNumber: number;
+  sourceSalesOrderId: string;
+  sourceSalesOrderLineId: string;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: string;
+  unitPrice: string;
+  currency: string;
+  discountPercent?: string;
+  taxRatePercent?: string;
+  lineSubtotal?: string;
+  lineTax?: string;
+  lineTotal?: string;
+}
+
+/**
+ * Editing the header of a draft, per section 10.1.
+ *
+ * The version the caller read is part of the write, not checked before it, so a stale edit
+ * updates nothing rather than overwriting someone else's. The status, the number and the totals
+ * are absent because an edit may change no more than creation could set.
+ */
+export interface CustomerInvoiceDraftUpdate {
+  id: string;
+  expectedVersion: number;
+  customerId: string;
+  invoiceDate: string;
+  dueDate: string | null;
+}
+
+export interface CustomerInvoiceRepository {
+  findById(id: string): Promise<CustomerInvoiceRecord | null>;
+  listForCompany(): Promise<CustomerInvoiceRecord[]>;
+  create(input: NewCustomerInvoice): Promise<CustomerInvoiceRecord>;
+  /** Optimistic locking per section 10.1. A stale version is a conflict, never a silent write. */
+  updateDraft(input: CustomerInvoiceDraftUpdate): Promise<CustomerInvoiceRecord>;
+  /**
+   * Writes the document totals from the stored lines.
+   *
+   * Separate from the header write because the header exists before its lines do, and it leaves
+   * `version` alone: summing what was just written is not an edit somebody could lose.
+   */
+  setTotals(input: {
+    id: string;
+    subtotal: string;
+    taxTotal: string;
+    total: string;
+  }): Promise<CustomerInvoiceRecord>;
+}
+
+export interface CustomerInvoiceLineRepository {
+  listForInvoice(customerInvoiceId: string): Promise<CustomerInvoiceLineRecord[]>;
+  /** Every invoice line billing one sales order line, which is what says how much is invoiced. */
+  listForSourceOrder(salesOrderId: string): Promise<CustomerInvoiceLineRecord[]>;
+  create(input: NewCustomerInvoiceLine): Promise<CustomerInvoiceLineRecord>;
+  /**
+   * Removes a line.
+   *
+   * Whether the invoice is still a draft is a state machine question under section 12.2 and is
+   * not asked here. The grant exists because editing a draft replaces its lines.
+   */
+  remove(id: string): Promise<void>;
+}
+
+/**
  * ACCOUNTING. The chart, the mapping onto it, and the value ledger.
  *
  * `type` and `purpose` are plain strings here rather than the unions `accounting/` defines. The
@@ -1255,6 +1385,8 @@ export interface ScopedRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly customerInvoices: CustomerInvoiceRepository;
+  readonly customerInvoiceLines: CustomerInvoiceLineRepository;
   readonly accounts: AccountRepository;
   readonly postingAccounts: CompanyPostingAccountRepository;
   readonly journal: JournalRepository;
@@ -1301,6 +1433,8 @@ export interface SystemRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly customerInvoices: CustomerInvoiceRepository;
+  readonly customerInvoiceLines: CustomerInvoiceLineRepository;
   readonly accounts: AccountRepository;
   readonly postingAccounts: CompanyPostingAccountRepository;
   readonly journal: JournalRepository;
