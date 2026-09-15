@@ -27,6 +27,14 @@ export interface CompanyRecord {
    * posted document. A string for the reason section 4.3 gives about doubles.
    */
   standardTaxRatePercent: string;
+  /**
+   * The company tax registration number an invoice prints, per section 2.9.
+   *
+   * Null when the company is not registered, which is a real state rather than a missing value.
+   * No format is asserted: the rule differs by jurisdiction, and section 9.7 puts the engine
+   * that knows which jurisdiction applies in the future.
+   */
+  taxRegistrationNumber: string | null;
   status: string;
   version: number;
 }
@@ -89,7 +97,13 @@ export interface CompanyRepository {
    * than someone else's company.
    */
   listByIds(ids: string[]): Promise<CompanyRecord[]>;
-  create(input: { id: string; name: string; legalName?: string | null; baseCurrency: string }): Promise<CompanyRecord>;
+  create(input: {
+    id: string;
+    name: string;
+    legalName?: string | null;
+    baseCurrency: string;
+    taxRegistrationNumber?: string | null;
+  }): Promise<CompanyRecord>;
   /**
    * Optimistic locking per contract section 10.1. The caller supplies the version it read; a
    * mismatch is a conflict rather than a silent overwrite.
@@ -363,6 +377,11 @@ export interface CustomerRecord {
   /** The code humans use. Unique within the company that owns the record, never globally. */
   code: string;
   name: string;
+  /**
+   * The customer's tax registration number, printed on an invoice raised for them per section
+   * 2.9. Null when they have none, which is ordinary for a private buyer.
+   */
+  taxRegistrationNumber: string | null;
   status: string;
   version: number;
 }
@@ -385,6 +404,7 @@ export interface NewCustomer {
   id: string;
   code: string;
   name: string;
+  taxRegistrationNumber?: string | null;
 }
 
 export interface NewWarehouse {
@@ -1067,6 +1087,165 @@ export interface IdempotencyRepository {
   deleteExpired(now: Date): Promise<number>;
 }
 
+/**
+ * ACCOUNTING. The chart, the mapping onto it, and the value ledger.
+ *
+ * `type` and `purpose` are plain strings here rather than the unions `accounting/` defines. The
+ * data layer is not the authority on either vocabulary: migration 0013 states the five account
+ * types as a check constraint, and the purpose catalogue is code that this layer would otherwise
+ * have to import in order to restate. A value outside either is refused by the database, which
+ * is where section 4.1 wants the refusal.
+ */
+export interface AccountRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** The number a bookkeeper uses. Unique within the company, never globally. */
+  code: string;
+  name: string;
+  /** One of asset, liability, equity, revenue, expense. */
+  type: string;
+  status: string;
+  version: number;
+}
+
+export interface NewAccount {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+}
+
+export interface AccountRepository {
+  findById(id: string): Promise<AccountRecord | null>;
+  findByCode(code: string): Promise<AccountRecord | null>;
+  listForCompany(): Promise<AccountRecord[]>;
+  create(input: NewAccount): Promise<AccountRecord>;
+  /** Section 4.5, and the grant refuses a delete anyway. An account that has been posted to is
+   * part of what the ledger means. */
+  archive(input: ArchiveRequest): Promise<AccountRecord>;
+}
+
+export interface CompanyPostingAccountRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** What this account is used for, for example `accounts_receivable`. */
+  purpose: string;
+  accountId: string;
+  version: number;
+}
+
+export interface NewCompanyPostingAccount {
+  id: string;
+  purpose: string;
+  accountId: string;
+}
+
+/**
+ * Section 2.9's "the accounts that document postings map to", held per company.
+ *
+ * No method takes a company, and `pointTo` cannot reach an account outside the acting one: the
+ * composite foreign key in migration 0013 refuses a mapping whose account belongs elsewhere, so
+ * a cross-company mapping is unrepresentable rather than merely rejected.
+ */
+export interface CompanyPostingAccountRepository {
+  findForPurpose(purpose: string): Promise<CompanyPostingAccountRecord | null>;
+  listForCompany(): Promise<CompanyPostingAccountRecord[]>;
+  create(input: NewCompanyPostingAccount): Promise<CompanyPostingAccountRecord>;
+  /**
+   * Repoints a purpose at a different account. Section 2.9 makes this configuration a company
+   * edits, and section 10.1's optimistic locking applies: the caller supplies the version it
+   * read, and a stale one is a conflict rather than a silent overwrite.
+   */
+  pointTo(input: {
+    purpose: string;
+    accountId: string;
+    expectedVersion: number;
+  }): Promise<CompanyPostingAccountRecord>;
+}
+
+export interface JournalEntryRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  /** The accounting date, as a date string. Not always the date the row was written. */
+  entryDate: string;
+  memo: string;
+  currency: string;
+  sourceDocType: string | null;
+  sourceDocId: string | null;
+  createdAt: Date;
+}
+
+export interface JournalLineRecord {
+  id: string;
+  tenantId: string;
+  companyId: string;
+  journalEntryId: string;
+  lineNumber: number;
+  accountId: string;
+  /** Exact decimals as strings, per section 4.3. Exactly one of the two is above zero. */
+  debit: string;
+  credit: string;
+  currency: string;
+}
+
+/**
+ * One side of an entry, as a caller states it.
+ *
+ * A union rather than two optional fields, so a line claiming both a debit and a credit cannot
+ * be written down at all. Section 3.3's principle applied to an internal caller: the guarantee
+ * worth having is that the wrong thing is unrepresentable, not that it is checked.
+ */
+export type NewJournalLine =
+  | { accountId: string; debit: string; credit?: never }
+  | { accountId: string; credit: string; debit?: never };
+
+/**
+ * A whole entry, written at once.
+ *
+ * `lines` is part of the input rather than a second call, because an entry and its lines are one
+ * fact: section 4.1's invariant is a property of the set, and a repository that could write a
+ * header on its own would offer a way to create half of an entry. Line numbers are assigned from
+ * the order given, and line identifiers are generated, because neither is a caller's decision.
+ */
+export interface NewJournalEntry {
+  id: string;
+  entryDate: string;
+  memo: string;
+  currency: string;
+  sourceDocType?: string | null;
+  sourceDocId?: string | null;
+  lines: readonly NewJournalLine[];
+}
+
+export interface RecordedJournalEntry {
+  entry: JournalEntryRecord;
+  lines: JournalLineRecord[];
+}
+
+/**
+ * The value ledger of section 8.3, and the immutability of section 9.1.
+ *
+ * WRITE ONCE, AND THERE IS NO UPDATE OR DELETE TO OFFER. Migration 0014 grants the application
+ * role SELECT and INSERT only and adds a trigger that refuses the other two from the owning role
+ * as well, so a method to edit an entry could not be implemented if it were wanted. Corrections
+ * are reversing entries, per section 9.1.
+ *
+ * NOTHING HERE CHECKS THE BALANCE, deliberately. Section 4.1 puts that invariant in the database
+ * as a deferred constraint evaluated per entry at commit, and a duplicate check in this layer
+ * would make the error a caller sees depend on which layer noticed first, while inviting the
+ * belief that the trigger is the redundant one. An unbalanced entry raises at commit and takes
+ * the whole transaction with it.
+ */
+export interface JournalRepository {
+  record(input: NewJournalEntry): Promise<RecordedJournalEntry>;
+  findById(id: string): Promise<RecordedJournalEntry | null>;
+  /** Every entry raised by one document, which is what makes a posting explainable. */
+  listForSourceDocument(docType: string, docId: string): Promise<RecordedJournalEntry[]>;
+}
+
 /** What an actor scoped unit of work hands to its callback. */
 export interface ScopedRepositories {
   readonly companies: CompanyRepository;
@@ -1076,6 +1255,9 @@ export interface ScopedRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly accounts: AccountRepository;
+  readonly postingAccounts: CompanyPostingAccountRepository;
+  readonly journal: JournalRepository;
   readonly stockLedger: StockLedgerRepository;
   readonly stockReservations: StockReservationRepository;
   readonly idempotency: IdempotencyRepository;
@@ -1119,6 +1301,9 @@ export interface SystemRepositories {
   readonly salesOrders: SalesOrderRepository;
   readonly salesOrderLines: SalesOrderLineRepository;
   readonly documentNumberSequences: DocumentNumberSequenceRepository;
+  readonly accounts: AccountRepository;
+  readonly postingAccounts: CompanyPostingAccountRepository;
+  readonly journal: JournalRepository;
   readonly stockLedger: StockLedgerRepository;
   readonly stockReservations: StockReservationRepository;
   readonly idempotency: IdempotencyRepository;

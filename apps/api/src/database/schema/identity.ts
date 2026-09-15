@@ -114,6 +114,13 @@ export const companies = pgTable('companies', {
   })
     .notNull()
     .default('0'),
+  /**
+   * The company tax registration number printed on its invoices, per section 2.9, which put it
+   * with invoice posting rather than with the identity schema. Null when the company is not
+   * registered, and no format check beyond that: the rule differs by jurisdiction, and the
+   * engine that knows which jurisdiction applies is section 9.7's future work.
+   */
+  taxRegistrationNumber: text('tax_registration_number'),
   status: text('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by'),

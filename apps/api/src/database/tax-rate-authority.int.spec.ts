@@ -238,7 +238,13 @@ describe('The authoritative tax rate', () => {
       // rate, and section 9.7 names both as future.
       const columns = await columnsOf('customers');
 
-      expect(columns.filter((c) => c.includes('tax'))).toEqual([]);
+      expect(columns.filter((c) => c.includes('rate'))).toEqual([]);
+      // The customer does carry a tax registration number, which section 2.9 puts on each party
+      // for invoice posting. It is an identifier printed on a document, not an input to any
+      // calculation, so it leaves the ruling above intact: nothing here says what tax to charge.
+      // Pinned exactly rather than matched by pattern, so a second tax column on this table has
+      // to be argued for here.
+      expect(columns.filter((c) => c.includes('tax'))).toEqual(['tax_registration_number']);
     });
   });
 

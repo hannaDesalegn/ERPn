@@ -33,6 +33,11 @@ export const customers = pgTable('customers', {
   companyId: uuid('company_id').notNull(),
   code: text('code').notNull(),
   name: text('name').notNull(),
+  /**
+   * Printed on an invoice raised for this customer, per section 2.9. Null when they have none,
+   * which is the ordinary case for a private buyer and for an unregistered trader.
+   */
+  taxRegistrationNumber: text('tax_registration_number'),
   status: text('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by'),

@@ -176,6 +176,7 @@ export class DrizzleCompanyRepository implements CompanyRepository {
     name: string;
     legalName?: string | null;
     baseCurrency: string;
+    taxRegistrationNumber?: string | null;
   }): Promise<CompanyRecord> {
     const tenantId = requireTenantId(this.scope);
 
@@ -188,6 +189,9 @@ export class DrizzleCompanyRepository implements CompanyRepository {
         name: input.name,
         legalName: input.legalName ?? null,
         baseCurrency: input.baseCurrency,
+        // Null when not supplied, which says the company is not registered. The check constraint
+        // in 0013 refuses the third state, an empty or padded string meaning the same thing.
+        taxRegistrationNumber: input.taxRegistrationNumber ?? null,
         createdBy: actingUserId(this.scope),
         updatedBy: actingUserId(this.scope),
       })
@@ -787,6 +791,7 @@ function toCompany(row: Row<typeof companies.$inferSelect>): CompanyRecord {
     // decimal place away without saying so, and a rate is what every document line is
     // computed from.
     standardTaxRatePercent: row.standardTaxRatePercent,
+    taxRegistrationNumber: row.taxRegistrationNumber,
     status: row.status,
     version: row.version,
   };

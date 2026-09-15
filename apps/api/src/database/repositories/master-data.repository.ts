@@ -127,6 +127,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
         companyId,
         code: input.code,
         name: input.name,
+        taxRegistrationNumber: input.taxRegistrationNumber ?? null,
         createdBy: actingUserId(this.scope),
         updatedBy: actingUserId(this.scope),
       })
@@ -454,6 +455,7 @@ function toCustomer(row: CustomerRow): CustomerRecord {
     companyId: row.companyId,
     code: row.code,
     name: row.name,
+    taxRegistrationNumber: row.taxRegistrationNumber,
     status: row.status,
     version: row.version,
   };

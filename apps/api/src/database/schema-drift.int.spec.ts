@@ -200,12 +200,19 @@ describe('Schema drift', () => {
       // because section 12.3 has not ruled what releasing reserved stock does. If release reduces
       // a reservation in place, the table becomes mutable and moves out of this list in the same
       // migration that grants the UPDATE.
+      //
+      // `journal_entries` and `journal_lines` join under the second shape with the strongest
+      // claim of any table here. Section 9.1 makes a posted entry immutable, migration 0014
+      // withholds UPDATE and DELETE from the application role, and a trigger refuses both from
+      // the owning role as well, so there is no writer an optimistic lock could protect against.
       const associationOrAppendOnly = [
         'role_permissions',
         'membership_roles',
         'audit_events',
         'stock_movements',
         'stock_reservations',
+        'journal_entries',
+        'journal_lines',
       ];
       const claimingFourthShape = VERSION_EXEMPT_TABLES.filter(
         (table) => !associationOrAppendOnly.includes(table),
