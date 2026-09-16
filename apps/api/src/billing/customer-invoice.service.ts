@@ -47,26 +47,11 @@ import type {
   ScopedRepositories,
 } from '../database/index.js';
 import type { CompanyContext } from '../identity/identity.service.js';
-import {
-  add,
-  compare,
-  multiply,
-  parseDecimal,
-  round,
-  subtract,
-  toFixed,
-  zero,
-  type Decimal,
-} from '../shared/decimal.js';
+import { compare, parseDecimal, subtract, toFixed, zero, type Decimal } from '../shared/decimal.js';
+import { billedAmounts, documentTotals, RATE_SCALE } from './invoice-arithmetic.js';
 import { resolveTaxRate } from '../tax/tax-rate.js';
 import { statusOf as salesOrderStatusOf } from '../sales/sales-order-status.js';
 import { statusOf } from './customer-invoice-status.js';
-
-/** The scales the schema declares. Amounts at four, everything else at six. */
-const AMOUNT_SCALE = 4;
-const RATE_SCALE = 6;
-
-const ONE_HUNDRED = parseDecimal('100');
 
 /**
  * The states a sales order may be invoiced from.
@@ -696,16 +681,16 @@ export class CustomerInvoiceService {
     const discount = parseDecimal(line.discountPercent);
     const taxRate = parseDecimal(resolveTaxRate(company));
 
-    const gross = multiply(quantity, unitPrice);
-    const keptFraction = subtract(ONE_HUNDRED, discount);
-    const discounted = divideByHundred(multiply(gross, keptFraction));
-    const lineSubtotal = round(discounted, AMOUNT_SCALE);
-
-    // Tax on the rounded subtotal, which is the figure that appears on the document. Computing it
-    // on the unrounded one would produce a tax that does not follow from the numbers a customer
-    // can see.
-    const lineTax = round(divideByHundred(multiply(lineSubtotal, taxRate)), AMOUNT_SCALE);
-    const lineTotal = add(lineSubtotal, lineTax);
+    // One implementation, shared with posting, which recomputes these to check that the document
+    // it is about to make binding still follows from its own inputs. Two implementations would
+    // eventually round differently, and the difference would surface as a journal entry that does
+    // not equal the invoice it came from.
+    const amounts = billedAmounts({
+      quantity,
+      unitPrice,
+      discountPercent: discount,
+      taxRatePercent: taxRate,
+    });
 
     return {
       sourceSalesOrderId: order.id,
@@ -719,9 +704,7 @@ export class CustomerInvoiceService {
       unitPrice: toFixed(unitPrice, RATE_SCALE),
       discountPercent: toFixed(discount, RATE_SCALE),
       taxRatePercent: toFixed(taxRate, RATE_SCALE),
-      lineSubtotal: toFixed(lineSubtotal, AMOUNT_SCALE),
-      lineTax: toFixed(lineTax, AMOUNT_SCALE),
-      lineTotal: toFixed(lineTotal, AMOUNT_SCALE),
+      ...amounts,
     };
   }
 
@@ -750,19 +733,9 @@ export class CustomerInvoiceService {
     invoice: CustomerInvoiceRecord,
     lines: CustomerInvoiceLineRecord[],
   ): Promise<CustomerInvoiceRecord> {
-    let subtotal: Decimal = zero(AMOUNT_SCALE);
-    let taxTotal: Decimal = zero(AMOUNT_SCALE);
-
-    for (const line of lines) {
-      subtotal = add(subtotal, parseDecimal(line.lineSubtotal, AMOUNT_SCALE));
-      taxTotal = add(taxTotal, parseDecimal(line.lineTax, AMOUNT_SCALE));
-    }
-
     return repos.customerInvoices.setTotals({
       id: invoice.id,
-      subtotal: toFixed(subtotal, AMOUNT_SCALE),
-      taxTotal: toFixed(taxTotal, AMOUNT_SCALE),
-      total: toFixed(add(subtotal, taxTotal), AMOUNT_SCALE),
+      ...documentTotals(lines),
     });
   }
 }
@@ -773,11 +746,6 @@ function remainderOf(line: SalesOrderLineRecord): Decimal {
     parseDecimal(line.quantity, RATE_SCALE),
     parseDecimal(line.invoicedQuantity, RATE_SCALE),
   );
-}
-
-/** Percentages are applied by dividing once, exactly, at the end of a multiplication. */
-function divideByHundred(value: Decimal): Decimal {
-  return { units: value.units, scale: value.scale + 2 };
 }
 
 function decimalOr(value: string, reason: InvoiceDraftRejection, field: string): Decimal {
