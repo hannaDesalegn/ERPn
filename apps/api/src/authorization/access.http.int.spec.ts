@@ -22,11 +22,13 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Client } from 'pg';
 
 import { AdministrationModule } from '../administration/administration.module.js';
+import { provisionChartOfAccounts } from '../accounting/chart-of-accounts.js';
+import { provisionPostingAccounts } from '../accounting/posting-accounts.js';
 import { AppConfigModule } from '../config/config.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { PasswordHasher } from '../auth/password-hasher.js';
 import { DatabaseModule } from '../database/database.module.js';
-import { systemScope, UnitOfWork } from '../database/index.js';
+import { actorScope, systemScope, UnitOfWork } from '../database/index.js';
 import { registerHttpPlugins } from '../http/plugins.js';
 import { RouteDeclarationAudit, type DeclaredRoute } from '../http/route-declarations.js';
 import { CSRF_HEADER } from '../http/csrf.js';
@@ -113,6 +115,14 @@ let matrixOrder = '00000000-0000-4000-8000-000000000000';
  */
 let matrixInvoiceOrder = '00000000-0000-4000-8000-000000000001';
 let matrixInvoice = '00000000-0000-4000-8000-000000000002';
+
+/**
+ * A second draft invoice, for the posting cell alone.
+ *
+ * Separate from `matrixInvoice`, which the edit cell rewrites: posting is irreversible, so a cell
+ * that shared one document with the edit cell would be answering about whichever ran first.
+ */
+let matrixPostableInvoice = '00000000-0000-4000-8000-000000000003';
 
 /** A fresh key per invocation, so an allow cell is never answered by a replay of an earlier one. */
 let keySequence = 0;
@@ -280,6 +290,15 @@ const CALLS: Call[] = [
     permission: 'invoices:create',
   },
   {
+    label: 'post a customer invoice',
+    controller: 'CustomerInvoiceController',
+    handler: 'post',
+    method: 'POST',
+    url: () => `/api/customer-invoices/${matrixPostableInvoice}/post`,
+    idempotent: true,
+    permission: 'invoices:post',
+  },
+  {
     label: 'read a customer invoice',
     controller: 'CustomerInvoiceController',
     handler: 'get',
@@ -438,6 +457,40 @@ describe('Deny by default', () => {
         MATRIX_PRODUCT,
       ],
     );
+
+    // A second draft for the posting cell. Posting is irreversible, so it cannot share a document
+    // with the edit cell: whichever ran first would decide what the other was answering about.
+    matrixPostableInvoice = nextOrderId();
+    await owner.query(
+      `INSERT INTO customer_invoices
+         (id, tenant_id, company_id, customer_id, invoice_date, currency, subtotal, tax_total, total)
+       VALUES ($1,$2,$3,$4,current_date,'USD','10.0000','0.0000','10.0000')`,
+      [matrixPostableInvoice, TENANT_HOME, HOME, MATRIX_CUSTOMER],
+    );
+    await owner.query(
+      `INSERT INTO customer_invoice_lines
+         (id, tenant_id, company_id, customer_invoice_id, line_number, source_sales_order_id,
+          source_sales_order_line_id, product_id, product_sku, product_name, quantity, unit_price,
+          currency, line_subtotal, line_tax, line_total)
+       VALUES ($1,$2,$3,$4,1,$5,$6,$7,'SKU-M','Matrix widget','1.000000','10.000000','USD','10.0000','0.0000','10.0000')`,
+      [
+        nextOrderId(),
+        TENANT_HOME,
+        HOME,
+        matrixPostableInvoice,
+        matrixInvoiceOrder,
+        invoiceOrderLine,
+        MATRIX_PRODUCT,
+      ],
+    );
+
+    // The counter posting allocates from is seeded once, with the company. Rewound here so the
+    // number a posting cell issues does not depend on how many cells ran before it.
+    await owner.query(
+      `UPDATE document_number_sequences SET next_value = 1
+        WHERE company_id = $1 AND doc_type = 'customer_invoice'`,
+      [HOME],
+    );
   }
 
   async function seed(hasher: PasswordHasher): Promise<void> {
@@ -492,6 +545,22 @@ describe('Deny by default', () => {
        VALUES ($1,$2,$3,'sales_order','SO-',true,1)`,
       [MATRIX_SEQUENCE, TENANT_HOME, HOME],
     );
+    await owner.query(
+      `INSERT INTO document_number_sequences (id, tenant_id, company_id, doc_type, prefix, gapless, next_value)
+       VALUES ($1,$2,$3,'customer_invoice','INV-',true,1)`,
+      [nextOrderId(), TENANT_HOME, HOME],
+    );
+    // The books a posting cell needs, so an allowed posting is answered by the operation rather
+    // than by a company with no accounts configured.
+    await uow.inActorScope(
+      actorScope({ tenantId: TENANT_HOME, companyId: HOME, userId: SUBJECT }),
+      async (repositories) => {
+        const chart = await provisionChartOfAccounts(repositories);
+        await provisionPostingAccounts(repositories, chart);
+      },
+    );
+
+    await scopedOwner(TENANT_HOME, HOME);
     // Enough stock that a confirm cell is answered by authorization rather than by an oversell.
     await owner.query(
       `INSERT INTO stock_movements (id, tenant_id, company_id, product_id, warehouse_id, quantity, reason,
@@ -524,6 +593,10 @@ describe('Deny by default', () => {
       await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM company_posting_accounts WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM journal_lines WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM journal_entries WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM accounts WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM products WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM warehouses WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM customers WHERE company_id = $1', [companyId]);
@@ -919,10 +992,33 @@ describe('Deny by default', () => {
       await grant('administrator', 'away');
       const cookie = await login();
 
+      // ONE EVENT PER COMPANY, WRITTEN HERE RATHER THAN RELIED ON FROM THE SEED. This used to
+      // assert on the seeding records from `beforeAll`, and the read clamps to the two hundred
+      // most recent events: as the matrix grew more audited cells, the record it was looking for
+      // aged out of that window and the test failed for a reason that had nothing to do with
+      // isolation. The claim is that one company never sees another's trail, so the fixture makes
+      // the trail deterministic and then asserts exactly that.
+      await owner.query(`SELECT set_config('app.tenant_id', '', false)`);
+      await owner.query('TRUNCATE audit_events');
+
+      for (const [tenantId, companyId] of [
+        [TENANT_HOME, HOME],
+        [TENANT_AWAY, AWAY],
+      ] as const) {
+        await uow.inSystemScope(
+          systemScope('tenant-provisioning', { tenantId, companyId }),
+          (repositories) =>
+            repositories.audit.append({
+              action: 'roles_seeded',
+              entityType: 'company',
+              entityId: companyId,
+              summary: `Seeded default roles for ${companyId}`,
+            }),
+        );
+      }
+
       // Read with a wide limit rather than through the matrix entry, which asks for the default
-      // page. The records this asserts on are the seeding records, written once when the suite
-      // started, and every login and company switch since has pushed them further down the list.
-      // The claim being tested is about isolation, not about what fits on the first page.
+      // page. The claim being tested is about isolation, not about what fits on the first page.
       const trail = async (): Promise<{ entityId: string }[]> =>
         JSON.parse(
           (

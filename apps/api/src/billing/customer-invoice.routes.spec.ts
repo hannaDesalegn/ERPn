@@ -9,9 +9,10 @@
  * already uses: widening a route declaration leaves the behavioural tests green, because the
  * operation beneath it refuses on its own. The outer layer is worth keeping correct on its own.
  *
- * WHAT IS NOT DECLARED HERE MATTERS TOO. No route requires `invoices:post`. That capability exists
- * in the catalogue and posting is the next increment; a route claiming it today would be a control
- * that does nothing.
+ * WHAT EACH ROUTE DEMANDS IS THE POINT OF THE LIST. Raising and editing a draft need
+ * `invoices:create`; committing it to the ledger needs `invoices:post`. Section 6.2 keeps the
+ * verbs apart because that split is what encodes segregation of duties, and collapsing them would
+ * read as tidier and remove a control.
  */
 
 import 'reflect-metadata';
@@ -37,6 +38,7 @@ describe('the customer invoice routes', () => {
   it.each([
     ['create', 'invoices:create'],
     ['update', 'invoices:create'],
+    ['post', 'invoices:post'],
     ['get', 'invoices:view'],
   ])('%s requires %s', (method, permission) => {
     expect(accessFor(method)).toEqual({ kind: 'permission', permission });
@@ -58,13 +60,22 @@ describe('the customer invoice routes', () => {
     }
   });
 
-  it('exposes exactly three routes, and none of them posts', () => {
-    // The stopping boundary of this package, pinned. A fourth handler here means the posting
-    // endpoint arrived, and it should arrive with its own increment rather than inside this one.
-    expect(handlers().sort()).toEqual(['create', 'get', 'update']);
+  it('exposes exactly four routes, and only one of them posts', () => {
+    // Pinned, so a fifth handler is a visible decision. Cancelling and crediting a posted invoice
+    // are the two that will want to be next, and section 12.3 has ruled neither.
+    expect(handlers().sort()).toEqual(['create', 'get', 'post', 'update']);
 
-    for (const handler of handlers()) {
-      expect(accessFor(handler)).not.toEqual({ kind: 'permission', permission: 'invoices:post' });
-    }
+    const posting = handlers().filter(
+      (handler) => accessFor(handler)?.kind === 'permission' &&
+        (accessFor(handler) as { permission: string }).permission === 'invoices:post',
+    );
+
+    expect(posting).toEqual(['post']);
+  });
+
+  it('does not let the capability that raises a document also commit it', () => {
+    // The segregation of duties in the catalogue, read off the routes. If posting ever declared
+    // `invoices:create`, anyone who could draft an invoice could put it in the ledger.
+    expect(accessFor('post')).not.toEqual({ kind: 'permission', permission: 'invoices:create' });
   });
 });

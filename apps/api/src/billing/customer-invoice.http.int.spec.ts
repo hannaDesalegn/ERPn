@@ -25,7 +25,10 @@ import { randomUUID } from 'node:crypto';
 import { AppModule } from '../app.module.js';
 import { AppConfigModule } from '../config/config.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { provisionChartOfAccounts } from '../accounting/chart-of-accounts.js';
+import { provisionPostingAccounts } from '../accounting/posting-accounts.js';
 import { seedDefaultRolesIn } from '../authorization/role-provisioning.service.js';
+import { provisionCustomerInvoiceSequence } from '../sales/document-numbers.js';
 import { PasswordHasher } from '../auth/password-hasher.js';
 import { DatabaseModule } from '../database/database.module.js';
 import { systemScope, UnitOfWork } from '../database/index.js';
@@ -135,8 +138,14 @@ describe('The customer invoice endpoints', () => {
       await owner.query('DELETE FROM customer_invoices WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
+      await owner.query(
+        'UPDATE document_number_sequences SET next_value = 1 WHERE company_id = $1',
+        [companyId],
+      );
     }
     await ownerContext();
+    // The ledger refuses a delete even from the owning role, which is the guarantee 0014 adds.
+    await owner.query('TRUNCATE journal_lines, journal_entries');
     await owner.query('TRUNCATE audit_events');
   });
 
@@ -160,6 +169,18 @@ describe('The customer invoice endpoints', () => {
   async function ownerContext(tenantId?: string, companyId?: string): Promise<void> {
     await owner.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId ?? '']);
     await owner.query(`SELECT set_config('app.company_id', $1, false)`, [companyId ?? '']);
+  }
+
+  /** The books and the counter posting needs, through the functions provisioning uses. */
+  async function provisionBooks(companyId: string): Promise<void> {
+    await uow.inSystemScope(
+      systemScope('tenant-provisioning', { tenantId: TENANT, companyId }),
+      async (r) => {
+        await provisionCustomerInvoiceSequence(r);
+        const chart = await provisionChartOfAccounts(r);
+        await provisionPostingAccounts(r, chart);
+      },
+    );
   }
 
   /** This company's own copies of the templates, per section 2.7. */
@@ -190,6 +211,7 @@ describe('The customer invoice endpoints', () => {
     // `invoices:view`. The clerk is a warehouse user, which it gives neither, so every refusal
     // below is the capability missing rather than the session.
     for (const companyId of [COMPANY, SIBLING]) {
+      await provisionBooks(companyId);
       const seeded = await seedDefaultRolesFor(companyId);
       await uow.inSystemScope(
         systemScope('tenant-provisioning', { tenantId: TENANT, companyId }),
@@ -239,6 +261,9 @@ describe('The customer invoice endpoints', () => {
       await owner.query('DELETE FROM customer_invoices WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_order_lines WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM company_posting_accounts WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM accounts WHERE company_id = $1', [companyId]);
+      await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM products WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM warehouses WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM customers WHERE company_id = $1', [companyId]);
@@ -673,26 +698,185 @@ describe('The customer invoice endpoints', () => {
   // 5. What no endpoint does.
   // -------------------------------------------------------------------------------------
 
-  describe('the posting boundary', () => {
-    it('offers no route that posts an invoice', async () => {
+  describe('posting an invoice', () => {
+    const drafted = async () => {
       const order = await confirmedOrder();
       const created = await post(biller, randomUUID(), {
         salesOrderIds: [order.id],
         invoiceDate: '2026-09-15',
       });
-      const id = JSON.parse(created.body).id;
+      return { order, invoice: JSON.parse(created.body) };
+    };
+
+    const postInvoice = (session: BrowserSession, id: string, key: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/customer-invoices/${id}/post`,
+        headers: { ...mutating(session), 'idempotency-key': key },
+      });
+
+    it('answers 200 with the number, the status and the entry it wrote', async () => {
+      const { invoice } = await drafted();
+
+      const response = await postInvoice(biller, invoice.id, randomUUID());
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.status).toBe('posted');
+      expect(body.docNumber).toMatch(/^INV-\d{4}$/);
+      expect(body.journalEntryId).toMatch(/^[0-9a-f-]{36}$/);
+      // Five units at ten, which is the order this fixture confirms.
+      expect(body.total).toBe('50.0000');
+    });
+
+    it('shows the posted invoice on the read endpoint afterwards', async () => {
+      const { invoice } = await drafted();
+      const posted = JSON.parse((await postInvoice(biller, invoice.id, randomUUID())).body);
+
+      const read = JSON.parse((await get(biller, invoice.id)).body);
+
+      expect({
+        status: read.status,
+        docNumber: read.docNumber,
+        total: read.total,
+        lines: read.lines.length,
+        orders: read.salesOrders.length,
+        version: read.version,
+      }).toEqual({
+        status: 'posted',
+        docNumber: posted.docNumber,
+        total: '50.0000',
+        lines: 1,
+        orders: 1,
+        version: 2,
+      });
+    });
+
+    it('refuses a request with no idempotency key, and posts nothing', async () => {
+      const { invoice } = await drafted();
 
       const response = await app.inject({
         method: 'POST',
-        url: `/api/customer-invoices/${id}/post`,
-        headers: { ...mutating(biller), 'idempotency-key': randomUUID() },
+        url: `/api/customer-invoices/${invoice.id}/post`,
+        headers: mutating(biller),
       });
 
-      // 404 from the router, not 403 from a guard: there is no such route at all.
+      expect(response.statusCode).toBe(400);
+
+      await ownerContext(TENANT, COMPANY);
+      const entries = await owner.query<{ count: string }>('SELECT count(*) FROM journal_entries');
+      expect(entries.rows[0]?.count).toBe('0');
+    });
+
+    it('replays the same response rather than posting twice', async () => {
+      const { invoice } = await drafted();
+      const key = randomUUID();
+
+      const first = await postInvoice(biller, invoice.id, key);
+      const second = await postInvoice(biller, invoice.id, key);
+
+      expect(second.statusCode).toBe(200);
+      expect(JSON.parse(second.body)).toEqual(JSON.parse(first.body));
+
+      await ownerContext(TENANT, COMPANY);
+      const entries = await owner.query<{ count: string }>('SELECT count(*) FROM journal_entries');
+      expect(entries.rows[0]?.count).toBe('1');
+    });
+
+    it('rejects the same key against a different invoice as a conflict', async () => {
+      const first = await drafted();
+      const second = await drafted();
+      const key = randomUUID();
+
+      await postInvoice(biller, first.invoice.id, key);
+      const response = await postInvoice(biller, second.invoice.id, key);
+
+      expect(response.statusCode).toBe(409);
+      expect((await get(biller, second.invoice.id)).body).toContain('"status":"draft"');
+    });
+
+    it('leaves no record behind when the posting fails, so a retry does it for real', async () => {
+      // The same claim creation makes, on the operation whose accidental repetition matters most.
+      // The first attempt names an invoice whose order was cancelled, which the operation refuses.
+      const { order, invoice } = await drafted();
+      await ownerContext(TENANT, COMPANY);
+      await owner.query(`UPDATE sales_orders SET status = 'cancelled' WHERE id = $1`, [order.id]);
+
+      const key = randomUUID();
+      const refused = await postInvoice(biller, invoice.id, key);
+      expect(refused.statusCode).toBe(422);
+
+      await ownerContext(TENANT, COMPANY);
+      // The posting endpoint's records only. The draft that set this test up claimed a key of its
+      // own, on a different endpoint, and that one committed.
+      const records = await owner.query<{ count: string }>(
+        `SELECT count(*) FROM idempotency_records WHERE endpoint LIKE '%/post'`,
+      );
+      expect(records.rows[0]?.count).toBe('0');
+
+      await owner.query(`UPDATE sales_orders SET status = 'confirmed' WHERE id = $1`, [order.id]);
+      const retried = await postInvoice(biller, invoice.id, key);
+
+      expect(retried.statusCode).toBe(200);
+    });
+
+    it('answers 409 when the invoice is already posted', async () => {
+      const { invoice } = await drafted();
+      await postInvoice(biller, invoice.id, randomUUID());
+
+      const response = await postInvoice(biller, invoice.id, randomUUID());
+
+      // Section 12.1's refusal names both states, and an already posted invoice is a conflict
+      // rather than a bad request: the caller is not wrong, the document moved.
+      expect(response.statusCode).toBe(409);
+      expect(JSON.parse(response.body).message).toMatch(/cannot move from posted to posted/);
+    });
+
+    it('refuses a caller without invoices:post', async () => {
+      const { invoice } = await drafted();
+
+      const response = await postInvoice(clerk, invoice.id, randomUUID());
+
+      expect(response.statusCode).toBe(403);
+      expect((await get(biller, invoice.id)).body).toContain('"status":"draft"');
+    });
+
+    it('answers 404 for an invoice in another company', async () => {
+      await ownerContext(TENANT, SIBLING);
+      const foreignInvoice = nextId();
+      await owner.query(
+        `INSERT INTO customer_invoices
+           (id, tenant_id, company_id, customer_id, invoice_date, currency)
+         VALUES ($1,$2,$3,$4,current_date,'USD')`,
+        [foreignInvoice, TENANT, SIBLING, SIBLING_CUSTOMER],
+      );
+
+      const response = await postInvoice(biller, foreignInvoice, randomUUID());
+
       expect(response.statusCode).toBe(404);
     });
 
-    it('writes no journal entry behind any of these endpoints', async () => {
+    it('answers 404 for an identifier that is not one', async () => {
+      const response = await postInvoice(biller, 'not-a-uuid', randomUUID());
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('refuses an unauthenticated caller before it reaches the operation', async () => {
+      const { invoice } = await drafted();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/customer-invoices/${invoice.id}/post`,
+        headers: { 'idempotency-key': randomUUID() },
+      });
+
+      // The forgery guard answers first on a mutation carrying neither session nor token, which
+      // is the ordering the matrix suite states: a forgery is turned away before the database.
+      expect(response.statusCode).toBe(403);
+    });
+
+    it('writes no journal entry behind creating or editing a draft', async () => {
       const order = await confirmedOrder();
       const created = await post(biller, randomUUID(), {
         salesOrderIds: [order.id],

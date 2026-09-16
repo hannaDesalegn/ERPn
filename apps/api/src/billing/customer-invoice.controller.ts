@@ -6,10 +6,15 @@
  * a domain error into a status code. The decisions belong to the operation beneath it, which was
  * built and proved without any of this and stays callable without it.
  *
- * THREE ROUTES, AND THE ONE THAT IS ABSENT MATTERS MOST. Creating a draft, editing a draft, and
- * reading one. There is no post endpoint: section 12.2's posting transaction is the next
- * increment, and a route that answered "not implemented" would be a control that does nothing.
- * `invoices:post` already exists in the catalogue and nothing declares it yet.
+ * FOUR ROUTES. Creating a draft, editing a draft, posting one, and reading one. Posting is the
+ * irreversible moment of section 12.2, and it is a route of its own rather than a status field on
+ * the edit, because an edit and a commitment are different authorities: `invoices:create` raises
+ * the document and `invoices:post` commits it to the ledger, which is section 6.2's segregation
+ * of duties in the permission vocabulary.
+ *
+ * WHAT IS STILL ABSENT. No list, no cancellation and no credit note. Cancelling a posted document
+ * is a `[FUT]` section 12.3 reserves for the accounting slice, and a route for it would be a
+ * control with no rule behind it.
  *
  * ONE TRANSACTION COVERS THE KEY, THE WRITE AND THE ANSWER, on both mutating routes. Section 11
  * requires the idempotency record to commit with the work it describes, so a retry after a failure
@@ -40,6 +45,7 @@ import { withSerializationRetry } from '../http/serialization-retry.js';
 import { fingerprintOf, IdempotencyConflictError, runIdempotently } from '../http/idempotency.js';
 import { IdentityService, type CompanyContext } from '../identity/identity.service.js';
 import { CustomerInvoiceDraftError } from './customer-invoice.service.js';
+import { CustomerInvoicePostingError, postCustomerInvoice } from './post-customer-invoice.js';
 import {
   CustomerInvoiceService,
   type CustomerInvoiceView,
@@ -100,6 +106,25 @@ const updateBody = createBody.extend({ version: z.number().int().min(1) });
 /** The endpoint dimension of each key's identity, per section 11. Stable, not derived from a URL. */
 const CREATE_ENDPOINT = 'POST customer-invoices';
 const UPDATE_ENDPOINT = 'PUT customer-invoices/:id';
+const POST_ENDPOINT = 'POST customer-invoices/:id/post';
+
+/**
+ * What posting answers with.
+ *
+ * Narrow on purpose, in the shape the confirmation view already set: what changed and what the
+ * caller needs to name the result afterwards. The whole document is one read away through the
+ * detail endpoint, which now answers with the posted status, the number and the totals.
+ */
+export interface PostingView {
+  id: string;
+  status: string;
+  /** Never null on a posted invoice: the schema refuses that combination. */
+  docNumber: string;
+  /** The entry this posting wrote, so a caller can follow the edge into the ledger. */
+  journalEntryId: string;
+  total: string;
+  currency: string;
+}
 
 @Controller('customer-invoices')
 export class CustomerInvoiceController {
@@ -258,6 +283,89 @@ export class CustomerInvoiceController {
   }
 
   /**
+   * Posts a customer invoice.
+   *
+   * The guard has already established a session and the `invoices:post` capability in the acting
+   * company before this runs, per section 6.2's deny by default, and the operation checks the same
+   * capability again inside its own transaction. What is left here is the company context, which
+   * comes from the session rather than the request, and the translation below.
+   *
+   * NO BODY AT ALL, in the shape confirming a sales order established. There is nothing about a
+   * posting for a caller to decide: the lines, the quantities, the accounts, the number, the date
+   * and the status all come from persisted records or from the server. Section 14.3 warns about a
+   * request body binding to an entity, and the defence here is a body with nothing in it.
+   *
+   * ONE TRANSACTION COVERS THE KEY, THE WRITE AND THE ANSWER. Section 11 requires the idempotency
+   * record to commit with the work it describes, so a retry after a failure does the work rather
+   * than replaying a success that never happened. The serialization retry wraps the whole of it,
+   * per section 10.3, because posting contends for order lines and a counter row at once.
+   */
+  @RequirePermission('invoices:post')
+  @Post(':customerInvoiceId/post')
+  @HttpCode(200)
+  async post(
+    @Param('customerInvoiceId') customerInvoiceId: string,
+    @Req() request: FastifyRequest,
+  ): Promise<PostingView> {
+    if (!identifier.safeParse(customerInvoiceId).success) {
+      // Not a bad request. An identifier that cannot name an invoice is indistinguishable from
+      // one naming another company's, per section 6.1.
+      throw new NotFoundException('Not found');
+    }
+
+    const key = idempotencyKey.safeParse(request.headers[IDEMPOTENCY_HEADER]);
+    if (!key.success) {
+      throw new BadRequestException(
+        'This operation requires an Idempotency-Key header, per section 11',
+      );
+    }
+
+    const context = await this.contextFor(request);
+    const principal = principalOf(request);
+    // The path parameter is the whole of what the caller chose, so it is the whole of the
+    // fingerprint: two postings of different invoices under one key are two different requests.
+    const fingerprint = fingerprintOf({ customerInvoiceId });
+
+    try {
+      const outcome = await withSerializationRetry(() =>
+        this.uow.inActorScope(
+          actorScope({
+            tenantId: context.tenantId,
+            companyId: context.companyId,
+            userId: principal.userId,
+          }),
+          (repositories) =>
+            runIdempotently(
+              repositories,
+              { endpoint: POST_ENDPOINT, key: key.data, fingerprint },
+              async () => {
+                const posted = await postCustomerInvoice(repositories, context, {
+                  customerInvoiceId,
+                });
+
+                return {
+                  status: 200,
+                  body: {
+                    id: posted.invoice.id,
+                    status: posted.invoice.status,
+                    docNumber: posted.invoice.docNumber ?? '',
+                    journalEntryId: posted.journalEntry.entry.id,
+                    total: posted.invoice.total,
+                    currency: posted.invoice.currency,
+                  } satisfies PostingView,
+                };
+              },
+            ),
+        ),
+      );
+
+      return outcome.response.body as unknown as PostingView;
+    } catch (error) {
+      throw translate(error);
+    }
+  }
+
+  /**
    * One customer invoice, as the detail screen shows it.
    *
    * NOT FOUND COVERS EVERYTHING IT SHOULD. An invoice in another company, in another tenant, and
@@ -319,6 +427,17 @@ export class CustomerInvoiceController {
 }
 
 function translate(error: unknown): unknown {
+  if (error instanceof CustomerInvoicePostingError) {
+    // The same three answers confirming a sales order gives, for the same reasons. `not_found`
+    // already covers another company's invoice and a missing one alike, per section 6.1.
+    if (error.reason === 'not_found') return new NotFoundException('Not found');
+    if (error.reason === 'forbidden') return new ForbiddenException('Forbidden');
+    // A real invoice the business cannot post right now: the remainder went to another invoice,
+    // the order was cancelled, the rate moved, or the company has no accounts configured. The
+    // request was well formed and the caller may see why.
+    return new UnprocessableEntityException(error.message);
+  }
+
   if (error instanceof CustomerInvoiceDraftError) {
     if (error.reason === 'invoice_not_found') return new NotFoundException('Not found');
     // Unprocessable rather than not found for the rest. The request was well formed and the
