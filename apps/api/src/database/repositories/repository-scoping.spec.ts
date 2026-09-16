@@ -111,6 +111,7 @@ describe('Scope predicates in the guarded repositories', () => {
       'create',
       'updateDraft',
       'setTotals',
+      'applyTransition',
       // Customer invoice lines
       'listForInvoice',
       'listForSourceOrder',

@@ -455,6 +455,53 @@ export class DrizzleSalesOrderLineRepository implements SalesOrderLineRepository
         ),
       );
   }
+
+  /**
+   * Consumes part of what this line still has left to invoice.
+   *
+   * THE PREDICATE IS THE LOCK. `quantity - invoiced_quantity >= $wanted` is evaluated by the same
+   * statement that adds to `invoiced_quantity`, so no transaction can read a remainder and have
+   * it consumed underneath before it writes. A second posting reaching this line waits on the row
+   * lock the first took, and PostgreSQL re-evaluates the predicate against the committed row
+   * afterwards under READ COMMITTED, so the loser sees the new figure and matches nothing.
+   *
+   * THE COMPARISON IS THE DATABASE'S, not this process's. `NUMERIC` arithmetic in SQL is exact at
+   * the column's scale, which is the same guarantee section 4.3 asks of every money and quantity
+   * figure, and doing it here would mean comparing a value read a moment ago.
+   *
+   * `version` moves because the row changed and section 4.2 makes this a mutable business table.
+   * Nothing optimistically locks a line today; leaving the version behind would make the column
+   * lie the first time something does.
+   */
+  async consumeInvoicedQuantity(input: {
+    id: string;
+    quantity: string;
+  }): Promise<SalesOrderLineRecord | null> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
+
+    const rows = await this.db
+      .update(salesOrderLines)
+      .set({
+        invoicedQuantity: sql`${salesOrderLines.invoicedQuantity} + ${input.quantity}::numeric`,
+        version: sql`${salesOrderLines.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(salesOrderLines.id, input.id),
+          eq(salesOrderLines.tenantId, tenantId),
+          eq(salesOrderLines.companyId, companyId),
+          sql`${salesOrderLines.quantity} - ${salesOrderLines.invoicedQuantity} >= ${input.quantity}::numeric`,
+        ),
+      )
+      .returning();
+
+    // Null covers both "not enough left" and "not this company's line". The caller asked a
+    // question only it can tell apart, and section 6.1 requires the second to answer as though
+    // the row did not exist.
+    return rows[0] ? toSalesOrderLine(rows[0]) : null;
+  }
 }
 
 // ---------------------------------------------------------------------------------------

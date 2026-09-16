@@ -37,6 +37,7 @@ import {
   type CustomerInvoiceLineRepository,
   type CustomerInvoiceRecord,
   type CustomerInvoiceRepository,
+  type CustomerInvoiceTransition,
   type NewCustomerInvoice,
   type NewCustomerInvoiceLine,
 } from './types.js';
@@ -184,6 +185,42 @@ export class DrizzleCustomerInvoiceRepository implements CustomerInvoiceReposito
 
     const row = rows[0];
     if (!row) throw new RecordNotFoundError(INVOICES, input.id);
+    return toInvoice(row);
+  }
+
+  /**
+   * Moves the invoice to a new status and stamps its number, guarded by what the caller read.
+   *
+   * The version and the status are both in the predicate, as they are on a sales order: two
+   * postings of one invoice both pass the transition check and only the first matches here. The
+   * second issues no number, because the allocation it made rolls back with the transaction that
+   * found no row.
+   */
+  async applyTransition(input: CustomerInvoiceTransition): Promise<CustomerInvoiceRecord> {
+    const { tenantId, companyId } = requireCompanyScope(this.scope, INVOICES);
+
+    const rows = await this.db
+      .update(customerInvoices)
+      .set({
+        status: input.status,
+        docNumber: input.docNumber,
+        version: sql`${customerInvoices.version} + 1`,
+        updatedAt: new Date(),
+        updatedBy: actingUserId(this.scope),
+      })
+      .where(
+        and(
+          eq(customerInvoices.id, input.id),
+          eq(customerInvoices.tenantId, tenantId),
+          eq(customerInvoices.companyId, companyId),
+          eq(customerInvoices.version, input.expectedVersion),
+          eq(customerInvoices.status, input.expectedStatus),
+        ),
+      )
+      .returning();
+
+    const row = rows[0];
+    if (!row) throw new ConcurrencyConflictError(INVOICES, input.id);
     return toInvoice(row);
   }
 }

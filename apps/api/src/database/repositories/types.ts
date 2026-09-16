@@ -781,6 +781,29 @@ export interface SalesOrderLineRepository {
    * not asked here. The grant exists because editing a draft removes lines.
    */
   remove(id: string): Promise<void>;
+  /**
+   * Adds to the quantity already invoiced against this line, if there is enough left.
+   *
+   * ONE STATEMENT, AND THAT IS THE WHOLE CONCURRENCY DESIGN. The remainder is tested in the same
+   * `UPDATE` that consumes it, so the read and the write cannot be separated by another
+   * transaction. Two postings racing for one remainder both reach this statement; PostgreSQL
+   * makes the second wait for the first to commit and then re-evaluates the predicate against the
+   * row as it now stands, so the second sees the consumed figure rather than the one it read a
+   * moment earlier. Checking the remainder first and updating afterwards would be exactly the
+   * read-then-write section 10.3 names.
+   *
+   * Answers `null` when there is not enough left, rather than throwing, because the caller has to
+   * tell that apart from a line that is not in this company: section 6.1 makes the second answer
+   * as not found, and only the caller knows which question it asked.
+   *
+   * IT DOES NOT ASK WHETHER THE ORDER MAY BE INVOICED. That is a state machine question and
+   * belongs to the operation, which asks it before reaching this. A data layer that decided it
+   * would be deciding when a business may bill.
+   */
+  consumeInvoicedQuantity(input: {
+    id: string;
+    quantity: string;
+  }): Promise<SalesOrderLineRecord | null>;
 }
 
 /** A number taken from a sequence, and the sequence it came from. */
@@ -1201,6 +1224,28 @@ export interface CustomerInvoiceRepository {
     taxTotal: string;
     total: string;
   }): Promise<CustomerInvoiceRecord>;
+  /**
+   * Moves an invoice to a new status and stamps the number it was given.
+   *
+   * BOTH AT ONCE, BECAUSE THE SCHEMA WILL NOT TAKE THEM SEPARATELY. Migration 0015 checks that a
+   * draft has no number and that a posted invoice has one, so a status written without a number,
+   * or a number written while still a draft, is refused by the database.
+   *
+   * GUARDED BY THE VERSION AND THE STATUS THE CALLER READ, per section 10.1, in the shape
+   * `SalesOrderRepository.applyTransition` already set. Two postings of one invoice both see a
+   * draft, both do the work, and only the first matches: the second finds no row and is told the
+   * invoice moved rather than issuing a second number for one document.
+   */
+  applyTransition(input: CustomerInvoiceTransition): Promise<CustomerInvoiceRecord>;
+}
+
+/** A status change and the number that goes with it, guarded by what the caller read. */
+export interface CustomerInvoiceTransition {
+  id: string;
+  expectedVersion: number;
+  expectedStatus: string;
+  status: string;
+  docNumber: string;
 }
 
 export interface CustomerInvoiceLineRepository {

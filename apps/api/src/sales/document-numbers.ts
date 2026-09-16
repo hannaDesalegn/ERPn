@@ -109,10 +109,8 @@ export const CUSTOMER_INVOICE_SEQUENCE_DEFAULTS = {
  * type is company configuration under section 2.9, and a company is configured when it is
  * created.
  *
- * NOTHING ALLOCATES FROM IT YET, and that is the whole shape of this increment: the customer
- * invoice document does not exist. There is no `allocateCustomerInvoiceNumber` here for that
- * reason. It arrives with the transaction that writes an invoice and can therefore be called
- * from inside it, which is the property that makes the allocation safe.
+ * Allocation arrives below, with the posting transaction that can call it from inside itself,
+ * which is the property that makes an allocation safe.
  */
 export async function provisionCustomerInvoiceSequence(
   repositories: Pick<ScopedRepositories, 'documentNumberSequences'>,
@@ -139,4 +137,23 @@ export async function allocateSalesOrderNumber(
   repositories: Pick<ScopedRepositories, 'documentNumberSequences'>,
 ): Promise<AllocatedDocumentNumber> {
   return repositories.documentNumberSequences.allocate(SALES_ORDER_DOC_TYPE);
+}
+
+/**
+ * Takes the next customer invoice number, inside the caller's transaction.
+ *
+ * The same allocator the sales order uses, against the counter the company was provisioned with,
+ * and it is the only path to an invoice number: there is no second mechanism and no way for a
+ * caller to supply one, because the posting request has no field for it and the schema refuses a
+ * numbered draft outright.
+ *
+ * Rolls back with the transaction, so a posting that fails after this call leaves the number
+ * unissued rather than skipped. That is what gapless means in section 10.4, and it is the reason
+ * the counter is a locked row rather than a database sequence: a sequence would have committed
+ * its increment independently and left a hole in the series a tax authority reads.
+ */
+export async function allocateCustomerInvoiceNumber(
+  repositories: Pick<ScopedRepositories, 'documentNumberSequences'>,
+): Promise<AllocatedDocumentNumber> {
+  return repositories.documentNumberSequences.allocate(CUSTOMER_INVOICE_DOC_TYPE);
 }
