@@ -577,6 +577,11 @@ describe('Deny by default', () => {
 
   async function purge(): Promise<void> {
     await owner.query('DELETE FROM sessions WHERE user_id = $1', [SUBJECT]);
+    // Before the accounts its lines reference. The ledger refuses a delete even from the owning
+    // role, per migration 0014, so the fixture truncates rather than asking for that to be
+    // weakened.
+    await owner.query(`SELECT set_config('app.tenant_id', '', false)`);
+    await owner.query('TRUNCATE journal_lines, journal_entries');
     const scopes: [string, string][] = [
       [TENANT_HOME, HOME],
       [TENANT_AWAY, AWAY],
@@ -594,8 +599,6 @@ describe('Deny by default', () => {
       await owner.query('DELETE FROM sales_orders WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM document_number_sequences WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM company_posting_accounts WHERE company_id = $1', [companyId]);
-      await owner.query('DELETE FROM journal_lines WHERE company_id = $1', [companyId]);
-      await owner.query('DELETE FROM journal_entries WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM accounts WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM products WHERE company_id = $1', [companyId]);
       await owner.query('DELETE FROM warehouses WHERE company_id = $1', [companyId]);
