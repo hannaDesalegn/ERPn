@@ -10,7 +10,8 @@
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "test:int": "vitest run --config vitest.integration.config.ts",
-    "db:migrate": "nest build && node --env-file-if-exists=.env dist/database/migrate.js"
+    "db:migrate": "nest build && node --env-file-if-exists=.env dist/database/migrate.js",
+    "db:seed:demo": "nest build && node --env-file-if-exists=.env dist/demo/seed-demo.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
