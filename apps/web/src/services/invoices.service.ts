@@ -129,6 +129,30 @@ function toDetail(response: CustomerInvoiceResponse): CustomerInvoiceDetail {
 
 export const invoicesService = {
   /**
+   * Raises a draft invoice from one confirmed sales order.
+   *
+   * WHAT IT SENDS: the order and the invoice date. No lines, so the server bills every line with
+   * something left to invoice, at that remainder. No price, tax, total, status or number, because
+   * every one of those is the server's, and the endpoint refuses a body naming any of them.
+   *
+   * THE KEY IS THE CALLER'S, one per intent, as on every mutating sales call: a retry of the same
+   * press replays the same draft rather than raising a second one.
+   */
+  async createFromOrder(
+    salesOrderId: string,
+    invoiceDate: string,
+    idempotencyKey: string,
+  ): Promise<CustomerInvoiceDetail> {
+    return toDetail(
+      await request<CustomerInvoiceResponse>('/customer-invoices', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ salesOrderIds: [salesOrderId], invoiceDate }),
+      }),
+    );
+  },
+
+  /**
    * One customer invoice.
    *
    * Another company's invoice answers 404, the same as one that does not exist, per section 6.1.

@@ -43,6 +43,7 @@ import {
 import { useSession } from '@/app/session';
 import { cn, formatDate, formatQuantity } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
+import { todayISO } from '@/lib/clock';
 
 /**
  * What to say where the history would be.
@@ -78,8 +79,14 @@ export function SalesOrderDetailPage() {
    * Adjusted during render rather than in an effect, which is React's documented way to reset
    * state when a prop changes: navigating to a different order is a different intent.
    */
-  const [intent, setIntent] = useState(() => ({ orderId: id, key: newIdempotencyKey() }));
-  if (intent.orderId !== id) setIntent({ orderId: id, key: newIdempotencyKey() });
+  const [intent, setIntent] = useState(() => ({
+    orderId: id,
+    key: newIdempotencyKey(),
+    invoiceKey: newIdempotencyKey(),
+  }));
+  if (intent.orderId !== id) {
+    setIntent({ orderId: id, key: newIdempotencyKey(), invoiceKey: newIdempotencyKey() });
+  }
 
   /**
    * Cancelling, which is asked before it is done.
@@ -139,6 +146,22 @@ export function SalesOrderDetailPage() {
    * balance row lock, and the audit record is written, all in one transaction. None of it is
    * repeated here, and the button being visible decides nothing.
    */
+  /**
+   * Raising an invoice from this order, which stays a draft until someone posts it.
+   *
+   * `invoices:create`, which the catalogue gives the accountant and not the salesperson. The server
+   * decides what is billable, prices every line from the order and computes the totals; this sends
+   * the order and a date. The key is its own, separate from confirming's, because the two are
+   * different intents against different endpoints.
+   */
+  const invoicing = useMutation({
+    mutationFn: () => api.invoices.createFromOrder(id, todayISO(), intent.invoiceKey),
+    onSuccess: (invoice) => {
+      queryClient.setQueryData(queryKeys.invoice(invoice.id), invoice);
+      navigate(`/sales/invoices/${invoice.id}`);
+    },
+  });
+
   const cancellation = useMutation({
     mutationFn: ({ key, reason }: { key: string; reason: string }) =>
       api.sales.cancelOrder(id, key, reason),
@@ -261,9 +284,19 @@ export function SalesOrderDetailPage() {
                 Create delivery
               </Button>
             )}
-            {can('invoices:create') && so.status === 'delivered' && (
-              <Button icon="invoice" disabled title="Raises a customer invoice for the delivered quantity">
-                Create invoice
+            {/*
+              From a confirmed order, which is the one state the server invoices from. An invoice
+              may be raised before any delivery: the posting ruling bills what the customer agreed
+              to, and deliveries do not exist yet.
+            */}
+            {can('invoices:create') && so.status === 'confirmed' && (
+              <Button
+                icon="invoice"
+                onClick={() => invoicing.mutate()}
+                disabled={invoicing.isPending}
+                title="Raises a draft customer invoice for everything on this order not yet invoiced"
+              >
+                {invoicing.isPending ? 'Creating invoice...' : 'Create invoice'}
               </Button>
             )}
             {/*
@@ -356,6 +389,15 @@ export function SalesOrderDetailPage() {
         >
           <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-danger" />
           <p className="text-sm text-primary">{refusalText(cancellation.error)}</p>
+        </div>
+      )}
+      {invoicing.isError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-line-strong bg-danger-soft px-3 py-2"
+        >
+          <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-danger" />
+          <p className="text-sm text-primary">{refusalText(invoicing.error)}</p>
         </div>
       )}
       {confirmation.isError && (

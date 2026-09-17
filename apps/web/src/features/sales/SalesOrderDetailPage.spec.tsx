@@ -1195,3 +1195,144 @@ describe('the customer panel', () => {
     expect(screen.queryByText('Payment terms')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Raising an invoice from a confirmed order.
+// ---------------------------------------------------------------------------
+
+describe('the create invoice action', () => {
+  const INVOICES_URL = '/api/customer-invoices';
+
+  const CONFIRMED_ORDER = { ...DRAFT_RESPONSE, status: 'confirmed', docNumber: 'SO-0001' };
+
+  /** The accountant: may read the order and raise an invoice, may not confirm or cancel. */
+  const ACCOUNTANT: Me = {
+    ...SELLER,
+    user: { id: 'u-3', email: 'alex@example.test', name: 'Alex Accountant' },
+    roles: [{ key: 'accountant', name: 'Accountant' }],
+    permissions: ['sales:view', 'invoices:view', 'invoices:create', 'invoices:post'],
+  };
+
+  const DRAFT_INVOICE = {
+    id: 'inv-9',
+    docNumber: null,
+    status: 'draft',
+    invoiceDate: '2026-09-17',
+    dueDate: null,
+    currency: 'USD',
+    customer: { id: 'cust-1', name: 'North Supply', taxRegistrationNumber: null },
+    subtotal: '100.0000',
+    taxTotal: '10.0000',
+    total: '110.0000',
+    version: 1,
+    salesOrders: [{ id: DRAFT_ORDER, docNumber: 'SO-0001' }],
+    lines: [],
+  };
+
+  function mountWithInvoiceRoute(
+    me: Me,
+    order: unknown,
+    create: () => { status: number; body?: unknown },
+  ) {
+    stubFetch({
+      'GET /api/me': () => ({ status: 200, body: me }),
+      [`GET ${ORDER_URL}`]: () => ({ status: 200, body: order }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: [] }),
+      [`POST ${INVOICES_URL}`]: create,
+    });
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    return render(
+      <QueryClientProvider client={client}>
+        <SessionProvider>
+          <SessionGate>
+            <MemoryRouter initialEntries={[`/sales/orders/${DRAFT_ORDER}`]}>
+              <Routes>
+                <Route path="/sales/orders/:id" element={<SalesOrderDetailPage />} />
+                <Route path="/sales/invoices/:id" element={<p>Invoice screen for the new draft</p>} />
+              </Routes>
+            </MemoryRouter>
+          </SessionGate>
+        </SessionProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  const createButton = () => screen.queryByRole('button', { name: /create invoice/i });
+  const createCalls = () => calls.filter((call) => call.url === INVOICES_URL);
+
+  it('is offered on a confirmed order to someone holding invoices:create', async () => {
+    mountWithInvoiceRoute(ACCOUNTANT, CONFIRMED_ORDER, () => ({ status: 201, body: DRAFT_INVOICE }));
+    await waitForPage();
+
+    expect(createButton()).not.toBeNull();
+    expect((createButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('is not offered to a salesperson, who does not hold invoices:create', async () => {
+    // The catalogue gives raising an invoice to the accountant. The demo does not widen it.
+    mountWithInvoiceRoute(SELLER, CONFIRMED_ORDER, () => ({ status: 201, body: DRAFT_INVOICE }));
+    await waitForPage();
+
+    expect(createButton()).toBeNull();
+  });
+
+  it('is not offered on a draft, which the server will not invoice', async () => {
+    mountWithInvoiceRoute(ACCOUNTANT, DRAFT_RESPONSE, () => ({ status: 201, body: DRAFT_INVOICE }));
+    await waitForPage();
+
+    expect(createButton()).toBeNull();
+  });
+
+  it('sends the order and a date, with a key, and nothing the server owns', async () => {
+    mountWithInvoiceRoute(ACCOUNTANT, CONFIRMED_ORDER, () => ({ status: 201, body: DRAFT_INVOICE }));
+    await waitForPage();
+
+    fireEvent.click(createButton()!);
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1));
+    const call = createCalls()[0]!;
+    expect(call.method).toBe('POST');
+    expect(call.headers['Idempotency-Key']).toMatch(/.+/);
+    const body = JSON.parse(call.body as string) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['invoiceDate', 'salesOrderIds']);
+    expect(body['salesOrderIds']).toEqual([DRAFT_ORDER]);
+    expect(body['invoiceDate']).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('opens the draft the server raised', async () => {
+    mountWithInvoiceRoute(ACCOUNTANT, CONFIRMED_ORDER, () => ({ status: 201, body: DRAFT_INVOICE }));
+    await waitForPage();
+
+    fireEvent.click(createButton()!);
+
+    await waitFor(() =>
+      expect(screen.getByText('Invoice screen for the new draft')).toBeDefined(),
+    );
+  });
+
+  it('says why when the server refuses, in its own words', async () => {
+    mountWithInvoiceRoute(ACCOUNTANT, CONFIRMED_ORDER, () => ({
+      status: 422,
+      body: { statusCode: 422, message: 'Nothing on these sales orders is left to invoice' },
+    }));
+    await waitForPage();
+
+    fireEvent.click(createButton()!);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        'Nothing on these sales orders is left to invoice',
+      ),
+    );
+    expect(screen.queryByText('Invoice screen for the new draft')).toBeNull();
+  });
+
+  it('raises the invoice through the invoice service and no fixture', () => {
+    expect(detailPageSource).toMatch(/api\.invoices\.createFromOrder/);
+    expect(detailPageSource).not.toMatch(/api\.finance\b/);
+  });
+});
