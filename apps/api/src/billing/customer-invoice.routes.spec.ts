@@ -40,6 +40,8 @@ describe('the customer invoice routes', () => {
     ['update', 'invoices:create'],
     ['post', 'invoices:post'],
     ['get', 'invoices:view'],
+    ['journal', 'accounting:view'],
+    ['auditEvents', 'audit:view'],
   ])('%s requires %s', (method, permission) => {
     expect(accessFor(method)).toEqual({ kind: 'permission', permission });
   });
@@ -60,10 +62,10 @@ describe('the customer invoice routes', () => {
     }
   });
 
-  it('exposes exactly four routes, and only one of them posts', () => {
-    // Pinned, so a fifth handler is a visible decision. Cancelling and crediting a posted invoice
+  it('exposes exactly six routes, and only one of them posts', () => {
+    // Pinned, so a seventh handler is a visible decision. Cancelling and crediting a posted invoice
     // are the two that will want to be next, and section 12.3 has ruled neither.
-    expect(handlers().sort()).toEqual(['create', 'get', 'post', 'update']);
+    expect(handlers().sort()).toEqual(['auditEvents', 'create', 'get', 'journal', 'post', 'update']);
 
     const posting = handlers().filter(
       (handler) => accessFor(handler)?.kind === 'permission' &&
@@ -71,6 +73,13 @@ describe('the customer invoice routes', () => {
     );
 
     expect(posting).toEqual(['post']);
+  });
+
+  it('does not let reading an invoice reach the books or the trail', () => {
+    // Section 6.2 keeps seeing a document apart from seeing the ledger and the audit trail. A
+    // salesperson holds invoices:view and neither of the others.
+    expect(accessFor('journal')).not.toEqual({ kind: 'permission', permission: 'invoices:view' });
+    expect(accessFor('auditEvents')).not.toEqual({ kind: 'permission', permission: 'invoices:view' });
   });
 
   it('does not let the capability that raises a document also commit it', () => {

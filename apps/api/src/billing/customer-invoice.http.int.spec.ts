@@ -894,4 +894,150 @@ describe('The customer invoice endpoints', () => {
       expect(entries.rows[0]?.count).toBe('0');
     });
   });
+
+  // -------------------------------------------------------------------------------------
+  // 5. What a posting left behind: its journal entry and its trail.
+  // -------------------------------------------------------------------------------------
+
+  describe('reading what a posting wrote', () => {
+    const postInvoice = (session: BrowserSession, id: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/customer-invoices/${id}/post`,
+        headers: { ...mutating(session), 'idempotency-key': randomUUID() },
+      });
+
+    const read = (session: BrowserSession, id: string, what: 'journal' | 'audit-events') =>
+      app.inject({
+        method: 'GET',
+        url: `/api/customer-invoices/${id}/${what}`,
+        headers: { cookie: session.cookie },
+      });
+
+    /** A draft raised in the home company from a confirmed order of five at ten. */
+    const drafted = async () => {
+      const order = await confirmedOrder();
+      const created = await post(biller, randomUUID(), {
+        salesOrderIds: [order.id],
+        invoiceDate: '2026-09-15',
+      });
+      return JSON.parse(created.body) as { id: string };
+    };
+
+    it('answers with the entry the posting wrote, accounts named, balanced', async () => {
+      const invoice = await drafted();
+      const posted = JSON.parse((await postInvoice(biller, invoice.id)).body);
+
+      const response = await read(biller, invoice.id, 'journal');
+
+      expect(response.statusCode).toBe(200);
+      const entries = JSON.parse(response.body);
+      expect(entries).toHaveLength(1);
+      const [entry] = entries;
+      expect(entry).toMatchObject({
+        id: posted.journalEntryId,
+        entryDate: '2026-09-15',
+        memo: `Customer invoice ${posted.docNumber}`,
+        currency: 'USD',
+      });
+
+      // Receivables debited the total and revenue credited the net. The company charges no tax,
+      // so there is no third line: a zero tax line is omitted, which is the posting ruling.
+      const sides = entry.lines.map(
+        (line: { account: { type: string; code: string; name: string }; debit: string; credit: string }) => ({
+          type: line.account.type,
+          named: line.account.code.length > 0 && line.account.name.length > 0,
+          debit: Number(line.debit),
+          credit: Number(line.credit),
+        }),
+      );
+      expect(sides).toEqual([
+        { type: 'asset', named: true, debit: 50, credit: 0 },
+        { type: 'revenue', named: true, debit: 0, credit: 50 },
+      ]);
+    });
+
+    it('answers with an empty journal for a draft, which has posted nothing', async () => {
+      const invoice = await drafted();
+
+      const response = await read(biller, invoice.id, 'journal');
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body)).toEqual([]);
+    });
+
+    it('answers with the posting in the trail, naming the number, the amount and the actor', async () => {
+      const invoice = await drafted();
+      const posted = JSON.parse((await postInvoice(biller, invoice.id)).body);
+
+      const response = await read(biller, invoice.id, 'audit-events');
+
+      expect(response.statusCode).toBe(200);
+      const trail = JSON.parse(response.body);
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toMatchObject({
+        action: 'customer_invoice_posted',
+        summary: `Posted customer invoice ${posted.docNumber} for 50.0000 USD`,
+        actor: { id: BILLER, name: 'Biller' },
+        actorRoles: ['accountant'],
+      });
+    });
+
+    it('answers with an empty trail for a draft, because document audit begins at posting', async () => {
+      const invoice = await drafted();
+
+      const response = await read(biller, invoice.id, 'audit-events');
+
+      expect(JSON.parse(response.body)).toEqual([]);
+    });
+
+    it.each(['journal', 'audit-events'] as const)(
+      'refuses %s to a caller without the capability',
+      async (what) => {
+        const invoice = await drafted();
+        await postInvoice(biller, invoice.id);
+
+        const response = await read(clerk, invoice.id, what);
+
+        expect(response.statusCode).toBe(403);
+      },
+    );
+
+    it.each(['journal', 'audit-events'] as const)(
+      'answers 404 for %s of an invoice posted in another company',
+      async (what) => {
+        // Posted for real in the sibling, by the same person, so there is an entry and a trail to
+        // leak. The home session then asks for it by identifier.
+        const inSibling = await signIn(app, { email: BILLER_EMAIL, password: PASSWORD });
+        await app.inject({
+          method: 'POST',
+          url: '/api/me/company',
+          headers: mutating(inSibling),
+          payload: { companyId: SIBLING },
+        });
+        const order = await confirmedOrder(SIBLING);
+        const created = await post(inSibling, randomUUID(), {
+          salesOrderIds: [order.id],
+          invoiceDate: '2026-09-15',
+        });
+        const foreign = JSON.parse(created.body) as { id: string };
+        expect((await postInvoice(inSibling, foreign.id)).statusCode).toBe(200);
+        expect((await read(inSibling, foreign.id, what)).body).not.toBe('[]');
+
+        const response = await read(biller, foreign.id, what);
+
+        expect(response.statusCode).toBe(404);
+        expect(response.body).not.toContain(foreign.id);
+      },
+    );
+
+    it.each(['journal', 'audit-events'] as const)(
+      'answers 404 for %s of an identifier that is not one',
+      async (what) => {
+        const response = await read(biller, 'not-a-uuid', what);
+
+        expect(response.statusCode).toBe(404);
+      },
+    );
+  });
 });

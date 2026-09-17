@@ -50,6 +50,7 @@ import type { CompanyContext } from '../identity/identity.service.js';
 import { compare, parseDecimal, subtract, toFixed, zero, type Decimal } from '../shared/decimal.js';
 import { billedAmounts, documentTotals, RATE_SCALE } from './invoice-arithmetic.js';
 import { resolveTaxRate } from '../tax/tax-rate.js';
+import { CUSTOMER_INVOICE_DOC_TYPE } from '../sales/document-numbers.js';
 import { statusOf as salesOrderStatusOf } from '../sales/sales-order-status.js';
 import { statusOf } from './customer-invoice-status.js';
 
@@ -187,6 +188,42 @@ export interface CustomerInvoiceLineView {
   lineSubtotal: string;
   lineTax: string;
   lineTotal: string;
+}
+
+/**
+ * One journal entry a posting wrote, as the invoice screen shows it.
+ *
+ * Decimals as strings, per section 4.3. `recordedAt` is when the row was written; `entryDate` is
+ * the accounting date, which is the invoice date.
+ */
+export interface InvoiceJournalEntryView {
+  id: string;
+  entryDate: string;
+  memo: string;
+  currency: string;
+  recordedAt: string;
+  lines: InvoiceJournalLineView[];
+}
+
+export interface InvoiceJournalLineView {
+  lineNumber: number;
+  account: { id: string; code: string; name: string; type: string };
+  /** Exactly one of the two is above zero, which the database enforces. */
+  debit: string;
+  credit: string;
+  currency: string;
+}
+
+/** One audit record about an invoice, in the shape the sales order trail answers with. */
+export interface InvoiceAuditView {
+  id: string;
+  occurredAt: string;
+  action: string;
+  summary: string;
+  /** Resolved from the identifier the record stored. Null if the account is gone. */
+  actor: { id: string; name: string } | null;
+  /** The roles the actor held at the time, per section 7.3. Never looked up now. */
+  actorRoles: string[];
 }
 
 /** What creating or editing a draft needs from a transaction already in progress. */
@@ -403,6 +440,126 @@ export class CustomerInvoiceService {
    * Used by the creating and editing endpoints so their response is what the detail endpoint
    * would say, without a second copy of the mapping to drift.
    */
+  /**
+   * The ledger entries this invoice's posting wrote, with the accounts named.
+   *
+   * THE INVOICE IS RESOLVED FIRST, and that is the access control, in the shape the sales order
+   * trail established. Entries are found by source document identifier, and an identifier alone
+   * decides nothing about who may see them, so the scoped invoice read answers first: another
+   * company's invoice is not found, exactly as the detail read answers, per section 6.1. Row level
+   * security confines the journal read as well, which is the second layer rather than the first.
+   *
+   * NOT A LEDGER API. One document's entries and nothing else: no account balances, no listing by
+   * account or period, no trial balance. It exists so the result of a posting can be seen, and a
+   * draft, which has posted nothing, answers with an empty list.
+   *
+   * THE ACCOUNT IS READ, NOT SNAPSHOTTED. A line references its account by identifier, and the
+   * code and name shown are the account's own. An account is archived rather than deleted, so the
+   * row is always there to be read.
+   */
+  async postingJournal(
+    context: CompanyContext,
+    actorUserId: string,
+    customerInvoiceId: string,
+  ): Promise<InvoiceJournalEntryView[] | null> {
+    return this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        userId: actorUserId,
+      }),
+      async (repos) => {
+        const invoice = await repos.customerInvoices.findById(customerInvoiceId);
+        if (!invoice) return null;
+
+        const entries = await repos.journal.listForSourceDocument(
+          CUSTOMER_INVOICE_DOC_TYPE,
+          invoice.id,
+        );
+
+        const views: InvoiceJournalEntryView[] = [];
+        for (const { entry, lines } of entries) {
+          const viewLines: InvoiceJournalLineView[] = [];
+          // One at a time, for the reason `readIn` gives: one connection per unit of work.
+          for (const line of lines) {
+            const account = await repos.accounts.findById(line.accountId);
+            viewLines.push({
+              lineNumber: line.lineNumber,
+              account: {
+                id: line.accountId,
+                code: account?.code ?? '',
+                name: account?.name ?? '',
+                type: account?.type ?? '',
+              },
+              debit: line.debit,
+              credit: line.credit,
+              currency: line.currency,
+            });
+          }
+
+          views.push({
+            id: entry.id,
+            entryDate: entry.entryDate,
+            memo: entry.memo,
+            currency: entry.currency,
+            recordedAt: entry.createdAt.toISOString(),
+            lines: viewLines,
+          });
+        }
+
+        return views;
+      },
+    );
+  }
+
+  /**
+   * The audit trail of one invoice.
+   *
+   * The sales order trail's shape and rules, applied to this document. Resolved through the scoped
+   * invoice read first, so another company's invoice is not found. Document audit begins at the
+   * lifecycle boundary, which for an invoice is posting, so a draft answers with an empty list
+   * rather than an invented entry.
+   *
+   * The actor's name is resolved now and the roles are not: section 7.3 captures the roles held at
+   * the time. The request id and the change payload stay on the record and off the wire, which is
+   * the narrow default every audit read in this API already keeps.
+   */
+  async auditTrail(
+    context: CompanyContext,
+    actorUserId: string,
+    customerInvoiceId: string,
+  ): Promise<InvoiceAuditView[] | null> {
+    return this.uow.inActorScope(
+      actorScope({
+        tenantId: context.tenantId,
+        companyId: context.companyId,
+        userId: actorUserId,
+      }),
+      async (repos) => {
+        const invoice = await repos.customerInvoices.findById(customerInvoiceId);
+        if (!invoice) return null;
+
+        const events = await repos.audit.listForEntity(CUSTOMER_INVOICE_DOC_TYPE, invoice.id);
+
+        const trail: InvoiceAuditView[] = [];
+        for (const event of events) {
+          const actor = event.actorUserId ? await repos.users.findById(event.actorUserId) : null;
+
+          trail.push({
+            id: event.id,
+            occurredAt: event.occurredAt.toISOString(),
+            action: event.action,
+            summary: event.summary,
+            actor: actor ? { id: actor.id, name: actor.name } : null,
+            actorRoles: event.actorRoles ?? [],
+          });
+        }
+
+        return trail;
+      },
+    );
+  }
+
   async readIn(
     repos: InvoiceReadRepositories,
     customerInvoiceId: string,

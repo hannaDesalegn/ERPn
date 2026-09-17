@@ -6,7 +6,12 @@
  * a domain error into a status code. The decisions belong to the operation beneath it, which was
  * built and proved without any of this and stays callable without it.
  *
- * FOUR ROUTES. Creating a draft, editing a draft, posting one, and reading one. Posting is the
+ * SIX ROUTES. Creating a draft, editing a draft, posting one, and reading one, plus two reads of
+ * what a posting left behind: the journal entry it wrote and the audit trail. Those two are narrow
+ * on purpose, one document's entries and one document's trail, so the result of a posting can be
+ * shown without a general ledger API existing.
+ *
+ * The first four: Posting is the
  * irreversible moment of section 12.2, and it is a route of its own rather than a status field on
  * the edit, because an edit and a commitment are different authorities: `invoices:create` raises
  * the document and `invoices:post` commits it to the ledger, which is section 6.2's segregation
@@ -49,6 +54,8 @@ import { CustomerInvoicePostingError, postCustomerInvoice } from './post-custome
 import {
   CustomerInvoiceService,
   type CustomerInvoiceView,
+  type InvoiceAuditView,
+  type InvoiceJournalEntryView,
 } from './customer-invoice.service.js';
 import { IllegalCustomerInvoiceTransitionError } from './customer-invoice-status.js';
 
@@ -387,6 +394,56 @@ export class CustomerInvoiceController {
     if (!invoice) throw new NotFoundException('Not found');
 
     return invoice;
+  }
+
+  /**
+   * The ledger entry this invoice's posting wrote.
+   *
+   * `accounting:view` rather than `invoices:view`. The catalogue separates seeing a document from
+   * seeing the books, and a salesperson who may read an invoice to answer a customer does not
+   * thereby hold the ledger. A draft answers with an empty list, because it has posted nothing.
+   *
+   * Not found for another company's invoice, another tenant's and a missing one alike, per section
+   * 6.1. The invoice is resolved under the acting scope before any entry is read.
+   */
+  @RequirePermission('accounting:view')
+  @Get(':customerInvoiceId/journal')
+  async journal(
+    @Param('customerInvoiceId') customerInvoiceId: string,
+    @Req() request: FastifyRequest,
+  ): Promise<InvoiceJournalEntryView[]> {
+    if (!identifier.safeParse(customerInvoiceId).success) throw new NotFoundException('Not found');
+
+    const context = await this.contextFor(request);
+    const principal = principalOf(request);
+
+    const entries = await this.invoices.postingJournal(context, principal.userId, customerInvoiceId);
+    if (!entries) throw new NotFoundException('Not found');
+
+    return entries;
+  }
+
+  /**
+   * The audit trail of one invoice.
+   *
+   * `audit:view`, as the sales order trail requires, because the catalogue separates seeing a
+   * document from seeing who did what to it.
+   */
+  @RequirePermission('audit:view')
+  @Get(':customerInvoiceId/audit-events')
+  async auditEvents(
+    @Param('customerInvoiceId') customerInvoiceId: string,
+    @Req() request: FastifyRequest,
+  ): Promise<InvoiceAuditView[]> {
+    if (!identifier.safeParse(customerInvoiceId).success) throw new NotFoundException('Not found');
+
+    const context = await this.contextFor(request);
+    const principal = principalOf(request);
+
+    const trail = await this.invoices.auditTrail(context, principal.userId, customerInvoiceId);
+    if (!trail) throw new NotFoundException('Not found');
+
+    return trail;
   }
 
   /**

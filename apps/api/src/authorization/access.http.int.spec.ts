@@ -307,6 +307,22 @@ const CALLS: Call[] = [
     permission: 'invoices:view',
   },
   {
+    label: 'read the journal entry an invoice posted',
+    controller: 'CustomerInvoiceController',
+    handler: 'journal',
+    method: 'GET',
+    url: () => `/api/customer-invoices/${matrixInvoice}/journal`,
+    permission: 'accounting:view',
+  },
+  {
+    label: 'read a customer invoice trail',
+    controller: 'CustomerInvoiceController',
+    handler: 'auditEvents',
+    method: 'GET',
+    url: () => `/api/customer-invoices/${matrixInvoice}/audit-events`,
+    permission: 'audit:view',
+  },
+  {
     label: 'read a sales order trail',
     controller: 'SalesOrderController',
     handler: 'auditEvents',
