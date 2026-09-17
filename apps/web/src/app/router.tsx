@@ -29,7 +29,8 @@ import { SalesOrderEditPage } from '@/features/sales/SalesOrderEditPage';
 import { SalesOrderDetailPage } from '@/features/sales/SalesOrderDetailPage';
 import { CustomersPage } from '@/features/parties/CustomersPage';
 import { CustomerDetailPage } from '@/features/parties/CustomerDetailPage';
-import { InvoicesPage, InvoiceDetailPage } from '@/features/finance/InvoicesPage';
+import { InvoicesPage } from '@/features/finance/InvoicesPage';
+import { CustomerInvoiceDetailPage } from '@/features/finance/CustomerInvoiceDetailPage';
 import { DeliveriesPage, DeliveryDetailPage, GoodsReceiptsPage, GoodsReceiptDetailPage } from '@/features/logistics/LogisticsPages';
 
 import { PurchaseOrdersPage } from '@/features/purchasing/PurchaseOrdersPage';
@@ -92,7 +93,7 @@ export function AppRoutes() {
         />
         <Route
           path="/sales/invoices/:id"
-          element={<Protected permission="invoices:view"><InvoiceDetailPage /></Protected>}
+          element={<Protected permission="invoices:view"><CustomerInvoiceDetailPage /></Protected>}
         />
         <Route
           path="/sales/deliveries"

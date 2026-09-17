@@ -16,6 +16,7 @@ import { masterDataService } from './master-data.service';
 import { dashboardService } from './dashboard.service';
 import { financeService } from './finance.service';
 import { inventoryService } from './inventory.service';
+import { invoicesService } from './invoices.service';
 import { partiesService } from './parties.service';
 import { purchasingService } from './purchasing.service';
 import { salesService } from './sales.service';
@@ -46,6 +47,8 @@ export const api = {
   finance: financeService,
   admin: adminService,
   masterData: masterDataService,
+  /** Customer invoices from the backend. `finance` still answers the invoice list from fixtures. */
+  invoices: invoicesService,
 };
 
 /**
@@ -89,7 +92,8 @@ export const queryKeys = {
   supplier: (id: string) => ['parties', 'suppliers', id] as const,
   supplierActivity: (id: string) => ['parties', 'suppliers', id, 'activity'] as const,
   customerInvoices: (params?: unknown) => ['finance', 'invoices', params] as const,
-  customerInvoice: (id: string) => ['finance', 'invoices', id] as const,
+  /** The real invoice read, kept apart from the fixture keys above. */
+  invoice: (id: string) => ['invoices', id] as const,
   supplierBills: (params?: unknown) => ['finance', 'bills', params] as const,
   supplierBill: (id: string) => ['finance', 'bills', id] as const,
   payments: (params?: unknown) => ['finance', 'payments', params] as const,

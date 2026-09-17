@@ -41,12 +41,6 @@ export const financeService = {
     });
   },
 
-  async getCustomerInvoice(id: string): Promise<CustomerInvoice> {
-    const invoice = db.customerInvoices.find((i) => i.id === id);
-    if (!invoice) throw new NotFoundError('Invoice', id);
-    return delay(invoice);
-  },
-
   // ---- Supplier bills -----------------------------------------------------
   async listSupplierBills(params: ListParams = {}): Promise<Paginated<SupplierBill>> {
     const config = {

@@ -1,5 +1,8 @@
 /**
- * Customer invoices: list and detail.
+ * Customer invoices: the list, still over fixtures.
+ *
+ * The detail screen reads the server and lives in `CustomerInvoiceDetailPage.tsx`. This list has no
+ * endpoint behind it, so it stays sample data and its rows do not open that screen.
  *
  * An invoice is a legal claim for money. Posting it is the moment it becomes
  * one, which is why the screen distinguishes total from outstanding everywhere:
@@ -7,31 +10,19 @@
  */
 
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, queryKeys, agingReference } from '@/services';
 import type { CustomerInvoice } from '@/domain';
-import { Badge, Button, Card, CardHeader, ErrorState, Field, Icon, PageHeader, SearchInput, Select, Toolbar } from '@/components/ui';
+import { Card, PageHeader, SearchInput, Select, Toolbar } from '@/components/ui';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
 import { MoneyText } from '@/components/domain/MoneyText';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import {
-  DetailGrid,
-  DetailSkeleton,
-  DetailTitle,
-  HistoryPanel,
-  InvoiceLinesTable,
-  RelatedPanel,
-  TotalsBlock,
-} from '@/components/domain/detail';
-import { useSession } from '@/app/session';
 import { useListParams } from '@/hooks/useListParams';
-import { cn, daysUntil, formatDate, formatDateTime, formatNumber } from '@/lib/format';
+import { cn, daysUntil, formatDate, formatNumber } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
 
 const STATUSES = ['draft', 'posted', 'partially_paid', 'paid', 'overdue', 'cancelled'] as const;
 
 export function InvoicesPage() {
-  const navigate = useNavigate();
   const list = useListParams({ defaultSortBy: 'invoiceDate', filterKeys: ['status'] });
 
   const query = useQuery({
@@ -159,7 +150,11 @@ export function InvoicesPage() {
           rows={query.data?.rows ?? []}
           rowKey={(i) => i.id}
           isLoading={query.isLoading}
-          onRowClick={(i) => navigate(`/sales/invoices/${i.id}`)}
+          /*
+            NO ROW NAVIGATION. These rows are sample data, and the invoice detail route now reads
+            the server, where a fixture identifier names nothing. A row that opened "not found"
+            every time would be a control that does nothing useful.
+          */
           sortBy={list.sortBy}
           sortDir={list.sortDir}
           onSortChange={list.setSort}
@@ -176,160 +171,6 @@ export function InvoicesPage() {
           />
         )}
       </Card>
-    </>
-  );
-}
-
-// ===========================================================================
-
-export function InvoiceDetailPage() {
-  const { id = '' } = useParams();
-  const { can } = useSession();
-
-  const invoice = useQuery({
-    queryKey: queryKeys.customerInvoice(id),
-    queryFn: () => api.finance.getCustomerInvoice(id),
-  });
-
-  if (invoice.isError) return <ErrorState message={(invoice.error as Error).message} />;
-  if (invoice.isLoading || !invoice.data) return <DetailSkeleton />;
-
-  const inv = invoice.data;
-  const days = daysUntil(inv.dueDate, agingReference());
-  const late = days < 0 && inv.balanceDue.amount > 0;
-  const isDraft = inv.status === 'draft';
-
-  return (
-    <>
-      <PageHeader
-        title={
-          <DetailTitle
-            backTo="/sales/invoices"
-            backLabel="Back to invoices"
-            docNumber={inv.docNumber}
-            status={inv.status}
-          />
-        }
-        subtitle={`${inv.party.name} · issued ${formatDate(inv.invoiceDate)}`}
-        meta={
-          late ? (
-            <Badge tone="danger">Overdue by {-days} days</Badge>
-          ) : inv.balanceDue.amount > 0 ? (
-            <Badge tone="info">Due in {days} days</Badge>
-          ) : (
-            <Badge tone="success">Settled</Badge>
-          )
-        }
-        actions={
-          <>
-            {isDraft && can('invoices:post') && (
-              <Button variant="primary" icon="ledger" disabled title="Posting creates the receivable and the journal entry">
-                Post invoice
-              </Button>
-            )}
-            {!isDraft && inv.balanceDue.amount > 0 && can('payments:register') && (
-              <Button icon="bank" disabled title="Records a receipt against this invoice">
-                Register payment
-              </Button>
-            )}
-          </>
-        }
-      />
-
-      <DetailGrid
-        main={
-          <>
-            <Card padded={false}>
-              <CardHeader title="Invoice details" />
-              <dl className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
-                <Field label="Customer">
-                  <Link to={`/sales/customers/${inv.party.id}`} className="text-accent-text hover:underline">
-                    {inv.party.name}
-                  </Link>
-                </Field>
-                <Field label="Invoice date">{formatDate(inv.invoiceDate)}</Field>
-                <Field label="Due date">{formatDate(inv.dueDate)}</Field>
-                <Field label="Currency">{inv.currency}</Field>
-                <Field label="Sales orders">
-                  {inv.salesOrderNumbers.map((n, i) => (
-                    <Link
-                      key={n}
-                      to={`/sales/orders/${inv.salesOrderIds[i]}`}
-                      className="text-accent-text hover:underline"
-                    >
-                      {n}
-                    </Link>
-                  ))}
-                </Field>
-                <Field label="Posted at">{formatDateTime(inv.postedAt)}</Field>
-                <Field label="Posted by">{inv.postedBy?.name}</Field>
-                <Field label="Journal entry">
-                  {inv.journalEntryId && (
-                    <Link
-                      to={`/accounting/journal/${inv.journalEntryId}`}
-                      className="text-accent-text hover:underline"
-                    >
-                      {inv.journalEntryNumber}
-                    </Link>
-                  )}
-                </Field>
-              </dl>
-            </Card>
-
-            <Card padded={false}>
-              <CardHeader title="Line items" subtitle={`${inv.lines.length} lines`} />
-              <InvoiceLinesTable lines={inv.lines} />
-              <TotalsBlock
-                subtotal={inv.subtotal}
-                taxTotal={inv.taxTotal}
-                total={inv.total}
-                paid={inv.paidAmount}
-                balanceDue={inv.balanceDue}
-              />
-            </Card>
-          </>
-        }
-        aside={
-          <>
-            <Card padded={false}>
-              <CardHeader title="Outstanding" />
-              <div className="p-4">
-                <p
-                  className={cn(
-                    'text-2xl font-semibold tabular',
-                    inv.balanceDue.amount > 0 ? 'text-danger-text' : 'text-primary',
-                  )}
-                >
-                  <MoneyText value={inv.balanceDue} />
-                </p>
-                <p className="text-xs text-muted">
-                  of <MoneyText value={inv.total} muted /> billed
-                </p>
-              </div>
-            </Card>
-
-            <RelatedPanel links={inv.links} />
-            <HistoryPanel targetId={inv.id} />
-
-            {!isDraft && (
-              <Card>
-                <p className="flex items-center gap-1.5 text-2xs font-medium tracking-wide text-muted uppercase">
-                  <Icon name="ledger" className="size-3" />
-                  Accounting effect
-                </p>
-                <p className="mt-1.5 text-xs text-secondary">
-                  Posting debited <span className="font-medium text-primary">Accounts Receivable</span>{' '}
-                  {formatMoney(inv.total)}, credited{' '}
-                  <span className="font-medium text-primary">Product Sales</span>{' '}
-                  {formatMoney(inv.subtotal)} and{' '}
-                  <span className="font-medium text-primary">VAT Payable</span>{' '}
-                  {formatMoney(inv.taxTotal)}.
-                </p>
-              </Card>
-            )}
-          </>
-        }
-      />
     </>
   );
 }

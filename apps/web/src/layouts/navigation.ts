@@ -41,11 +41,26 @@ export interface NavSection {
  */
 export const SERVER_BACKED_PREFIXES: readonly string[] = ['/sales/orders'];
 
+/**
+ * Screens whose detail route reads the server while their list still does not.
+ *
+ * The customer invoice detail is real and reached from a real sales order; the invoice list has no
+ * endpoint and stays sample data. So the pages beneath the prefix count as real and the prefix
+ * itself does not.
+ */
+export const SERVER_BACKED_DETAIL_PREFIXES: readonly string[] = ['/sales/invoices'];
+
 /** Whether the screen at this path shows fixture data rather than data from the server. */
 export function showsSampleData(pathname: string): boolean {
-  return !SERVER_BACKED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
+  const real =
+    SERVER_BACKED_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    ) ||
+    SERVER_BACKED_DETAIL_PREFIXES.some(
+      (prefix) => pathname.startsWith(`${prefix}/`) && pathname.length > prefix.length + 1,
+    );
+
+  return !real;
 }
 
 export const NAV_SECTIONS: NavSection[] = [

@@ -7,6 +7,12 @@ describe('which screens are labelled as sample data', () => {
     }
   });
 
+  it('treats a customer invoice detail as real, and the invoice list as sample data', () => {
+    expect(showsSampleData('/sales/invoices/9a1c')).toBe(false);
+    expect(showsSampleData('/sales/invoices')).toBe(true);
+    expect(showsSampleData('/sales/invoices/')).toBe(true);
+  });
+
   it('does not extend a real prefix to a path that merely starts with the same letters', () => {
     expect(showsSampleData('/sales/orders-archive')).toBe(true);
   });

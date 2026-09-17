@@ -143,7 +143,7 @@ export interface SalesOrderDetailLine {
  * section 16.1 already records as temporary pending a shared contracts package. Rounding here
  * rather than anywhere else keeps the loss in one place, at the seam, where it can be removed.
  */
-function toMoney(value: string, currency: string): Money {
+export function toMoney(value: string, currency: string): Money {
   return { amount: Math.round(Number(value) * 100), currency: currency as Money['currency'] };
 }
 
