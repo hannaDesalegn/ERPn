@@ -94,6 +94,9 @@ export const queryKeys = {
   customerInvoices: (params?: unknown) => ['finance', 'invoices', params] as const,
   /** The real invoice read, kept apart from the fixture keys above. */
   invoice: (id: string) => ['invoices', id] as const,
+  /** Beneath the invoice key on purpose: invalidating an invoice re-reads what it posted. */
+  invoiceJournal: (id: string) => ['invoices', id, 'journal'] as const,
+  invoiceAudit: (id: string) => ['invoices', id, 'audit'] as const,
   supplierBills: (params?: unknown) => ['finance', 'bills', params] as const,
   supplierBill: (id: string) => ['finance', 'bills', id] as const,
   payments: (params?: unknown) => ['finance', 'payments', params] as const,

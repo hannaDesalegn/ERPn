@@ -11,7 +11,8 @@
 
 import type { ID, ISODate, Money } from '@/domain';
 import { request } from './client';
-import { toMoney } from './sales.service';
+import type { TimelineEvent } from '@/components/domain/documents';
+import { toAuditEvent, toMoney, type AuditEventResponse } from './sales.service';
 
 /** An invoice as the backend holds it. Figures are decimal strings, per section 4.3. */
 interface CustomerInvoiceResponse {
@@ -108,6 +109,42 @@ export interface PostingResult {
   currency: string;
 }
 
+/** One journal entry as the backend serves it. Debits and credits are decimal strings. */
+interface JournalEntryResponse {
+  id: string;
+  entryDate: string;
+  memo: string;
+  currency: string;
+  recordedAt: string;
+  lines: {
+    lineNumber: number;
+    account: { id: string; code: string; name: string; type: string };
+    debit: string;
+    credit: string;
+    currency: string;
+  }[];
+}
+
+/**
+ * The entry a posting wrote, as the invoice screen shows it.
+ *
+ * Only what the journal read returns. It is one document's entries, not a ledger, and there is no
+ * balance here because the backend serves none.
+ */
+export interface InvoiceJournalEntry {
+  id: ID;
+  entryDate: ISODate;
+  memo: string;
+  currency: Money['currency'];
+  recordedAt: string;
+  lines: {
+    lineNumber: number;
+    account: { code: string; name: string; type: string };
+    debit: Money;
+    credit: Money;
+  }[];
+}
+
 function toDetail(response: CustomerInvoiceResponse): CustomerInvoiceDetail {
   const currency = response.currency;
 
@@ -183,6 +220,40 @@ export const invoicesService = {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
     });
+  },
+
+  /**
+   * The journal entries this invoice's posting wrote.
+   *
+   * Needs `accounting:view`, which the sales role does not hold. A draft answers with an empty
+   * list, because it has posted nothing.
+   */
+  async journal(id: string): Promise<InvoiceJournalEntry[]> {
+    const entries = await request<JournalEntryResponse[]>(`/customer-invoices/${id}/journal`);
+
+    return entries.map((entry) => ({
+      id: entry.id,
+      entryDate: entry.entryDate,
+      memo: entry.memo,
+      currency: entry.currency as Money['currency'],
+      recordedAt: entry.recordedAt,
+      lines: entry.lines.map((line) => ({
+        lineNumber: line.lineNumber,
+        account: { code: line.account.code, name: line.account.name, type: line.account.type },
+        debit: toMoney(line.debit, line.currency),
+        credit: toMoney(line.credit, line.currency),
+      })),
+    }));
+  },
+
+  /**
+   * The audit trail of one invoice, in the shape the history panel already reads.
+   *
+   * Needs `audit:view`. Document audit begins at posting, so a draft answers with an empty list.
+   */
+  async auditTrail(id: string): Promise<TimelineEvent[]> {
+    const events = await request<AuditEventResponse[]>(`/customer-invoices/${id}/audit-events`);
+    return events.map(toAuditEvent);
   },
 
   /**

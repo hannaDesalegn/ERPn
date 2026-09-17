@@ -19,8 +19,19 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
-import type { CustomerInvoiceDetail } from '@/services/invoices.service';
-import { Button, Card, CardHeader, ErrorState, Field, Icon, PageHeader } from '@/components/ui';
+import type { CustomerInvoiceDetail, InvoiceJournalEntry } from '@/services/invoices.service';
+import { ApiError } from '@/services/client';
+import {
+  Button,
+  Card,
+  CardHeader,
+  ErrorState,
+  Field,
+  Icon,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
+import { ActivityTimeline } from '@/components/domain/documents';
 import { MoneyText } from '@/components/domain/MoneyText';
 import { DetailGrid, DetailSkeleton, DetailTitle } from '@/components/domain/detail';
 import { formatDate, formatQuantity } from '@/lib/format';
@@ -45,6 +56,23 @@ export function CustomerInvoiceDetailPage() {
     queryFn: () => api.invoices.getInvoice(id),
   });
 
+  /**
+   * What the posting left behind: the entry in the ledger and the record of who posted it.
+   *
+   * Both are read for every invoice, draft included, and a draft answers with empty lists. Both
+   * need a capability beyond reading the invoice, so a person without it is told that, rather than
+   * the panel pretending there is nothing to show.
+   */
+  const journal = useQuery({
+    queryKey: queryKeys.invoiceJournal(id),
+    queryFn: () => api.invoices.journal(id),
+  });
+
+  const auditTrail = useQuery({
+    queryKey: queryKeys.invoiceAudit(id),
+    queryFn: () => api.invoices.auditTrail(id),
+  });
+
   const posting = useMutation({
     mutationFn: () => api.invoices.postInvoice(id, intent.key),
     onSuccess: (result) => {
@@ -59,6 +87,8 @@ export function CustomerInvoiceDetailPage() {
             }
           : current,
       );
+      // A prefix match: the journal and history keys extend the invoice key, so this also reads
+      // both panels again, which is what shows the entry and the record the posting just wrote.
       void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(id) });
     },
     onError: (error) => {
@@ -136,9 +166,116 @@ export function CustomerInvoiceDetailPage() {
             <InvoiceLines invoice={inv} />
           </>
         }
-        aside={null}
+        aside={
+          <>
+            <Card padded={false}>
+              <CardHeader
+                title="Journal entry"
+                action={<Icon name="ledger" className="size-3.5 text-muted" />}
+              />
+              {journal.isLoading ? (
+                <div className="p-4">
+                  <Skeleton className="h-24" />
+                </div>
+              ) : journal.isError ? (
+                <p className="px-4 py-6 text-center text-xs text-muted">
+                  {panelProblem(journal.error, 'the journal')}
+                </p>
+              ) : journal.data && journal.data.length > 0 ? (
+                journal.data.map((entry) => <JournalEntryView key={entry.id} entry={entry} />)
+              ) : (
+                <p className="px-4 py-6 text-center text-xs text-muted">
+                  {inv.status === 'draft'
+                    ? 'Nothing reaches the ledger until this invoice is posted.'
+                    : 'No journal entry recorded.'}
+                </p>
+              )}
+            </Card>
+
+            <Card padded={false}>
+              <CardHeader title="History" />
+              {auditTrail.isLoading ? (
+                <div className="p-4">
+                  <Skeleton className="h-10" />
+                </div>
+              ) : auditTrail.isError ? (
+                <p className="px-4 py-6 text-center text-xs text-muted">
+                  {panelProblem(auditTrail.error, 'this history')}
+                </p>
+              ) : auditTrail.data && auditTrail.data.length > 0 ? (
+                <ActivityTimeline events={auditTrail.data} />
+              ) : (
+                <p className="px-4 py-6 text-center text-xs text-muted">
+                  {inv.status === 'draft'
+                    ? 'History begins when this invoice is posted.'
+                    : 'No recorded activity.'}
+                </p>
+              )}
+            </Card>
+          </>
+        }
       />
     </>
+  );
+}
+
+/**
+ * What to say where a panel would be.
+ *
+ * A 403 here is not the page failing: the catalogue keeps the ledger and the audit trail apart from
+ * the invoice, so a person may read this invoice and not what it posted. That is said as a fact
+ * about their permissions.
+ */
+function panelProblem(error: unknown, what: string): string {
+  if (error instanceof ApiError && error.status === 403) {
+    return `You do not have permission to view ${what}.`;
+  }
+
+  return refusalText(error);
+}
+
+/**
+ * One journal entry: its accounting date, its memo and every line.
+ *
+ * The side a line does not use is an empty cell rather than a zero, which is how this project
+ * renders a concept that does not apply.
+ */
+function JournalEntryView({ entry }: { entry: InvoiceJournalEntry }) {
+  return (
+    <div className="border-b border-line last:border-b-0">
+      <div className="px-4 pt-3 pb-2">
+        <p className="text-sm font-medium text-primary">{entry.memo}</p>
+        <p className="text-xs text-muted">
+          {formatDate(entry.entryDate)} · {entry.currency}
+        </p>
+        <p className="mt-0.5 font-mono text-2xs break-all text-muted">{entry.id}</p>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-y border-line bg-sunken text-2xs tracking-wide text-secondary uppercase">
+            <th className="px-3 py-1.5 text-left">Account</th>
+            <th className="px-3 py-1.5 text-right">Debit</th>
+            <th className="px-3 py-1.5 text-right">Credit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entry.lines.map((line) => (
+            <tr key={line.lineNumber} className="border-b border-line last:border-b-0">
+              <td className="px-3 py-1.5">
+                <span className="block text-primary">{line.account.name}</span>
+                <span className="text-xs text-muted">{line.account.code}</span>
+              </td>
+              <td className="px-3 py-1.5 text-right">
+                {line.debit.amount > 0 && <MoneyText value={line.debit} />}
+              </td>
+              <td className="px-3 py-1.5 text-right">
+                {line.credit.amount > 0 && <MoneyText value={line.credit} />}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

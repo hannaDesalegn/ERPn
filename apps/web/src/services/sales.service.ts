@@ -269,7 +269,7 @@ function listQueryString(params: ListParams): string {
  * trail is append only and a removed user does not remove what they did. `actorRoles` is an array
  * because section 7.3 captures the roles held at the time, which is a set and not a title.
  */
-interface AuditEventResponse {
+export interface AuditEventResponse {
   id: string;
   occurredAt: string;
   action: string;
@@ -302,7 +302,7 @@ export interface SalesOrderAuditEvent {
  */
 const DEPARTED_ACTOR = 'Removed user';
 
-function toAuditEvent(event: AuditEventResponse): SalesOrderAuditEvent {
+export function toAuditEvent(event: AuditEventResponse): SalesOrderAuditEvent {
   return {
     id: event.id,
     occurredAt: event.occurredAt,

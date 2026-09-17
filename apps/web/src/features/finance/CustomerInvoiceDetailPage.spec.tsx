@@ -375,3 +375,167 @@ describe('the post invoice action', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// What a posting left behind.
+// ---------------------------------------------------------------------------
+
+describe('the journal and history panels', () => {
+  const JOURNAL_URL = `${INVOICE_URL}/journal`;
+  const AUDIT_URL = `${INVOICE_URL}/audit-events`;
+  const POSTED_INVOICE = { ...DRAFT_INVOICE, status: 'posted', docNumber: 'INV-0001', version: 2 };
+
+  /** The entry the server wrote for this invoice, at no tax, so two lines. */
+  const ENTRY = {
+    id: 'je-1',
+    entryDate: '2026-09-17',
+    memo: 'Customer invoice INV-0001',
+    currency: 'USD',
+    recordedAt: '2026-09-17T10:00:00.000Z',
+    lines: [
+      {
+        lineNumber: 1,
+        account: { id: 'a-1', code: '1200', name: 'Accounts Receivable', type: 'asset' },
+        debit: '245.0000',
+        credit: '0.0000',
+        currency: 'USD',
+      },
+      {
+        lineNumber: 2,
+        account: { id: 'a-3', code: '4000', name: 'Sales Revenue', type: 'revenue' },
+        debit: '0.0000',
+        credit: '245.0000',
+        currency: 'USD',
+      },
+    ],
+  };
+
+  const POSTED_EVENT = {
+    id: 'ev-1',
+    occurredAt: '2026-09-17T10:00:00.000Z',
+    action: 'customer_invoice_posted',
+    summary: 'Posted customer invoice INV-0001 for 245.0000 USD',
+    actor: { id: 'u-3', name: 'Alex Accountant' },
+    actorRoles: ['accountant'],
+  };
+
+  const SALES: Me = {
+    ...ACCOUNTANT,
+    roles: [{ key: 'sales', name: 'Sales Representative' }],
+    permissions: ['sales:view', 'invoices:view'],
+  };
+
+  const refused = { status: 403, body: { statusCode: 403, message: 'Forbidden' } };
+
+  it('shows the entry the posting wrote, account by account', async () => {
+    stubFetch(calls, {
+      'GET /api/me': () => ({ status: 200, body: ACCOUNTANT }),
+      [`GET ${INVOICE_URL}`]: () => ({ status: 200, body: POSTED_INVOICE }),
+      [`GET ${JOURNAL_URL}`]: () => ({ status: 200, body: [ENTRY] }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: [POSTED_EVENT] }),
+    });
+    mountInvoice();
+
+    await waitFor(() => expect(screen.getByText('Customer invoice INV-0001')).toBeDefined());
+    expect(screen.getByText('Accounts Receivable')).toBeDefined();
+    expect(screen.getByText('1200')).toBeDefined();
+    expect(screen.getByText('Sales Revenue')).toBeDefined();
+    expect(screen.getByText('je-1')).toBeDefined();
+  });
+
+  it('shows who posted it, with the role they held and the amount recorded', async () => {
+    stubFetch(calls, {
+      'GET /api/me': () => ({ status: 200, body: ACCOUNTANT }),
+      [`GET ${INVOICE_URL}`]: () => ({ status: 200, body: POSTED_INVOICE }),
+      [`GET ${JOURNAL_URL}`]: () => ({ status: 200, body: [ENTRY] }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: [POSTED_EVENT] }),
+    });
+    mountInvoice();
+
+    await waitFor(() =>
+      expect(screen.getByText('Posted customer invoice INV-0001 for 245.0000 USD')).toBeDefined(),
+    );
+    expect(screen.getByText('Alex Accountant')).toBeDefined();
+    expect(screen.getByText('Accountant')).toBeDefined();
+  });
+
+  it('says a draft has posted nothing and has no history yet', async () => {
+    stubFetch(calls, {
+      'GET /api/me': () => ({ status: 200, body: ACCOUNTANT }),
+      [`GET ${INVOICE_URL}`]: () => ({ status: 200, body: DRAFT_INVOICE }),
+      [`GET ${JOURNAL_URL}`]: () => ({ status: 200, body: [] }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: [] }),
+    });
+    mountInvoice();
+
+    await waitFor(() =>
+      expect(screen.getByText('Nothing reaches the ledger until this invoice is posted.')).toBeDefined(),
+    );
+    expect(screen.getByText('History begins when this invoice is posted.')).toBeDefined();
+  });
+
+  it('tells a person without the capabilities so, rather than showing an empty panel', async () => {
+    stubFetch(calls, {
+      'GET /api/me': () => ({ status: 200, body: SALES }),
+      [`GET ${INVOICE_URL}`]: () => ({ status: 200, body: POSTED_INVOICE }),
+      [`GET ${JOURNAL_URL}`]: () => refused,
+      [`GET ${AUDIT_URL}`]: () => refused,
+    });
+    mountInvoice();
+
+    await waitFor(() =>
+      expect(screen.getByText('You do not have permission to view the journal.')).toBeDefined(),
+    );
+    expect(screen.getByText('You do not have permission to view this history.')).toBeDefined();
+    expect(screen.queryByText('Accounts Receivable')).toBeNull();
+  });
+
+  it('reads both panels again after posting, so the new entry and record appear', async () => {
+    let posted = false;
+    stubFetch(calls, {
+      'GET /api/me': () => ({ status: 200, body: ACCOUNTANT }),
+      [`GET ${INVOICE_URL}`]: () => ({
+        status: 200,
+        body: posted ? POSTED_INVOICE : DRAFT_INVOICE,
+      }),
+      [`GET ${JOURNAL_URL}`]: () => ({ status: 200, body: posted ? [ENTRY] : [] }),
+      [`GET ${AUDIT_URL}`]: () => ({ status: 200, body: posted ? [POSTED_EVENT] : [] }),
+      [`POST ${INVOICE_URL}/post`]: () => {
+        posted = true;
+        return {
+          status: 200,
+          body: {
+            id: INVOICE,
+            status: 'posted',
+            docNumber: 'INV-0001',
+            journalEntryId: 'je-1',
+            total: '245.0000',
+            currency: 'USD',
+          },
+        };
+      },
+    });
+    mountInvoice();
+    // Both panels have already answered for the draft, so what follows can only come from reading
+    // them again. Clicking before they answer would let their first read see the posting.
+    await waitFor(() =>
+      expect(screen.getByText('Nothing reaches the ledger until this invoice is posted.')).toBeDefined(),
+    );
+    await waitFor(() =>
+      expect(screen.getByText('History begins when this invoice is posted.')).toBeDefined(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /post invoice/i }));
+
+    await waitFor(() => expect(screen.getByText('Accounts Receivable')).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText('Posted customer invoice INV-0001 for 245.0000 USD')).toBeDefined(),
+    );
+  });
+
+  it('reads the journal and the trail through the invoice service only', () => {
+    expect(pageSource).toMatch(/api\.invoices\.journal/);
+    expect(pageSource).toMatch(/api\.invoices\.auditTrail/);
+    expect(pageSource).not.toMatch(/api\.admin\b/);
+  });
+});
