@@ -13,7 +13,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import { Icon } from '@/components/ui';
 import { useSession } from '@/app/session';
 import { useTheme } from '@/app/theme';
-import { NAV_SECTIONS } from './navigation';
+import { NAV_SECTIONS, showsSampleData } from './navigation';
 import { cn, initials } from '@/lib/format';
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -35,9 +35,32 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onMenuClick={() => setMobileOpen(true)} />
-        <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 lg:px-6">{children}</main>
+        <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 lg:px-6">
+          <SampleDataNotice />
+          {children}
+        </main>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Says, on the page itself, that the figures below are fixtures.
+ *
+ * The sidebar tag alone is not enough: a link shared to a fixture screen arrives without the
+ * sidebar in view, and a tester reading invented totals has no other way to know. Rendered by
+ * the shell from the same list the sidebar reads, so no screen has to remember to include it.
+ */
+function SampleDataNotice() {
+  const location = useLocation();
+  if (!showsSampleData(location.pathname)) return null;
+
+  return (
+    <p role="note" className="mb-3 rounded-md bg-warning-soft px-3 py-1.5 text-xs text-warning-text">
+      Sample data. This screen is not connected to the server, and nothing on it is saved.
+    </p>
   );
 }
 
@@ -95,7 +118,12 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
                             : 'text-sidebar-text hover:bg-sidebar-hover hover:text-sidebar-active-text',
                         )}
                       >
-                        {item.label}
+                        <span className="flex items-center justify-between gap-2">
+                          {item.label}
+                          {showsSampleData(item.to) && (
+                            <span className="text-2xs font-normal text-sidebar-text">Sample</span>
+                          )}
+                        </span>
                       </NavLink>
                     </li>
                   );
@@ -108,7 +136,7 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
 
       <div className="border-t border-sidebar-line px-3 py-2">
         <p className="text-2xs text-sidebar-heading">
-          Business data is still fixtures. Identity is not.
+          Screens marked Sample show fixture data.
         </p>
       </div>
     </nav>

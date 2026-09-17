@@ -28,6 +28,26 @@ export interface NavSection {
   items: NavItem[];
 }
 
+/**
+ * The screens that read and write through the API. Every other screen renders fixtures.
+ *
+ * WHY THIS EXISTS. The application is shown to internship reviewers and security testers, who
+ * cannot tell a fixture screen from a real one by looking, and a convincing screen of invented
+ * figures is exactly what they would otherwise report as a finding. So the shell labels every
+ * fixture screen, in the navigation and on the page, from this one list.
+ *
+ * Prefixes, so a document's detail, create and edit routes follow its list. Add a prefix when a
+ * module's screens move onto the API, in the same change that deletes their fixture reads.
+ */
+export const SERVER_BACKED_PREFIXES: readonly string[] = ['/sales/orders'];
+
+/** Whether the screen at this path shows fixture data rather than data from the server. */
+export function showsSampleData(pathname: string): boolean {
+  return !SERVER_BACKED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 export const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Overview',
