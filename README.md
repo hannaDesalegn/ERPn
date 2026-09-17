@@ -1,267 +1,272 @@
-# ERP Frontend
+# ERP (internship project)
 
-A production-shaped ERP frontend for a wholesale distribution business, built to be
-connected to a real backend later. Not a mockup: the domain model, service layer and
-permission seams are the deliverable, and the screens exist to prove them.
+A multi-tenant ERP for a wholesale distribution business, built as an internship project. It is
+**not a complete ERP product.** The scope is deliberately small: a few workflows built for real,
+with the security properties a real system needs, instead of many modules that only look
+finished.
 
-**Stack:** Vite · React 19 · TypeScript (strict) · Tailwind v4 · React Router · TanStack Query ·
-NestJS · Fastify · PostgreSQL
+It is meant to be run from an empty database, demonstrated in a browser, and handed to a
+security team for testing.
 
-> **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the binding architectural contract.** It defines
-> the target production system: multi-tenancy, backend and frontend boundaries, database principles,
-> authentication, authorization, auditability, inventory and accounting rules, concurrency,
-> idempotency, document lifecycle, testing, security and infrastructure. Read it before proposing or
-> implementing a feature. Section 16.1 lists every temporary behaviour in this repository and what
-> removes it; section 16.2 lists what must never be faked; section 17 defines the first vertical
-> slice. It is the only architectural source of truth. What follows below is how to run the
-> repository, and then a description of the frontend as it stands today.
+**Stack:** NestJS 12 on Fastify, PostgreSQL 17 with row level security, Drizzle, React 19, Vite,
+Tailwind, TanStack Query.
+
+`docs/ARCHITECTURE.md` is the design contract the code is built against. You do not need to
+read it to run the system.
 
 ---
 
-## Local development
+## Quick start
 
-Requires Node 24 and Docker. The repository is an npm workspace: `apps/web` is the React
-application, `apps/api` is the NestJS backend.
+### Prerequisites
+
+- Node.js 24 (CI pins 24.16.0). The scripts use `node --env-file-if-exists`, which needs Node 22.9
+  or later.
+- Docker, for PostgreSQL. Only the database runs in a container; the API and the frontend run
+  on your machine.
+- Ports 5432, 3000 and 5173 free on `127.0.0.1`.
+
+### From nothing to a running demo
+
+Run these from the repository root.
 
 ```bash
-npm install       # installs both workspaces
-npm run db:up     # starts PostgreSQL and waits until it accepts connections
-npm run dev:api   # http://localhost:3000
-npm run dev       # http://localhost:5173
+npm install
+
+# Configuration for the API, the migration runner and the demo seed.
+cp apps/api/.env.example apps/api/.env
+
+# A fresh database. db:reset destroys any existing local database volume.
+npm run db:reset
+
+# Create the schema.
+npm run db:migrate
+
+# Create the demo tenants, companies, accounts, master data and opening stock.
+npm run db:seed:demo
+
+# In two terminals:
+npm run dev:api    # API on http://127.0.0.1:3000
+npm run dev:web    # Browser app on http://localhost:5173
 ```
 
-The API needs `DATABASE_URL`, which has no default. Copy `apps/api/.env.example` to
-`apps/api/.env` before `npm run dev:api`.
+Open http://localhost:5173 and sign in with one of the demo accounts below.
 
-Compose owns the backing services and the applications run natively, which is what contract
-section 15.3 allows and what keeps the edit cycle fast. `npm run db:down` stops the database and
-`npm run db:reset` destroys the volume and starts clean.
+If the page shows "Cannot reach the server", the API is not running or not ready yet.
+`http://127.0.0.1:3000/health/ready` answers 200 once it can reach the database.
 
-There is no application schema yet. `npm run db:up` gives you an empty database; migrations,
-tables and everything that uses them belong to the next increment.
+### Starting again
 
-The database has two working roles, which contract sections 2.4 and 7.1 require, and **neither is
-a superuser**. `erp_migrator` owns the database and schema and runs migrations, taking its DDL
-rights from ownership rather than from superuser status. `erp_app` is what the API connects as: it
-owns nothing, has no DDL rights, and cannot bypass row level security.
-
-That distinction is load bearing. A superuser bypasses row level security even on a table with
-`FORCE`, so an owning role that was a superuser would make every isolation test pass regardless of
-whether the policies worked. The `erp` superuser the image creates is used only to provision those
-two roles.
-
-The roles are created by `docker/postgres/init/01-roles.sh`, which runs only when the volume is
-first initialised. After changing it, run `npm run db:reset` rather than `npm run db:up`.
-
-Two health endpoints, meaning different things:
-
-| Endpoint | Answers | When the database is down |
-|---|---|---|
-| `/health` | is the process alive | still 200, deliberately |
-| `/health/ready` | can it serve traffic | 503 |
-
-The split matters operationally. A liveness probe that fails during a database incident makes an
-orchestrator restart healthy processes and turns degradation into an outage.
-
-### Tests
+The seed refuses to run when any demo tenant or demo account already exists, and writes nothing
+in that case. To rebuild the environment from scratch:
 
 ```bash
-npm run test      # unit tests, no database needed
-npm run test:int  # integration tests, requires npm run db:up first
-npm run db:migrate -- --dry-run   # report pending migrations without applying them
-npm run db:migrate                # apply pending migrations as erp_migrator
+npm run db:reset && npm run db:migrate && npm run db:seed:demo
 ```
 
-Integration tests connect as the restricted role and assert it cannot issue DDL, so the two role
-separation is covered by a test rather than by intent.
+---
 
-### Environment variables
+## Demo environment
 
-Nothing here is a secret. Production values come from a managed secret store and are injected at
-runtime, per contract sections 14.8 and 15.5.
+`npm run db:seed:demo` creates the same environment on every machine. Every identifier is fixed,
+so a record from one company can be named in a request made from another and the result is
+predictable.
 
-| Variable | Default | Used by |
+### Accounts
+
+Every account uses the password in `DEMO_USER_PASSWORD`. With the copied `.env.example`, that is
+`erp_demo_local_dev`. It is a local development value, not a secret, and the seed refuses to run
+when `NODE_ENV=production`.
+
+| Email | Role | Companies |
 |---|---|---|
-| `POSTGRES_USER` | `erp` | Compose. Superuser, used only to provision the two roles below. |
-| `POSTGRES_PASSWORD` | `erp_local_dev` | Compose |
-| `POSTGRES_DB` | `erp_dev` | Compose |
-| `POSTGRES_PORT` | `5432` | Compose, published on `127.0.0.1` only |
-| `MIGRATION_DB_USER` | `erp_migrator` | Compose. Owns the schema, runs migrations, not a superuser. |
-| `MIGRATION_DB_PASSWORD` | `erp_migrator_local_dev` | Compose |
-| `APP_DB_USER` | `erp_app` | Compose. The restricted role the API connects as. |
-| `APP_DB_PASSWORD` | `erp_app_local_dev` | Compose |
-| `NODE_ENV` | `development` | API |
-| `PORT` | `3000` | API |
-| `HOST` | `127.0.0.1` | API. A container must set `0.0.0.0` to be reachable. |
-| `LOG_LEVEL` | `info` | API |
-| `DATABASE_URL` | none, required | API. Connection string for the restricted role. |
-| `DATABASE_POOL_MAX` | `10` | API |
-| `MIGRATION_DATABASE_URL` | none | Migration runner only, never the API process. |
-| `APP_DB_ROLE` | none | Migration runner. Role that migrations grant to. |
+| `demo-admin@erp.test` | Administrator | Demo Distribution East, Demo Distribution West |
+| `demo-sales@erp.test` | Sales Representative | Demo Distribution East, Demo Distribution West |
+| `demo-accountant@erp.test` | Accountant | Demo Distribution East only |
+| `demo-warehouse@erp.test` | Warehouse Operator | Demo Distribution East only |
+| `demo-trading-admin@erp.test` | Administrator | Demo Trading only (a different tenant) |
 
-Compose runs without any of these set. Copy `.env.example` to `.env` only to override a default,
-and `apps/api/.env.example` to `apps/api/.env` for the API. Both `.env` files are gitignored.
+What each role may do is defined in `apps/api/src/authorization/permissions.ts`. In short:
 
-## What CI runs
+- **Administrator:** everything, including cancelling orders, user roles and the audit log.
+- **Sales Representative:** view, create and confirm sales orders, view customers and stock. Cannot
+  cancel an order, post an invoice or read the audit log.
+- **Accountant:** invoices, invoice posting, accounting and the audit log. Can view sales orders
+  but cannot create or confirm them.
+- **Warehouse Operator:** stock and read-only sales orders. Cannot see customers or prices.
 
-`.github/workflows/ci.yml`, on every push and every pull request. All of it must pass, and a
-finding is fixed rather than suppressed.
+Signing in is throttled per address and per account: by default 10 failed attempts within 15
+minutes lock further attempts for 15 minutes (`AUTH_*` settings in `apps/api/.env`). Keep that in
+mind when testing passwords against the demo accounts.
 
-| Check | Command |
-|---|---|
-| Type check | `npm run typecheck` |
-| Lint | `npm run lint` |
-| Unit tests | `npm run test` |
-| Build | `npm run build` |
-| Integration tests | `npm run test:int` against a real PostgreSQL service container |
-| Dependency audit | `npm audit --audit-level=low` |
-| Secret scan | `gitleaks detect` over the full history |
+### Tenants and companies
 
-CI creates the restricted role by running the same `docker/postgres/init/01-roles.sh` that Compose
-runs locally, so the security boundary cannot drift between the two.
+| Tenant | Company | Warehouse | Customers | Products |
+|---|---|---|---|---|
+| Demo Distribution Group (`demo-distribution`) | Demo Distribution East | East Main Warehouse | 3 | 4 |
+| | Demo Distribution West | West Main Warehouse | 2 | 2 |
+| Demo Trading Ltd (`demo-trading`) | Demo Trading | Trading Warehouse | 1 | 1 |
+
+Every company is created by the application's own company provisioning, so each has its six
+default roles, its sales order and customer invoice number sequences, its chart of accounts and
+its posting account mapping. All companies use USD.
+
+**Codes collide on purpose.** Every company has a `CUST-001` and a `SKU-1001`, with different names
+and different stock, so a leak between companies is visible rather than looking like correct data.
+
+The two tenants are fully isolated from each other. The two companies in the first tenant share
+the tenant but not their data: switching company changes everything you see.
+
+### Opening stock
+
+| Company | SKU | Product | On hand |
+|---|---|---|---|
+| Demo Distribution East | SKU-1001 | Copy paper A4 80gsm, box of 5 reams | 400 box |
+| | SKU-1002 | Ballpoint pens blue, box of 50 | 250 box |
+| | SKU-1003 | Heavy duty stapler | 120 unit |
+| | SKU-1004 | Archive storage box | **5 unit** |
+| Demo Distribution West | SKU-1001 | Copy paper Letter 20lb, box of 10 reams | 150 box |
+| | SKU-2001 | Packing tape, roll | 600 unit |
+| Demo Trading | SKU-1001 | Thermal receipt rolls, box of 50 | 80 box |
+
+`SKU-1004` is stocked short on purpose: confirming an order for 6 of them is refused, which shows
+the oversell check.
+
+Opening stock is written through the stock ledger, the same way every stock change is: one
+movement per product with reason `adjustment` and source document type `opening_stock`, the
+balance row updated in the same transaction, and an `opening_stock_recorded` audit event in that
+transaction too. It is a quantity load only. No journal entry is written for it, because the
+system has no inventory valuation or inventory account yet.
+
+### A first walkthrough
+
+1. Sign in as `demo-sales@erp.test`.
+2. Use the company selector in the top bar to switch between East and West.
+3. In East, open **Sales orders** and create an order for `CUST-001` with 10 of `SKU-1001`.
+4. Confirm it. It receives the number `SO-0001` and reserves 10 boxes.
+5. Create a second order for 6 of `SKU-1004` and try to confirm it. It is refused: only 5 are
+   available.
+6. Sign in as `demo-admin@erp.test` to cancel an order and to see its history panel.
 
 ---
 
-## The two ideas the whole codebase rests on
+## What is real, and what is not
 
-**1. Documents with a lifecycle.** A Sales Order, Purchase Order, Invoice, Payment and
-Stock Move are all *documents* moving through states. `draft` is editable and has no
-consequences. Confirming or posting is the irreversible moment the document becomes real
-and starts affecting other modules. Corrections after posting are new reversing documents,
-never silent edits — auditors need to see both the mistake and the fix.
+### Real, end to end
 
-**2. Ledgers, not fields.** Two things are append-only event logs, and everything else is
-derived from them:
+- Sign in, sign out, server side sessions, CSRF protection, login throttling.
+- Company membership and company switching, resolved on the server. A company or tenant is
+  never taken from a request.
+- Authorization on every API route, checked on the server per request, with row level security
+  in PostgreSQL as a second layer.
+- Sales orders in the browser: list, create, edit a draft, confirm, cancel, and the audit history
+  of a confirmed order.
+- Confirming an order: server side pricing, gapless document numbers, stock reservation with
+  locking, optimistic concurrency, idempotent retries, and an audit record in the same
+  transaction.
+- Customer invoices over the API only: create a draft from confirmed orders, edit it, and post it
+  to the ledger (`/api/customer-invoices`). There is no invoice screen yet.
 
-| Ledger | Derived from it |
-|---|---|
-| `StockMove[]` | quantity on hand, available, reserved, incoming, inventory valuation |
-| `JournalEntry[]` | account balances, trial balance, AR, AP, P&L, balance sheet |
+### Sample data only
 
-`Product` deliberately has **no `quantityOnHand` field**. Stock is the sum of movements.
-This is the single most important modelling decision here — a mutable quantity field makes
-the system permanently unauditable, and it is the most common mistake in homemade ERPs.
+Every other screen in the browser still renders built-in fixture data and is not connected to
+the server. Those screens are marked **Sample** in the sidebar and carry a notice at the top of
+the page. This includes the dashboard, customers, products, stock, invoices, deliveries,
+purchasing, finance, accounting, users and roles, and the audit log screen. Nothing on them is
+saved.
+
+### Intentionally deferred
+
+- Invoice screens: list, create and post from the browser.
+- Journal, payment, purchasing, delivery and credit note workflows.
+- Cost of goods sold, inventory valuation, opening balance journal entries.
+- Accounting periods, credit limits, unit of measure conversion.
+- Creating tenants, companies, users or invitations from the interface. Tenants and companies
+  exist only through the demo seed.
+- A company tax rate other than zero. Every demo company has a standard rate of 0%, because no
+  endpoint sets one yet.
 
 ---
 
-## Layout
+## Configuration
+
+`apps/api/.env.example` lists every variable with a comment. The ones that matter to run the demo:
+
+| Variable | Used by | Default in `.env.example` |
+|---|---|---|
+| `DATABASE_URL` | API | `erp_app` role on `127.0.0.1:5432/erp_dev` |
+| `MIGRATION_DATABASE_URL` | Migrations and the demo seed, never the API | `erp_migrator` role |
+| `APP_DB_ROLE` | Migrations | `erp_app` |
+| `DEMO_USER_PASSWORD` | Demo seed only, at least 12 characters | `erp_demo_local_dev` |
+| `COOKIE_SECURE` | API. Must be true in production | `false` |
+| `TRUSTED_ORIGINS` | API, for cross origin browsers | empty, same origin only |
+
+The database container needs no configuration. Its defaults are in `docker-compose.yml` and can be
+overridden with a root `.env` file.
+
+### Database roles
+
+Two roles, neither of them a superuser, created by `docker/postgres/init/01-roles.sh` when the
+database volume is first created:
+
+- `erp_migrator` owns the schema and runs migrations. The demo seed also uses it for one thing:
+  creating the two tenant rows, which the application role is not allowed to do.
+- `erp_app` is what the API connects as. It cannot change the schema, cannot bypass row level
+  security, and cannot update or delete audit records.
+
+After changing the init script, run `npm run db:reset`.
+
+---
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm run db:up` | Start PostgreSQL and wait until it accepts connections |
+| `npm run db:down` | Stop PostgreSQL |
+| `npm run db:reset` | Destroy the database volume and start PostgreSQL empty |
+| `npm run db:migrate` | Apply pending migrations. `-- --dry-run` only reports them |
+| `npm run db:seed:demo` | Create the demo environment on a migrated, empty database |
+| `npm run dev:api` | API with reload, port 3000 |
+| `npm run dev:web` | Browser app, port 5173, proxying `/api` to the API |
+| `npm run build` | Build both workspaces |
+| `npm run typecheck` | Type check both workspaces |
+| `npm run lint` | Lint the web workspace |
+| `npm test` | Unit tests, no database needed |
+| `npm run test:int` | API integration tests, needs the database migrated |
+
+Health endpoints: `/health` answers whether the process is alive, and `/health/ready` whether it
+can reach the database.
+
+### Integration tests share the local database
+
+`npm run test:int` runs against the same database as the demo, and several test files clear
+tables they share with it, including the audit trail. The demo seed's own test removes the demo
+environment before and after it runs. After running the integration tests, rebuild the demo:
+
+```bash
+npm run db:reset && npm run db:migrate && npm run db:seed:demo
+```
+
+The integration tests read `DATABASE_URL` and `MIGRATION_DATABASE_URL` from the environment, not
+from `apps/api/.env`, so export them first.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs type checking, lint, unit tests, build, integration tests against
+a real PostgreSQL, a dependency audit and a secret scan on every push.
+
+---
+
+## Repository layout
 
 ```
-src/
-  domain/       Types. The specification of the business. Backend-agnostic.
-  services/     Async API client. The ONLY place that knows where data comes from.
-  mocks/        Fake backend: fixtures + derived projections. Deleted when the API lands.
-  components/
-    ui/         Generic primitives (DataTable, Card, Badge…). Know nothing about ERP.
-    domain/     ERP-aware components (StatusBadge, RelatedDocuments, ActivityTimeline).
-    charts/     Trend and aging visualisations.
-  features/     One folder per module; pages compose the above.
-  layouts/      App shell, sidebar, navigation definition.
-  app/          Providers: session/permissions, theme, router.
-  hooks/        useListParams — URL-synced search/filter/sort/paginate.
-  lib/          money.ts (integer arithmetic), format.ts, permissions.ts
+apps/api/            NestJS API
+  migrations/        Handwritten SQL migrations, forward only and checksummed
+  src/demo/          The demo dataset and seed
+apps/web/            React frontend
+  src/services/      The only code that fetches data, real or fixture
+  src/mocks/         Fixture data behind the Sample screens
+docs/ARCHITECTURE.md Design contract
+docker-compose.yml   PostgreSQL only
 ```
-
-**The one rule:** components import from `@/services` and `@/domain`, never from `@/mocks`.
-That rule is what makes swapping the mock layer for HTTP a contained change.
-
-### Money
-
-Stored as **integer minor units** (`{ amount: 1234, currency: 'USD' }` = $12.34), never a
-float. `0.1 + 0.2 !== 0.3` in JavaScript, and a one-cent drift makes a journal entry fail to
-balance. All arithmetic lives in `lib/money.ts`; formatting happens only at display.
-
----
-
-## What is built
-
-Every module has a working list and detail screen, read-only, over fixture data.
-
-| Module | Screens |
-|---|---|
-| Overview | Dashboard: KPIs, action queue, trends, AR/AP aging, cash, low stock, activity |
-| Sales | Sales orders · Customers · Invoices · Deliveries |
-| Purchasing | Purchase orders · Suppliers · Bills · Goods receipts |
-| Inventory | Products · Stock on hand · Stock movements · Warehouses · Adjustments |
-| Finance | Payments · Chart of accounts · General ledger · Journal entries · Trial balance |
-| Admin | Users and roles with a permission matrix · Audit log |
-
-**One placeholder remains: stock transfers.** The type exists, the workflow does not. There
-are no fixtures, the in-transit state has no owner, and a transfer arguably needs a virtual
-location rather than the signed quantity the rest of inventory uses. Building it would mean
-inventing the business process, so it stays visibly unbuilt.
-
-That is the standard applied throughout: **fake data yes, fake functionality no.** Where a
-domain is defined, the screen is built against realistic fixtures. Action buttons that would
-mutate data are rendered disabled, gated on both permission and document state, each with a
-tooltip saying what it would do.
-
-### Verified
-
-- `npm run build` passes with TypeScript `strict` + `noUncheckedIndexedAccess`
-- Fixture generator asserts every journal entry balances; **trial balance debits = credits exactly**
-- No product has negative stock on hand across 330 movements
-- 34 sales orders carry a complete trail: order → delivery → invoice → payment → journal entry
-- Sidebar contrast computed, not eyeballed: lowest pair 6.03:1, all pass WCAG AA
-- Shipped bundle contains zero em dashes and zero en dashes
-
----
-
-## Deliberate boundaries
-
-**Frontend permission checks are usability, not security.** `can('sales:confirm')` decides
-what to *render*. It decides nothing about what is *allowed*. Every permission must be
-re-checked server-side on every request. The role switcher in the top bar is a review tool,
-not authentication.
-
-**The audit trail here is a UI contract, not a secure log.** A trustworthy one requires the
-backend to write the entry in the same transaction as the change, take the actor from the
-session rather than the request body, and make the table append-only.
-
-**Aggregates belong to the backend.** The dashboard renders totals; it does not compute them
-from a page of rows. Two clients with different page sizes would otherwise report different
-figures, and nobody could reconcile the dashboard against the ledger.
-
-**Backend is not chosen.** Nothing here assumes Django, Odoo or ERPNext. Odoo speaks JSON-RPC
-with domain filters like `[['state','=','sale']]`; ERPNext uses `/api/resource/<Doctype>`.
-Neither matches this shape exactly — the adapter belongs in `services/`, in one folder, and
-the UI never learns which backend won.
-
----
-
-## Roadmap
-
-**Next**
-1. Create/edit forms, starting with the sales order. Deferred until now on purpose: line
-   items, tax, discounts and validation are where ERP time disappears, and read-only screens
-   proved the model first.
-2. Define the stock transfer workflow, then build it and remove the last placeholder.
-3. Remove the duplicated `Account.balance` in `mocks/reference.ts` so the ledger is the only
-   source of account balances.
-
-**Then**
-4. Profit and loss, and balance sheet. Types exist in `domain/accounting.ts`; no service yet.
-5. A real three-way match comparison view putting PO, receipt and bill side by side.
-6. Global search across documents, which is why the topbar has no search box today.
-
-**Later**
-7. Real backend plus authentication. Delete `mocks/`, keep the service signatures, drop the
-   `setClock` line in `services/index.ts`.
-8. Server-driven aggregates and pagination.
-9. Mutations with cross-module cache invalidation. Posting an invoice must invalidate the
-   customer balance, the AR aging *and* the dashboard, which is why `queryKeys` is centralised.
-
----
-
-## Known gaps
-
-- `mocks/reference.ts` seeds static balances on the chart of accounts that do **not** match
-  the balances derived from journal entries. Only the derived figures reach the UI today, so
-  nothing contradicts on screen — but the Chart of Accounts screen must read from
-  `api.finance.trialBalance()`, not from `Account.balance`, or it will show two different
-  truths.
-- Inventory uses a single warehouse plus a signed quantity. Mature ERPs move stock between
-  *locations* including virtual ones (Supplier, Customer, Scrap), making goods double-entry
-  too. `MovementReason` preserves the information needed to upgrade later.
-- Multi-currency is typed but not exercised; `lib/money.ts` throws on cross-currency
-  arithmetic rather than guessing a rate.
