@@ -93,6 +93,21 @@ export interface CustomerInvoiceDetailLine {
   lineTotal: Money;
 }
 
+/**
+ * What the server says after posting.
+ *
+ * Exactly the endpoint's response. The whole invoice is one read away; this carries what changed
+ * and the entry the posting wrote.
+ */
+export interface PostingResult {
+  id: string;
+  status: string;
+  docNumber: string;
+  journalEntryId: string;
+  total: string;
+  currency: string;
+}
+
 function toDetail(response: CustomerInvoiceResponse): CustomerInvoiceDetail {
   const currency = response.currency;
 
@@ -150,6 +165,24 @@ export const invoicesService = {
         body: JSON.stringify({ salesOrderIds: [salesOrderId], invoiceDate }),
       }),
     );
+  },
+
+  /**
+   * Posts a draft invoice to the ledger.
+   *
+   * NO BODY. There is nothing about a posting for a caller to decide: the lines, the accounts, the
+   * number, the date and the status all come from persisted records. The server re-reads the
+   * orders, re-checks the tax rate and the arithmetic, consumes the invoiced quantities, allocates
+   * the number, writes the entry and the audit record, and commits, or does none of it.
+   *
+   * The key is one per intent, so a retry of the same press replays the posting rather than being
+   * refused as a second one.
+   */
+  async postInvoice(id: string, idempotencyKey: string): Promise<PostingResult> {
+    return request<PostingResult>(`/customer-invoices/${id}/post`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    });
   },
 
   /**

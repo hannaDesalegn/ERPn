@@ -4,31 +4,73 @@
  * Follows the sales order screen's shape: identity and status in the header, the document on the
  * left, its connections on the right.
  *
+ * POSTING IS THE SERVER'S TOO. The Post invoice button sends an identifier and a key. Validation,
+ * authorization, consuming the invoiced quantities, the number, the journal entry and the audit
+ * record all happen in the server's one transaction, and the screen then reads the invoice again
+ * rather than deciding what it now looks like.
+ *
  * EVERYTHING ON IT IS THE SERVER'S. The number, the status, the lines and every figure arrive in
  * the invoice response. Nothing is computed here, and nothing is shown that the response does not
  * carry: there is no paid amount, balance due or payment state, because the backend has no
  * payments, and a zero in those places would be a claim about the customer.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api, queryKeys } from '@/services';
 import type { CustomerInvoiceDetail } from '@/services/invoices.service';
-import { Card, CardHeader, ErrorState, Field, PageHeader } from '@/components/ui';
+import { Button, Card, CardHeader, ErrorState, Field, Icon, PageHeader } from '@/components/ui';
 import { MoneyText } from '@/components/domain/MoneyText';
 import { DetailGrid, DetailSkeleton, DetailTitle } from '@/components/domain/detail';
 import { formatDate, formatQuantity } from '@/lib/format';
-import { refusalText } from '@/features/sales/refusalText';
+import { newIdempotencyKey, refusalText } from '@/features/sales/refusalText';
+import { useSession } from '@/app/session';
+import { postingRefusal } from './postingRefusal';
 
 export function CustomerInvoiceDetailPage() {
   const { id = '' } = useParams();
+  const { can } = useSession();
+  const queryClient = useQueryClient();
+
+  /**
+   * One idempotency key per intent, made when this invoice is opened and reused by every retry,
+   * as the sales order screen does. Another invoice is another intent.
+   */
+  const [intent, setIntent] = useState(() => ({ invoiceId: id, key: newIdempotencyKey() }));
+  if (intent.invoiceId !== id) setIntent({ invoiceId: id, key: newIdempotencyKey() });
 
   const invoice = useQuery({
     queryKey: queryKeys.invoice(id),
     queryFn: () => api.invoices.getInvoice(id),
   });
 
-  if (invoice.isError) return <ErrorState message={refusalText(invoice.error)} />;
+  const posting = useMutation({
+    mutationFn: () => api.invoices.postInvoice(id, intent.key),
+    onSuccess: (result) => {
+      // What changed, from the server's answer, so the number and status show at once even if the
+      // read that follows fails. Then the invoice is read again, which is the authority.
+      queryClient.setQueryData<CustomerInvoiceDetail>(queryKeys.invoice(id), (current) =>
+        current
+          ? {
+              ...current,
+              status: result.status as CustomerInvoiceDetail['status'],
+              docNumber: result.docNumber,
+            }
+          : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(id) });
+    },
+    onError: (error) => {
+      if (postingRefusal(error).reload) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(id) });
+      }
+    },
+  });
+
+  // A failed first read is the page failing. A failed re-read after a posting is not: the invoice
+  // is already on screen, so it stays, with a note beneath the header.
+  if (invoice.isError && !invoice.data) return <ErrorState message={refusalText(invoice.error)} />;
   if (invoice.isLoading || !invoice.data) return <DetailSkeleton />;
 
   const inv = invoice.data;
@@ -49,7 +91,43 @@ export function CustomerInvoiceDetailPage() {
           />
         }
         subtitle={`${inv.customer.name} · invoice date ${formatDate(inv.invoiceDate)}`}
+        actions={
+          <>
+            {/* Presentation, not enforcement: the server re-checks invoices:post in its own
+                transaction whatever this drew. A posted invoice offers nothing, because a posted
+                document is corrected by a reversing one, which does not exist yet. */}
+            {can('invoices:post') && inv.status === 'draft' && (
+              <Button
+                variant="primary"
+                icon="ledger"
+                onClick={() => posting.mutate()}
+                disabled={posting.isPending}
+                title="Allocates the invoice number and writes the journal entry. Cannot be undone."
+              >
+                {posting.isPending ? 'Posting...' : 'Post invoice'}
+              </Button>
+            )}
+          </>
+        }
       />
+
+      {posting.isError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-line-strong bg-danger-soft px-3 py-2"
+        >
+          <Icon name="alert" className="mt-0.5 size-4 shrink-0 text-danger" />
+          <div>
+            <p className="text-sm font-medium text-primary">{postingRefusal(posting.error).title}</p>
+            <p className="text-sm text-primary">{postingRefusal(posting.error).detail}</p>
+          </div>
+        </div>
+      )}
+      {invoice.isError && invoice.data && (
+        <p role="status" className="rounded-md border border-line px-3 py-2 text-sm text-secondary">
+          The invoice could not be reloaded. {refusalText(invoice.error)}
+        </p>
+      )}
 
       <DetailGrid
         main={
