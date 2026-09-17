@@ -140,13 +140,46 @@ system has no inventory valuation or inventory account yet.
 
 ### A first walkthrough
 
+The full demo runs from a sales order to a posted invoice, and it takes two people. The
+salesperson sells, and the accountant bills and posts. Neither role can do the other's half,
+which is the point.
+
+**As the salesperson**
+
 1. Sign in as `demo-sales@erp.test`.
-2. Use the company selector in the top bar to switch between East and West.
-3. In East, open **Sales orders** and create an order for `CUST-001` with 10 of `SKU-1001`.
+2. Use the company selector in the top bar to switch between East and West, then choose
+   **Demo Distribution East**.
+3. Open **Sales orders** and create an order for `CUST-001` with 10 of `SKU-1001`.
 4. Confirm it. It receives the number `SO-0001` and reserves 10 boxes.
 5. Create a second order for 6 of `SKU-1004` and try to confirm it. It is refused: only 5 are
    available.
-6. Sign in as `demo-admin@erp.test` to cancel an order and to see its history panel.
+
+The salesperson sees no **Create invoice** button: raising an invoice needs `invoices:create`,
+which the sales role does not hold.
+
+**As the accountant**
+
+6. Sign out and sign in as `demo-accountant@erp.test`. East is the only company this account
+   belongs to.
+7. Open **Sales orders**, open `SO-0001`, and choose **Create invoice**. A draft invoice opens,
+   billing everything on the order at the prices the order agreed.
+8. Choose **Post invoice**. The invoice receives the number `INV-0001` and its status becomes
+   Posted.
+9. The **Journal entry** panel shows what posting wrote: Accounts Receivable debited and Sales
+   Revenue credited by the invoice total. There is no tax line, because the demo companies charge
+   0% tax and a zero tax line is not written.
+10. The **History** panel shows the posting event, who posted it, their role, and the amount.
+
+**Checking the boundaries**
+
+11. Open the same invoice as `demo-sales@erp.test`. It can be read, there is no **Post invoice**
+    button, and the journal and history panels say the account lacks permission.
+12. Switch the salesperson to West and open the invoice's address again: it is not found. The
+    same happens for `demo-trading-admin@erp.test`, in the other tenant.
+13. Sign in as `demo-admin@erp.test` to cancel an order and to see a sales order's history panel.
+
+An invoice is reached from its sales order or by its address. The invoice list is still sample
+data, so it does not list real invoices.
 
 ---
 
@@ -164,21 +197,26 @@ system has no inventory valuation or inventory account yet.
 - Confirming an order: server side pricing, gapless document numbers, stock reservation with
   locking, optimistic concurrency, idempotent retries, and an audit record in the same
   transaction.
-- Customer invoices over the API only: create a draft from confirmed orders, edit it, and post it
-  to the ledger (`/api/customer-invoices`). There is no invoice screen yet.
+- Customer invoices in the browser: create a draft from a confirmed order, view it, post it, and
+  see the journal entry and audit record the posting wrote. Posting allocates a gapless invoice
+  number, consumes the invoiced quantities under lock, writes a balanced entry and an audit record,
+  and commits all of it or none of it. Retries are idempotent.
+- Editing an invoice draft and raising one from several orders exist over the API
+  (`PUT /api/customer-invoices/:id`), with no screen.
 
 ### Sample data only
 
 Every other screen in the browser still renders built-in fixture data and is not connected to
 the server. Those screens are marked **Sample** in the sidebar and carry a notice at the top of
-the page. This includes the dashboard, customers, products, stock, invoices, deliveries,
+the page. This includes the dashboard, customers, products, stock, the invoice list, deliveries,
 purchasing, finance, accounting, users and roles, and the audit log screen. Nothing on them is
 saved.
 
 ### Intentionally deferred
 
-- Invoice screens: list, create and post from the browser.
-- Journal, payment, purchasing, delivery and credit note workflows.
+- A real invoice list, editing an invoice draft in the browser, and invoicing part of an order.
+- The general ledger, trial balance, payment, purchasing, delivery and credit note workflows.
+  The journal is visible only per posted invoice.
 - Cost of goods sold, inventory valuation, opening balance journal entries.
 - Accounting periods, credit limits, unit of measure conversion.
 - Creating tenants, companies, users or invitations from the interface. Tenants and companies
