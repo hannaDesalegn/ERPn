@@ -1,7 +1,7 @@
 /**
  * Creating and editing a customer invoice draft, and reading one.
  *
- * A DRAFT AND NOTHING ELSE. Contract section 12.2 makes posting the irreversible moment that
+ * A DRAFT AND NOTHING ELSE. Architecture section 12.2 makes posting the irreversible moment that
  * validates, authorizes, applies side effects, allocates a number, writes an audit record and
  * commits, all in one transaction or none of it. None of that is here. Nothing in this file
  * allocates a number, writes a journal entry, moves stock, releases a reservation, touches
@@ -282,8 +282,7 @@ export class CustomerInvoiceService {
    * NOTHING HERE HAS A SIDE EFFECT, and the absences are the design rather than an unfinished
    * state. No number is allocated, because section 10.4 allocates inside the posting transaction
    * and a number spent on a draft would be a hole in a gapless series. No journal entry is
-   * written, because section 18.2 as amended 2026-09-15 makes accounts receivable, revenue and
-   * tax the posting's work. And `invoiced_quantity` on the source line is not touched, because
+   * written, because section 9.8 makes accounts receivable, revenue and tax the posting's work. And `invoiced_quantity` on the source line is not touched, because
    * consuming it here would mean a draft nobody posts had permanently reduced what the order can
    * still be billed for.
    */
@@ -349,9 +348,9 @@ export class CustomerInvoiceService {
    * is told the invoice moved rather than silently overwriting. The lines are replaced after that
    * write, inside the same transaction, so a loser removes nothing.
    *
-   * NO AUDIT RECORD. Document audit begins at the irreversible moment, as settled on 2026-09-13
-   * for the sales order and restated for the invoice here: creating and editing a draft are
-   * pre-posting mutations of a document that has claimed nothing from anybody.
+   * NO AUDIT RECORD. Document audit begins at the irreversible moment, per section 7.1: creating
+   * and editing a draft are pre-posting mutations of a document that has claimed nothing from
+   * anybody.
    */
   async updateDraftIn(
     repos: InvoiceDraftRepositories,
@@ -691,10 +690,8 @@ export class CustomerInvoiceService {
    * from anything the caller sent.
    *
    * WHAT THE BOUND DOES NOT DO is stop two drafts from each claiming the same remainder. Nothing
-   * is consumed until posting, so two drafts raised at once can both pass this check, and the
-   * architecture has not ruled whether that is allowed. It is left as it is rather than closed
-   * with an invented reservation: section 12.2 makes posting the moment that validates against
-   * current state, and that is where the question belongs.
+   * is consumed until posting, so two drafts raised at once can both pass this check, which
+   * section 12.2 permits: posting validates the remainder against current state and consumes it.
    */
   private async chooseLines(
     repos: Pick<InvoiceDraftRepositories, 'salesOrderLines'>,

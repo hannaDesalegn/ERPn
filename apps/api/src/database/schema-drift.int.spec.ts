@@ -1,7 +1,7 @@
 /**
  * Schema drift verification. Criteria 28 to 32.
  *
- * Contract section 1.2 ratified handwritten SQL migrations, and named the risk that comes with
+ * Architecture section 1.2 ratified handwritten SQL migrations, and named the risk that comes with
  * them: the SQL and the Drizzle definitions are maintained separately and can silently
  * diverge. This file is the price of that decision, paid in tests.
  *
@@ -118,7 +118,7 @@ describe('Schema drift', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // Criterion 28: scope columns, and the version rule as amended in section 4.2.
+  // Criterion 28: scope columns, and the version rule of section 4.2.
   // -------------------------------------------------------------------------------------
 
   describe('scope columns', () => {
@@ -195,11 +195,9 @@ describe('Schema drift', () => {
       // ledger append only, and the migration withholds UPDATE and DELETE from the application
       // role so it is the database refusing an edit rather than a convention.
       //
-      // `stock_reservations` claims the same shape for now, and its claim is the weaker one.
-      // Nothing updates a reservation today and the migration withholds both grants, but that is
-      // because section 12.3 has not ruled what releasing reserved stock does. If release reduces
-      // a reservation in place, the table becomes mutable and moves out of this list in the same
-      // migration that grants the UPDATE.
+      // `stock_reservations` is no longer exempt: a release stamps `released_at`, so migration
+      // 0012 made the table mutable and gave it `version`. Its entry here is inert, because this
+      // list only removes tables from the exempt set.
       //
       // `journal_entries` and `journal_lines` join under the second shape with the strongest
       // claim of any table here. Section 9.1 makes a posted entry immutable, migration 0014

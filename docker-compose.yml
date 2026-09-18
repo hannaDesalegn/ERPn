@@ -1,9 +1,9 @@
 # Local development backing services.
 #
-# Architecture contract section 15.3: local development is reproducible through Docker
+# Architecture section 15.3: local development is reproducible through Docker
 # Compose, and Compose owns the backing services while the developer may run the application
 # natively for a faster edit cycle. That is why only PostgreSQL is here and there is no API
-# service. The API Dockerfile belongs to slices 2 and 3 per section 15.11.
+# service. An API image is listed in section 15.11 as the next infrastructure step.
 #
 # Nothing here is production infrastructure. Production topology, secrets and TLS are section
 # 15.6 and are deliberately not modelled in this file.
@@ -27,7 +27,7 @@ services:
       # Deterministic collation, so index ordering does not depend on the host locale.
       POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
       # Two roles created by the init script below, neither of them a superuser.
-      # Contract section 7.1: the owner runs migrations, the application connects as the
+      # Architecture section 7.1: the owner runs migrations, the application connects as the
       # restricted role, and POSTGRES_USER above is used only to provision these two.
       MIGRATION_DB_USER: ${MIGRATION_DB_USER:-erp_migrator}
       MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:-erp_migrator_local_dev}

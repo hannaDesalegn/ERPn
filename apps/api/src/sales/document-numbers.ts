@@ -102,8 +102,7 @@ export const CUSTOMER_INVOICE_SEQUENCE_DEFAULTS = {
 /**
  * Gives a company the customer invoice sequence that invoice posting will require.
  *
- * Provisioned now, with the rest of the company's configuration, and not by the increment that
- * first posts an invoice. The reason is the one stated above `provisionSalesOrderSequence`:
+ * Provisioned with the rest of the company's configuration, not on the first posting. The reason is the one stated above `provisionSalesOrderSequence`:
  * allocation deliberately refuses to invent a missing sequence, because a counter created on
  * demand issues number one to a company that has been trading for a year. Numbering a document
  * type is company configuration under section 2.9, and a company is configured when it is

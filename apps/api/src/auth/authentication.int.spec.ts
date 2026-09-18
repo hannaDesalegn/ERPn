@@ -1,7 +1,7 @@
 /**
  * The authentication service against a real PostgreSQL.
  *
- * This is the security test suite for contract sections 5.1 to 5.4 and criterion 18. It is
+ * This is the security test suite for architecture sections 5.1 to 5.4 and criterion 18. It is
  * written to attack the control rather than demonstrate it: the tests that matter are the ones
  * that try to enumerate an account, replay a token, outlive an expiry, escape a lockout, or
  * leave a session behind without the audit record that explains it.

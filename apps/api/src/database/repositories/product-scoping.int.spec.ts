@@ -1,7 +1,7 @@
 /**
  * The product repository, against a real PostgreSQL.
  *
- * Products get their own suite because two contract requirements attach to them and to nothing
+ * Products get their own suite because two architecture requirements attach to them and to nothing
  * else in master data. Section 8.4 gives every product a canonical stocking unit, without which
  * every quantity in the stock ledger becomes ambiguous. Section 3.3 makes the sales price the
  * master data the server recomputes from rather than trusting a price a form sent back, and

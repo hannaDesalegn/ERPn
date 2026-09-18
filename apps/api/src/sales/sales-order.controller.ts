@@ -621,7 +621,7 @@ export class SalesOrderController {
       );
     }
 
-    // An absent body is a cancellation with no reason, which the ruling permits. Fastify gives
+    // An absent body is a cancellation with no reason, which section 12.3 permits. Fastify gives
     // undefined for no body at all, and the schema accepts that rather than demanding `{}`.
     const parsed = cancelBody.safeParse(body ?? {});
     if (!parsed.success) {

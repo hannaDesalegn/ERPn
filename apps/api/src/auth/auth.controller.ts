@@ -101,9 +101,9 @@ export class AuthController {
    * holding a dead credential with no way to be rid of it. It reveals nothing: the response is
    * identical whether the token was live, dead or never issued.
    *
-   * That it accepts an unauthenticated request makes it a cross site forgery target in
-   * principle. The cookie is SameSite=Strict, so a cross site request does not carry it and the
-   * call revokes nothing. The token that section 6.5 requires is a later increment.
+   * It accepts an unauthenticated request, so it is still covered by the global CSRF guard like
+   * every mutating route. The cookie is also SameSite=Strict, so a cross site request does not
+   * carry it and revokes nothing.
    */
   @Public()
   @Post('logout')

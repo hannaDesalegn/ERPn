@@ -1,14 +1,12 @@
 /**
  * Creating a company, with the configuration a company cannot function without.
  *
- * WHY THIS EXISTS AT ALL. Until now a company was created by calling `companies.create` on a
- * repository, which writes one row and stops. That was sufficient while a company was only an
- * identity boundary. It stopped being sufficient when sales order confirmation started needing a
- * document number: section 12.2 allocates one inside the confirming transaction, the allocation
- * refuses to invent a sequence it cannot find, and so a company created as a bare row fails the
- * first confirmation of its life. This is the operation that makes that impossible.
+ * WHY THIS EXISTS. `companies.create` on the repository writes one row and stops. A company created
+ * as a bare row would fail the first confirmation of its life: section 12.2 allocates a document
+ * number inside the confirming transaction, and the allocation refuses to invent a sequence it
+ * cannot find. This operation creates the company together with everything it needs.
  *
- * THE BOUNDARY IS COMPANY CREATION, AND THE CONTRACT SAYS SO TWICE. Section 2.9 lists document
+ * THE BOUNDARY IS COMPANY CREATION. Section 2.9 lists document
  * numbering series alongside roles and warehouses as configuration held per company. Section 2.7
  * then rules that role templates are seeded into a company when it is created, and from that
  * moment belong to it. A numbering series is the same shape of thing: seeded with a sensible
@@ -24,14 +22,12 @@
  * company anyone can use, so every write shares one transaction and a failure in any of them
  * leaves nothing behind to be puzzled over later.
  *
- * WHAT THIS NOW WRITES, in one transaction or none of it: the company, its roles and their
+ * WHAT THIS WRITES, in one transaction or none of it: the company, its roles and their
  * permissions, the sales order sequence, the customer invoice sequence, the chart of accounts,
  * the mapping from posting purpose to account, and the first administrator's membership and role.
  *
- * THE INVOICE SEQUENCE AND THE CHART ARE PROVISIONED BEFORE ANYTHING USES THEM, deliberately.
- * Neither an invoice nor a posting exists yet. They are here because both are configuration a
- * company owns from creation under section 2.9, and because the alternative is the one the
- * sequence machinery already refuses by design: creating them on first use, which would give a
+ * THE INVOICE SEQUENCE AND THE CHART ARE PROVISIONED AT CREATION, not on first use. Both are
+ * configuration a company owns under section 2.9, and creating them on first use would give a
  * trading company invoice number one and a chart of accounts it never chose.
  *
  * ORDER FOLLOWS THE SCHEMA. The company row first, because everything else names it by foreign
@@ -39,12 +35,9 @@
  * membership and a seeded role to point at. Between roles and the sequence there is no
  * dependency either way.
  *
- * WHO THE FIRST ADMINISTRATOR IS, THE CONTRACT DOES NOT SAY. It defines the mechanism completely
- * and the origin not at all: section 2.6 gives global accounts and memberships, 2.7 gives the
- * administrator template, and 17.2 says companies come into existence by seeding during this
- * work while putting invitations and the administration UI in a later one. So the account is an
- * argument here. Creating one would mean deciding how a person first gets a credential, which is
- * an authentication rule this increment has no business inventing.
+ * THE FIRST ADMINISTRATOR IS AN ARGUMENT. Section 2.6 gives global accounts and memberships and
+ * section 2.7 gives the administrator template, but how a person first gets a credential, by
+ * invitation or signup, is not implemented. Creating an account here would invent that rule.
  */
 
 import { Injectable } from '@nestjs/common';
@@ -93,7 +86,7 @@ export interface NewCompany {
    * one person holding one credential and reaching every company they are a member of through
    * it, so the person who administers a new company either already has an account or is invited
    * to create one. Inventing an account here would be inventing an authentication rule, and
-   * section 17.2 puts invitations and self service signup outside this work.
+   * invitations and self service signup are not implemented.
    *
    * Required rather than optional. A company nobody can act in is not usable, and making it
    * optional would make the unusable state representable again, which is the whole thing this
@@ -113,9 +106,9 @@ export interface ProvisionedCompany {
   /** The company's own copies of the default templates, per section 2.7. */
   roles: SeededRole[];
   salesOrderSequence: DocumentNumberSequenceRecord;
-  /** Provisioned now although nothing allocates from it yet; see the note on the service. */
+  /** The customer invoice number sequence, allocated from when an invoice is posted. */
   customerInvoiceSequence: DocumentNumberSequenceRecord;
-  /** The company's own chart, per section 2.9. Three accounts, per section 18.2. */
+  /** The company's own chart, per section 2.9. Three accounts, per section 9.8. */
   chartOfAccounts: AccountRecord[];
   /** Which of those accounts each kind of posting uses. */
   postingAccounts: CompanyPostingAccountRecord[];

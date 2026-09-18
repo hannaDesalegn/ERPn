@@ -1,9 +1,8 @@
 /**
  * Authentication.
  *
- * Contract section 5.4: authentication answers "who is this" and nothing else. Authorization,
- * company context and the HTTP surface are separate layers in separate increments, so nothing
- * here decides what an actor may do.
+ * Architecture section 5.4: authentication answers "who is this" and nothing else. Authorization
+ * and company context are separate layers, so nothing here decides what an actor may do.
  *
  * The controller is a translation layer and nothing more. Every rule it enforces is in the
  * service, which is testable without a web server, and the controller's own job is to keep the

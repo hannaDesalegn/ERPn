@@ -6,7 +6,7 @@
  * that is quietly tenant scoped comes back half right and any answer that ignores membership
  * comes back too long.
  *
- * Contract sections 2.5, 2.6 and 2.10. Criteria 12, 13, 16 and 17.
+ * Architecture sections 2.5, 2.6 and 2.10. Criteria 12, 13, 16 and 17.
  */
 
 import { Test } from '@nestjs/testing';

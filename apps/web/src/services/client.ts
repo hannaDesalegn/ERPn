@@ -212,7 +212,7 @@ async function refusal(response: Response): Promise<{ message: string; body: unk
  * header to set for it, and nothing to put in storage. Anything here that looked like reading
  * the session would mean the cookie had stopped being HttpOnly.
  *
- * The forgery header is different and is added to every mutating request. Contract section 14.4:
+ * The forgery header is different and is added to every mutating request. Architecture section 14.4:
  * a custom header a cross origin form cannot set. A read does not send it, because a read
  * changes nothing and the server does not ask.
  */

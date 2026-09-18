@@ -1,6 +1,6 @@
 # Continuous integration.
 #
-# Architecture contract section 15.4: CI runs on every push and every pull request, and all of
+# Architecture section 15.4: CI runs on every push and every pull request, and all of
 # it must pass: type checking, lint, unit tests, integration tests against a real PostgreSQL
 # instance, dependency audit, and a secret scan.
 #
@@ -9,8 +9,8 @@
 # about a green run next month.
 #
 # What this workflow deliberately does NOT do: build or push a container image, deploy
-# anything, or provision infrastructure. The API Dockerfile belongs to slices 2 and 3, and
-# deployment machinery to the pre-customer phase, both per section 15.11.
+# anything, or provision infrastructure. Section 15.11 states what is provisioned today and what
+# comes before a production deployment.
 
 name: CI
 

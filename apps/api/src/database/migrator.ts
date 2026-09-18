@@ -1,7 +1,7 @@
 /**
  * The migration runner.
  *
- * Contract section 1.2, ratified: handwritten versioned SQL applied by a small runner built on
+ * Architecture section 1.2, ratified: handwritten versioned SQL applied by a small runner built on
  * the existing `pg` dependency. Forward only, checksummed, run as the owning role, never at
  * application start.
  *
@@ -198,7 +198,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     );
     const connectedAs = who.rows[0]?.user ?? 'unknown';
 
-    // The owning role must not be a superuser. Contract section 7.1: a superuser bypasses row
+    // The owning role must not be a superuser. Architecture section 7.1: a superuser bypasses row
     // level security even with FORCE, which would leave the policies a migration creates
     // unenforceable against the role that created them, and any test of them meaningless.
     if (who.rows[0]?.superuser) {

@@ -11,15 +11,13 @@
  * on purpose, one document's entries and one document's trail, so the result of a posting can be
  * shown without a general ledger API existing.
  *
- * The first four: Posting is the
- * irreversible moment of section 12.2, and it is a route of its own rather than a status field on
- * the edit, because an edit and a commitment are different authorities: `invoices:create` raises
+ * Posting is the irreversible moment of section 12.2, and it is a route of its own rather than a
+ * status field on the edit, because an edit and a commitment are different authorities: `invoices:create` raises
  * the document and `invoices:post` commits it to the ledger, which is section 6.2's segregation
  * of duties in the permission vocabulary.
  *
- * WHAT IS STILL ABSENT. No list, no cancellation and no credit note. Cancelling a posted document
- * is a `[FUT]` section 12.3 reserves for the accounting slice, and a route for it would be a
- * control with no rule behind it.
+ * WHAT IS ABSENT. No list, no cancellation and no credit note. Correcting a posted invoice is a
+ * `[FUT]` of section 12.3, and a route for it would be a control with no rule behind it.
  *
  * ONE TRANSACTION COVERS THE KEY, THE WRITE AND THE ANSWER, on both mutating routes. Section 11
  * requires the idempotency record to commit with the work it describes, so a retry after a failure

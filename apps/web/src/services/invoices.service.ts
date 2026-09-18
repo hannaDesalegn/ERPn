@@ -6,7 +6,7 @@
  * screen importing from here reads the server, and nothing here reaches `@/mocks`.
  *
  * WHAT THE SERVER OWNS. The number, the status, every figure and every line. They arrive in the
- * responses below and are never worked out here, per contract sections 3.3 and 10.4.
+ * responses below and are never worked out here, per architecture sections 3.3 and 10.4.
  */
 
 import type { ID, ISODate, Money } from '@/domain';

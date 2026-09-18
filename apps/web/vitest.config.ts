@@ -6,7 +6,7 @@ import { fileURLToPath, URL } from 'node:url';
  * Frontend tests.
  *
  * A browser-like environment, because everything worth testing here is about what a session
- * gate renders and what a form sends. `jsdom` rather than a real browser: contract section 13.2
+ * gate renders and what a form sends. `jsdom` rather than a real browser: architecture section 13.2
  * reserves "never mock it" for the database, where constraints and policies are the logic. The
  * DOM is not that, and a headless browser would buy nothing these tests assert.
  *

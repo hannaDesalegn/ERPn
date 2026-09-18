@@ -6,7 +6,7 @@
  * interesting failures visible: a resolution that ignores the company comes back with the union
  * of both, and one that ignores the tenant comes back with rows it should never have seen.
  *
- * Contract sections 2.7, 6.1 and 6.2.
+ * Architecture sections 2.7, 6.1 and 6.2.
  */
 
 import { Test } from '@nestjs/testing';

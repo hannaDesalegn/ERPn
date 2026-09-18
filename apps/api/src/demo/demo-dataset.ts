@@ -1,5 +1,5 @@
 /**
- * The internship demo environment, as data.
+ * The demo environment, as data.
  *
  * WHAT THIS IS FOR. A freshly migrated database has no tenant, no company and no account, so there
  * is nothing to sign in to and nothing to sell. This file describes the smallest environment in
@@ -12,9 +12,9 @@
  * request and know exactly whose record it is. Nothing here reads the clock or a random source.
  *
  * CODES COLLIDE ACROSS COMPANIES ON PURPOSE. Every company has a `CUST-001` and a `SKU-1001`,
- * with different names and different stock. Section 17.3 asks for deliberately colliding data
- * when isolation is tested, because a leak between two companies whose records look alike is
- * the one nobody notices on screen.
+ * with different names and different stock. Criterion 14 of architecture section 17 asks for
+ * deliberately colliding data when isolation is tested, because a leak between two companies whose
+ * records look alike is the one nobody notices on screen.
  *
  * NOTHING HERE IS A SECRET. There is no password in this file. The seed takes one from the
  * environment and refuses to run in production, see `seed-environment.ts`.

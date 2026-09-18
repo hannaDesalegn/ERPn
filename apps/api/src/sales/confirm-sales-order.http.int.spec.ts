@@ -997,8 +997,8 @@ describe('Confirming a sales order over HTTP', () => {
     });
 
     it('returns identifiers the detail route actually serves', async () => {
-      // The regression this whole work package exists for. Every identifier the list hands back
-      // must be one the detail endpoint answers, or the navigation is broken again.
+      // Every identifier the list hands back must be one the detail endpoint answers, or
+      // navigating from the list to an order is broken.
       await draft(COMPANY, '10');
       await draft(COMPANY, '10');
 
@@ -1175,7 +1175,7 @@ describe('Confirming a sales order over HTTP', () => {
     });
 
     it('refuses an order with no lines', async () => {
-      // Established from the contract rather than assumed: section 12.2 prices a draft from its
+      // Established from the architecture rather than assumed: section 12.2 prices a draft from its
       // lines, and an order promising nothing is not a draft of anything.
       const response = await refusedBy(validOrder({ lines: [] }));
 
@@ -1457,7 +1457,7 @@ describe('Confirming a sales order over HTTP', () => {
       const [event] = (await auditFor(seller, orderId)).json();
 
       // Resolved from the identifier the record stored, so the trail says who rather than which
-      // uuid. Section 17.1: every operation writes a record naming that actor.
+      // uuid. Section 7.1: every audit record names the actor from the session.
       expect(event.actor).toEqual({ id: SELLER, name: 'Seller' });
     });
 
@@ -1550,7 +1550,7 @@ describe('Confirming a sales order over HTTP', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // Cancelling, per section 12.3 as ruled 2026-09-13.
+  // Cancelling, per section 12.3.
   // -------------------------------------------------------------------------------------
 
   describe('cancelling an order', () => {

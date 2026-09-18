@@ -31,10 +31,9 @@ export interface NavSection {
 /**
  * The screens that read and write through the API. Every other screen renders fixtures.
  *
- * WHY THIS EXISTS. The application is shown to internship reviewers and security testers, who
- * cannot tell a fixture screen from a real one by looking, and a convincing screen of invented
- * figures is exactly what they would otherwise report as a finding. So the shell labels every
- * fixture screen, in the navigation and on the page, from this one list.
+ * WHY THIS EXISTS. A fixture screen cannot be told from a real one by looking, and a convincing
+ * screen of invented figures would be mistaken for real data. So the shell labels every fixture
+ * screen as Sample, in the navigation and on the page, from this one list.
  *
  * Prefixes, so a document's detail, create and edit routes follow its list. Add a prefix when a
  * module's screens move onto the API, in the same change that deletes their fixture reads.

@@ -1011,12 +1011,11 @@ describe('Deny by default', () => {
       await grant('administrator', 'away');
       const cookie = await login();
 
-      // ONE EVENT PER COMPANY, WRITTEN HERE RATHER THAN RELIED ON FROM THE SEED. This used to
-      // assert on the seeding records from `beforeAll`, and the read clamps to the two hundred
-      // most recent events: as the matrix grew more audited cells, the record it was looking for
-      // aged out of that window and the test failed for a reason that had nothing to do with
-      // isolation. The claim is that one company never sees another's trail, so the fixture makes
-      // the trail deterministic and then asserts exactly that.
+      // ONE EVENT PER COMPANY, WRITTEN HERE RATHER THAN RELIED ON FROM THE SEED. The read clamps
+      // to the two hundred most recent events, so a seeding record from `beforeAll` can age out
+      // of that window as the matrix writes more audited events. The claim is that one company
+      // never sees another's trail, so the fixture makes the trail deterministic and asserts
+      // exactly that.
       await owner.query(`SELECT set_config('app.tenant_id', '', false)`);
       await owner.query('TRUNCATE audit_events');
 

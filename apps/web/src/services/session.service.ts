@@ -1,8 +1,8 @@
 /**
  * The session endpoints.
  *
- * The only part of the client that is not reading fixtures. Everything here talks to the real
- * API, because identity is the one thing section 16.2 says must never be faked: a convincing
+ * Everything here talks to the real API, because identity is among the things section 16.2 says
+ * must never be faked: a convincing
  * simulation of authentication is worse than its absence, since it looks finished.
  *
  * WHAT THIS MODULE NEVER DOES. It does not read or write a token, because there is nothing to
@@ -13,7 +13,7 @@
  * The shapes below mirror what `/me` returns. They are declared here rather than imported from
  * the existing domain types on purpose: `domain/security.ts` describes the mock identity, which
  * carries a job title and a single role key that the server does not send and this frontend must
- * not invent. Section 3.2 makes the server's response the contract.
+ * not invent. Section 3.2 makes the server's response authoritative.
  */
 
 import { ApiError, request } from './client';

@@ -3,7 +3,7 @@
  *
  * Nothing here is re-exported from the data layer's public entry point. These classes are
  * constructed only by `UnitOfWork`, inside a transaction whose tenant and company context is
- * already set. Contract section 6.3: constructing an unscoped query must not be possible through
+ * already set. Architecture section 6.3: constructing an unscoped query must not be possible through
  * the public interface of the data layer.
  *
  * THE SAME TWO RULES AS EVERY OTHER REPOSITORY HERE:
@@ -13,10 +13,10 @@
  *      then rejected.
  *   2. Writes stamp `tenant_id` and `company_id` from the scope, never from the input.
  *
- * NO STATUS WRITE AND NO NUMBER WRITE. There is no method here that moves an invoice out of
- * `draft` or sets a document number, because the transaction that does both is section 12.2's
- * posting and it is the next increment. The check constraint in 0015 refuses a numbered draft, so
- * this is not the only thing standing in the way of one.
+ * STATUS AND NUMBER ARE WRITTEN TOGETHER. `applyTransition` is the only method that moves an
+ * invoice out of `draft` or sets a document number, and only the posting transaction of section
+ * 12.2 calls it. The check constraint in 0015 refuses a numbered draft, so this is not the only
+ * thing standing in the way of one.
  *
  * NO DELETE ON THE INVOICE. Section 4.5, and the grant refuses one anyway. The lines are
  * deletable because editing a draft replaces them.

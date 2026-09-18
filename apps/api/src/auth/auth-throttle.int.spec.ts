@@ -1,7 +1,7 @@
 /**
  * Login throttling against a real PostgreSQL.
  *
- * Contract section 5.2. The tests that matter are the ones that try to get past the limiter:
+ * Architecture section 5.2. The tests that matter are the ones that try to get past the limiter:
  * a correct password mid-lockout, and concurrent attempts racing the counter. A test that only
  * counts to ten and stops proves the happy path of a control, which is not the same as proving
  * the control.

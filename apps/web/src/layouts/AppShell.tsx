@@ -81,8 +81,7 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
       {/* No logo mark. Nothing to represent until the product has a real
           identity, and an invented monogram is decoration pretending to be one. */}
       <div className="flex h-12 items-center border-b border-sidebar-line px-4">
-        {/* The company this session is inside, from /me. It used to be a fixture constant,
-            which meant every tenant saw the same name at the top of their own data. */}
+        {/* The company this session is inside, from /me. */}
         <span className="truncate text-sm font-semibold text-primary">{activeCompany.name}</span>
       </div>
 

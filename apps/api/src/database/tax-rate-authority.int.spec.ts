@@ -1,9 +1,9 @@
 /**
  * Where the authoritative tax rate lives.
  *
- * Section 2.9, as amended on 2026-09-11, puts the standard rate on the company beside the other
- * fiscal settings. This suite pins that decision rather than the arithmetic that will use it:
- * no rate is calculated anywhere yet, and this increment adds no calculation.
+ * Section 2.9 puts the standard rate on the company beside the other fiscal settings. This suite
+ * pins that decision rather than the arithmetic that uses it, which lives in `tax/tax-rate.ts`
+ * and the document services.
  *
  * WHAT IS WORTH PINNING, AND WHY EACH ONE.
  *
@@ -241,7 +241,7 @@ describe('The authoritative tax rate', () => {
       expect(columns.filter((c) => c.includes('rate'))).toEqual([]);
       // The customer does carry a tax registration number, which section 2.9 puts on each party
       // for invoice posting. It is an identifier printed on a document, not an input to any
-      // calculation, so it leaves the ruling above intact: nothing here says what tax to charge.
+      // calculation, so it leaves the decision above intact: nothing here says what tax to charge.
       // Pinned exactly rather than matched by pattern, so a second tax column on this table has
       // to be argued for here.
       expect(columns.filter((c) => c.includes('tax'))).toEqual(['tax_registration_number']);

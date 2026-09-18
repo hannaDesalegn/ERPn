@@ -9,7 +9,7 @@
  *   - the Drizzle handle and the connection pool
  *   - anything that would let a caller issue a query without a scope
  *
- * Contract section 6.3: constructing an unscoped query must not be possible through the public
+ * Architecture section 6.3: constructing an unscoped query must not be possible through the public
  * interface of the data layer. This file is that interface.
  */
 

@@ -64,7 +64,7 @@ describe('the customer invoice routes', () => {
 
   it('exposes exactly six routes, and only one of them posts', () => {
     // Pinned, so a seventh handler is a visible decision. Cancelling and crediting a posted invoice
-    // are the two that will want to be next, and section 12.3 has ruled neither.
+    // are the likely candidates, and section 12.3 specifies neither.
     expect(handlers().sort()).toEqual(['auditEvents', 'create', 'get', 'journal', 'post', 'update']);
 
     const posting = handlers().filter(

@@ -15,8 +15,7 @@
  *   - make the audit table append-only, with no UPDATE or DELETE grant even for
  *     application accounts
  *
- * We define the shape so the backend has a clear target, and so the UI already
- * has somewhere to render it.
+ * The shape gives the backend a clear target and the UI somewhere to render it.
  *
  * Distinguish two related things:
  *   ACTIVITY FEED  human-readable "what happened", for operational awareness.

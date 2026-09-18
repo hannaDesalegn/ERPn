@@ -28,10 +28,9 @@ import { salesService } from './sales.service';
  * data has to be measured from that same date or a screen shows a row aged from today beside
  * a summary bucketed from the anchor.
  *
- * THIS USED TO PIN THE APPLICATION CLOCK, and that stopped being right the moment one figure
- * on screen came from the server. A real audit event measured against a date weeks in the
- * past renders as "just now" forever. Section 16.1 gave that override the removal trigger
- * "when the API supplies dates"; the clock is now real and the anchor is asked for by name.
+ * IT DOES NOT PIN THE APPLICATION CLOCK. A real audit event measured against a date weeks in
+ * the past would render as "just now" forever, so the clock is real and the anchor is asked for
+ * by name.
  *
  * Every caller is a screen still reading fixtures, so each one is a line to delete when its
  * module gets an endpoint. A screen reading the server must never call this.
@@ -55,9 +54,8 @@ export const api = {
  * Query keys for TanStack Query, centralised.
  *
  * Centralising them is not bureaucracy — it is what makes cross-module
- * invalidation correct. When posting an invoice eventually becomes a mutation,
- * it must invalidate the customer's balance, the receivables aging, AND the
- * dashboard. Scattered inline key arrays make that impossible to get right,
+ * invalidation correct. Once customer balances and aging read the server,
+ * posting an invoice must invalidate them and the dashboard too. Scattered inline key arrays make that impossible to get right,
  * and stale financial figures are worse than slow ones.
  */
 export const queryKeys = {

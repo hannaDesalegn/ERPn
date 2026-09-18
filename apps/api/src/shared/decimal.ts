@@ -1,7 +1,7 @@
 /**
  * Exact decimal arithmetic, held as scaled integers.
  *
- * Contract section 4.3: money is stored as exact numeric, never floating point, and never a
+ * Architecture section 4.3: money is stored as exact numeric, never floating point, and never a
  * plain integer of minor units. A JavaScript number is an IEEE-754 double, so `0.1 + 0.2` is not
  * `0.3` and a unit price of four ten-thousandths of a cent has no exact representation at all.
  * Everything below is `bigint`, which has no rounding the code did not ask for.

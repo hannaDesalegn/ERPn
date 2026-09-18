@@ -3,7 +3,7 @@
  *
  * Nothing in this file is re-exported from the data layer's public entry point. The classes are
  * constructed only by `UnitOfWork`, inside a transaction whose tenant context is already set.
- * Contract section 6.3: constructing an unscoped query must not be possible through the public
+ * Architecture section 6.3: constructing an unscoped query must not be possible through the public
  * interface of the data layer.
  *
  * Two rules every method here follows, and a reviewer should check for:
@@ -206,7 +206,7 @@ export class DrizzleCompanyRepository implements CompanyRepository {
     const tenantId = requireTenantId(this.scope);
 
     // Version is part of the WHERE clause, so a stale write updates nothing rather than
-    // overwriting someone else's edit. Contract section 10.1.
+    // overwriting someone else's edit. Architecture section 10.1.
     const rows = await this.db
       .update(companies)
       .set({
@@ -396,7 +396,7 @@ export class DrizzleTenantRepository implements TenantRepository {
 }
 
 // ---------------------------------------------------------------------------------------
-// Users. Global, per contract section 4.6.
+// Users. Global, per architecture section 4.6.
 // ---------------------------------------------------------------------------------------
 
 export class DrizzleUserRepository implements UserRepository {
@@ -708,7 +708,7 @@ export class DrizzleAuditRepository implements AuditRepository {
   ) {}
 
   async append(event: AuditEventInput): Promise<AuditEventRecord> {
-    // Scope and actor come from the context, never from the event. Contract section 7.1: the
+    // Scope and actor come from the context, never from the event. Architecture section 7.1: the
     // actor is taken from the authenticated session, never from a request body.
     const tenantId = tenantIdOf(this.scope) ?? null;
     const companyId = companyIdOf(this.scope) ?? null;
@@ -771,7 +771,7 @@ export class DrizzleAuditRepository implements AuditRepository {
     return rows.map(toAuditEvent);
   }
 
-  // There is deliberately no update and no delete. Contract section 7.1.
+  // There is deliberately no update and no delete. Architecture section 7.1.
 }
 
 // ---------------------------------------------------------------------------------------
@@ -841,13 +841,13 @@ function toAuditEvent(row: Row<typeof auditEvents.$inferSelect>): AuditEventReco
 export type { ActorScope };
 
 // ---------------------------------------------------------------------------------------
-// Sessions. Global, per contract section 4.6.
+// Sessions. Global, per architecture section 4.6.
 // ---------------------------------------------------------------------------------------
 
 export class DrizzleSessionRepository implements SessionRepository {
   /**
    * No scope parameter, unlike every other repository here, and the absence is deliberate
-   * rather than an oversight. Sessions are global per contract section 4.6: they belong to a
+   * rather than an oversight. Sessions are global per architecture section 4.6: they belong to a
    * global user and exist before any company is chosen. Taking a scope and then ignoring it
    * would suggest a filter that is not applied.
    *
@@ -900,8 +900,8 @@ export class DrizzleSessionRepository implements SessionRepository {
         absoluteExpiresAt: input.absoluteExpiresAt,
         ipAddress: input.ipAddress ?? null,
         userAgent: input.userAgent ?? null,
-        // activeCompanyId stays null. Authentication establishes identity; company context is
-        // a later increment, per contract section 5.4.
+        // activeCompanyId stays null. Authentication establishes identity; entering a company
+        // is a separate, explicit step, per architecture sections 2.5 and 5.4.
       })
       .returning();
 

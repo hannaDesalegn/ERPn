@@ -77,7 +77,7 @@ describe('PasswordHasher', () => {
       ['a hash from another algorithm', '$2b$12$abcdefghijklmnopqrstuv'],
     ])('returns false for %s rather than throwing', async (_label, stored) => {
       // Throwing would let a caller distinguish a corrupt stored record from a wrong password,
-      // which is a distinction worth denying. Contract section 5.2.
+      // which is a distinction worth denying. Architecture section 5.2.
       await expect(hasher.verify(stored, 'anything')).resolves.toBe(false);
     });
 

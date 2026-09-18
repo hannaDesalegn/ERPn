@@ -325,7 +325,7 @@ describe('Master data', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // The contract requirements that attach to these records specifically.
+  // The architecture requirements that attach to these records specifically.
   // -------------------------------------------------------------------------------------
 
   describe('what the contract requires of these rows', () => {

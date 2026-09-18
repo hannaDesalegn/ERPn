@@ -5,7 +5,7 @@ describe('session tokens', () => {
     const { token, tokenHash } = issueSessionToken();
 
     // The whole point: what the client holds and what the database holds must differ, so a
-    // leak of the sessions table yields nothing usable. Contract section 5.1.
+    // leak of the sessions table yields nothing usable. Architecture section 5.1.
     expect(tokenHash).not.toBe(token);
   });
 

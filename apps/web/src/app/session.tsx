@@ -1,13 +1,10 @@
 /**
  * Session and permission context, from the server.
  *
- * This file used to be a role switcher over fixture users. It is now a client for `/me`, and
- * the difference is not cosmetic: nothing below constructs a user, a company, a role or a
- * permission. Every value it exposes arrived in a server response, and when there is no
+ * A client for `/me`. Nothing below constructs a user, a company, a role or a permission. Every value it exposes arrived in a server response, and when there is no
  * response there is no session rather than a default one.
  *
- * SECURITY REMINDER, unchanged from when this was a mock and more important now that it is not:
- * `can()` decides what to RENDER. It decides nothing about what is ALLOWED. The server re-checks
+ * SECURITY REMINDER: `can()` decides what to RENDER. It decides nothing about what is ALLOWED. The server re-checks
  * every permission on every request, because anyone can call the API without going through this
  * interface. A user who edits `permissions` in a debugger changes what their own browser draws
  * and nothing about what the server will do for them. That is the intended property, and it is

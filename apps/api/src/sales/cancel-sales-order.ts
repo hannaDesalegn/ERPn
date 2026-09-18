@@ -1,8 +1,8 @@
 /**
  * Cancelling a sales order.
  *
- * Section 12.3's ruling of 2026-09-13, composed from mechanisms that already existed, in the
- * same shape `confirmSalesOrder` beside it uses. Nothing here is reimplemented: the transition
+ * Section 12.3's cancellation rule, composed from existing mechanisms in the same shape
+ * `confirmSalesOrder` beside it uses. Nothing here is reimplemented: the transition
  * table decides legality, the grants read decides authorization, the balance row lock serialises
  * the stock, and the audit append records who did it.
  *
@@ -23,7 +23,7 @@
  *
  * NO NUMBER IS ALLOCATED. Confirming allocates because it raises a document the business stands
  * behind. Cancelling raises nothing. A cancelled draft therefore stays unnumbered, which the
- * check constraint amended in migration 0012 permits for exactly this status and no other.
+ * check constraint from migration 0012 permits for exactly this status and no other.
  *
  * THE LOCK ORDER, per section 10.2's requirement that it be documented and followed. This takes
  * the balance row lock for each reservation's key, in the order `inLockOrder` states, which is the
@@ -63,7 +63,7 @@ export type CancellationRepositories = Pick<
 export interface CancellationRequest {
   salesOrderId: string;
   /**
-   * Why, in the person's own words. Optional, per the ruling.
+   * Why, in the person's own words. Optional, per section 12.3.
    *
    * Kept in the audit record and nowhere else. It explains a transition rather than describing
    * the order, so it is not a property of the order and there is no column for it.

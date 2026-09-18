@@ -1,8 +1,8 @@
 /**
  * Minimal inline icon set.
  *
- * Hand-rolled rather than pulling in an icon library: we need about twenty
- * glyphs, and inline SVG keeps the bundle small and the render synchronous.
+ * Hand-rolled rather than pulling in an icon library: about twenty glyphs are
+ * needed, and inline SVG keeps the bundle small and the render synchronous.
  * Swapping to lucide-react later is a find-and-replace of this one component.
  *
  * Icons are decorative here — every one is paired with a text label — so they

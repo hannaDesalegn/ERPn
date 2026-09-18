@@ -3,7 +3,7 @@
  *
  * Nothing here is re-exported from the data layer's public entry point. These classes are
  * constructed only by `UnitOfWork`, inside a transaction whose tenant and company context is
- * already set. Contract section 6.3: constructing an unscoped query must not be possible through
+ * already set. Architecture section 6.3: constructing an unscoped query must not be possible through
  * the public interface of the data layer.
  *
  * THE SAME TWO RULES AS EVERY OTHER REPOSITORY HERE:
@@ -18,8 +18,7 @@
  *
  * NO DELETE, ANYWHERE. Section 4.5: business records are archived, never hard deleted, and the
  * application role holds no `DELETE` grant on these tables. `archive` is what replaces it, and
- * it is the only update this layer offers: the rest of master data editing arrives with the
- * administration increment that needs it.
+ * it is the only update this layer offers, because no master data editing is implemented.
  */
 
 import { and, asc, eq, sql } from 'drizzle-orm';

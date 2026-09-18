@@ -124,7 +124,7 @@ describe('The sales order status union', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // The number constraint, as amended for cancellation on 2026-09-13.
+  // The number constraint, as migration 0012 amended it for cancellation.
   // -------------------------------------------------------------------------------------
 
   describe('the document number a status is allowed to carry', () => {
@@ -188,7 +188,7 @@ describe('The sales order status union', () => {
     });
 
     it('lets a cancelled order go either way, because it is reachable from both sides', async () => {
-      // Section 12.3, ruled 2026-09-13. A cancelled draft never had a number and does not get
+      // Section 12.3. A cancelled draft never had a number and does not get
       // one; a cancelled confirmed order keeps the number it was issued. This is the one status
       // reachable from both sides of allocation, and the only one the constraint lets go both
       // ways.

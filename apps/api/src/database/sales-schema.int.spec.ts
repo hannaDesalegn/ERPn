@@ -1,11 +1,10 @@
 /**
  * The sales schema, proven against a real PostgreSQL.
  *
- * This increment adds tables and nothing else: no service, no endpoint, no numbering code. So
- * everything worth testing is a database guarantee, and every test below runs as the application
- * role with row level security in force, through raw SQL rather than through a repository. There
- * is no repository for these tables yet, and asserting the database directly is the point: these
- * are the guarantees the later increments will be built on top of and will not re-check.
+ * Everything tested here is a database guarantee, and every test below runs as the application
+ * role with row level security in force, through raw SQL rather than through a repository.
+ * Asserting the database directly is the point: the services and repositories are built on top of
+ * these guarantees and do not re-check them.
  *
  * THE ONES THAT MATTER MOST are the composite keys. A line belonging to another tenant's order,
  * or carrying a currency its order does not, are both unrepresentable rather than merely

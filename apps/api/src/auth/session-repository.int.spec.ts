@@ -3,7 +3,7 @@
  *
  * What matters here is not that a row can be written and read back. It is that the raw token
  * never reaches the database, that lookup works from the hash alone, and that revocation is a
- * server side fact rather than a client side one. Contract sections 5.1 and 5.3.
+ * server side fact rather than a client side one. Architecture sections 5.1 and 5.3.
  */
 
 import { Test } from '@nestjs/testing';
@@ -219,7 +219,7 @@ describe('Session repository', () => {
     });
 
     it('revokes every live session for one user, and nobody elses', async () => {
-      // The path a password change and a dismissal both take. Contract section 5.2.
+      // The path a password change and a dismissal both take. Architecture section 5.2.
       const mine = await Promise.all([createSession(), createSession()]);
       const theirs = await createSession(OTHER_USER_ID);
 

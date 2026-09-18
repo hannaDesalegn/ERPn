@@ -2,7 +2,7 @@
  * Drizzle definitions for the customer invoice and its lines.
  *
  * These describe what `migrations/0015_customer_invoices.sql` creates. They do not create it:
- * contract section 1.2 ratified handwritten SQL as the only thing that changes the database, and
+ * architecture section 1.2 ratified handwritten SQL as the only thing that changes the database, and
  * `schema-drift.int.spec.ts` compares these against the live catalogue, so a change to either
  * side that the other does not match fails the build.
  *

@@ -1,7 +1,7 @@
 /**
  * The idempotency boundary of section 11.
  *
- * WHAT THE CONTRACT ASKS FOR, clause by clause, because the whole of this file is those clauses:
+ * WHAT SECTION 11 ASKS FOR, clause by clause, because the whole of this file is those clauses:
  *
  *   every state changing endpoint accepts an `Idempotency-Key` header
  *   the server stores the key, a fingerprint of the request, and the response

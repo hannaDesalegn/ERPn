@@ -1,12 +1,12 @@
 /**
  * The trusted scope a data access operation runs under.
  *
- * Contract section 6.3: every repository method requires an actor context argument, and
+ * Architecture section 6.3: every repository method requires an actor context argument, and
  * constructing an unscoped query must not be possible through the public interface of the data
  * layer. This file defines what that context is; `unit-of-work.ts` is what makes it mandatory.
  *
  * WHERE A SCOPE COMES FROM, AND WHERE IT NEVER COMES FROM. A scope is built from the server side
- * session, per contract section 2.5. It is never built from a request body, a query parameter, a
+ * session, per architecture section 2.5. It is never built from a request body, a query parameter, a
  * path segment or a client supplied header. The type below cannot enforce that on its own, so
  * the rule is stated here and tested at the HTTP boundary when that boundary exists: nothing in
  * this layer accepts a tenant or company identifier as data and then treats it as authority.
@@ -40,7 +40,7 @@ export interface ActorScope {
 /**
  * The reasons a system scope may exist, as a closed union.
  *
- * Contract section 6.3 requires background and migration access to use "an explicitly named
+ * Architecture section 6.3 requires background and migration access to use "an explicitly named
  * system context, which is greppable and reviewable". A closed union is how that is enforced:
  * adding a reason is a visible change to this type, and every existing use can be found by
  * searching for the literal.

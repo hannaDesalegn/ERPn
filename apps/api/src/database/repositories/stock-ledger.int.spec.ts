@@ -690,14 +690,14 @@ describe('The stock ledger', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // 9 and 10 of the invariant list. What this increment deliberately does not hold.
+  // 9 and 10 of the invariant list. What the ledger deliberately does not hold.
   // -------------------------------------------------------------------------------------
 
   describe('what is deliberately absent', () => {
     it('represents no reservation anywhere', async () => {
       // Section 8.5 defines available as on hand minus reserved, but a reservation is not a
-      // movement, so where reserved lives is the reservation increment's question. A column
-      // nothing maintains would read as though the work were done.
+      // movement, so reserved lives in `stock_reservations`. A column here that nothing
+      // maintains would read as though it were authoritative.
       await ownerContext(TENANT_A, COMPANY_A1);
       const columns = await owner.query<{ column_name: string }>(
         `SELECT column_name FROM information_schema.columns

@@ -1,7 +1,7 @@
 /**
  * The arithmetic every monetary figure in the system goes through.
  *
- * These are the tests that matter most in this increment, because a wrong answer here is wrong
+ * These are among the tests that matter most, because a wrong answer here is wrong
  * on an invoice and nobody notices until a customer does. The cases below are chosen for where
  * floating point actually breaks rather than for coverage: values that have no binary
  * representation, rounding exactly on the half, and the fraction-of-a-cent price section 4.3

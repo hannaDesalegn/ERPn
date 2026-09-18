@@ -1,7 +1,7 @@
 /**
  * Cross site request forgery, at the HTTP boundary.
  *
- * Criterion 24 and contract section 14.4. Every request below goes through the real server with
+ * Criterion 24 and architecture section 14.4. Every request below goes through the real server with
  * the real guard chain, because the thing worth proving is what an attacker's page can and
  * cannot make a browser do, and a test of the token helper proves none of that.
  *
@@ -74,14 +74,14 @@ const OWN_HOST = 'erp.example';
 const OWN_ORIGIN = `https://${OWN_HOST}`;
 const ATTACKER_ORIGIN = 'https://evil.example';
 
-/** Headers a request from our own page carries. */
+/** Headers a request from the application's own page carries. */
 const own = (extra: Record<string, string> = {}): Record<string, string> => ({
   host: OWN_HOST,
   origin: OWN_ORIGIN,
   ...extra,
 });
 
-/** Headers a request from someone else's page carries: their origin, our host. */
+/** Headers a request from someone else's page carries: their origin, this host. */
 const foreign = (extra: Record<string, string> = {}): Record<string, string> => ({
   host: OWN_HOST,
   origin: ATTACKER_ORIGIN,

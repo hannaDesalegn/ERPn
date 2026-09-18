@@ -335,7 +335,7 @@ describe('The accounting invariant of a posted invoice', () => {
       expect(tax).toEqual([]);
     }
 
-    // 5. And nothing else was posted to. Section 18.2: receivables, revenue and tax and no
+    // 5. And nothing else was posted to. Section 9.8: receivables, revenue and tax and no
     //    fourth account, whatever the amounts turn out to be.
     const postedAccounts = new Set(lines.map((line) => line.accountId));
     for (const account of postedAccounts) {

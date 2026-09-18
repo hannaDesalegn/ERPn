@@ -1,13 +1,13 @@
 /**
  * Authentication.
  *
- * Contract section 5.4: authentication answers "who is this". It does not answer "what may they
+ * Architecture section 5.4: authentication answers "who is this". It does not answer "what may they
  * do", and it does not resolve a company. Nothing here reads a tenant, company, role or
  * permission from the caller, and nothing here returns one.
  *
- * A service rather than a controller, deliberately. The HTTP surface, cookies and CSRF belong to
- * a later increment, and putting the rules here means they can be tested without a web server
- * and reused by anything that authenticates, including a future single sign on path.
+ * A service rather than a controller, deliberately. The HTTP surface, cookies and CSRF live in the
+ * controller and guards; putting the rules here means they can be tested without a web server and
+ * reused by anything that authenticates, including a future single sign on path.
  *
  * WHAT THIS FILE NEVER LOGS: the password, the password hash, the raw session token, and whether
  * a given email exists. The last one matters as much as the first two, because a log line that
@@ -111,7 +111,7 @@ export class AuthenticationService {
   /**
    * Verifies credentials and, on success, creates a session.
    *
-   * Everything happens in one transaction. Contract section 7.1 requires the audit record to be
+   * Everything happens in one transaction. Architecture section 7.1 requires the audit record to be
    * written inside the same transaction as the change it describes, which means a session that
    * exists without its audit row is impossible, and so is the reverse. A failure anywhere rolls
    * the whole thing back, including the session.
@@ -221,11 +221,11 @@ export class AuthenticationService {
   /**
    * Validates a presented token and extends the idle window if it is still good.
    *
-   * Contract section 5.3: expiry is checked on every request rather than trusted from a cookie
+   * Architecture section 5.3: expiry is checked on every request rather than trusted from a cookie
    * attribute. This is the function that does that checking.
    *
-   * Returns only whether the session is valid and whose it is. Company and permissions are a
-   * later increment and are deliberately absent.
+   * Returns only whether the session is valid and whose it is. Company context and permissions are
+   * resolved elsewhere and are deliberately absent.
    */
   async validate(token: string): Promise<SessionValidationResult> {
     return this.uow.inSystemScope(systemScope('authentication'), async (repos) => {

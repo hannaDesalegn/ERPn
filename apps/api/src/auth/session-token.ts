@@ -1,7 +1,7 @@
 /**
  * Session tokens.
  *
- * Contract section 5.1: the client receives an opaque session identifier in a cookie. Opaque
+ * Architecture section 5.1: the client receives an opaque session identifier in a cookie. Opaque
  * means it carries no information, so it cannot be decoded, tampered with, or reasoned about
  * by anyone holding it.
  *

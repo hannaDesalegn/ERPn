@@ -1,7 +1,7 @@
 /**
  * Session lifetime rules, as pure functions.
  *
- * Contract section 5.3 requires an idle timeout and an absolute maximum lifetime, both enforced
+ * Architecture section 5.3 requires an idle timeout and an absolute maximum lifetime, both enforced
  * server side, and expiry checked on every request rather than trusted from a cookie attribute.
  *
  * These are separated from the repository and the service on purpose. Expiry is the kind of

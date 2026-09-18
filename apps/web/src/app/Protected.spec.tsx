@@ -167,9 +167,8 @@ describe('the mock identity path is gone', () => {
   });
 
   it('has no role switcher left in the application shell', () => {
-    // Section 16.1 required this removed or gated behind a development flag. It is removed: no
-    // switcher and no flag, because a flag is a second code path nobody runs and therefore
-    // nobody notices rotting.
+    // Section 5.5: the frontend never chooses an identity. No switcher and no development flag,
+    // because a flag is a second code path nobody runs and therefore nobody notices rotting.
     const shell = sourceOf('/src/layouts/AppShell.tsx');
 
     expect(shell).not.toContain('switchUser');

@@ -3,7 +3,7 @@
  *
  * Section 12.1 requires the legal transitions to be declared explicitly and enforced server
  * side. The test that matters is the exhaustive one: every ordered pair of states is checked
- * against the list of moves the contract describes. Testing only the pairs somebody thought of is
+ * against the list of moves the architecture describes. Testing only the pairs somebody thought of is
  * how a table ends up permitting a move nobody declared.
  */
 
@@ -26,10 +26,9 @@ const ALL_PAIRS: [SalesOrderStatus, SalesOrderStatus][] = SALES_ORDER_STATUSES.f
 );
 
 /**
- * Every move the contract describes today.
+ * Every move the architecture describes.
  *
- * Section 12.2's confirming transaction, and the two cancellations section 12.3 ruled on
- * 2026-09-13. Nothing else, and the exhaustive pair test below is what holds that to it.
+ * Section 12.2's confirming transaction, and the two cancellations of section 12.3. Nothing else, and the exhaustive pair test below is what holds that to it.
  */
 const LEGAL: [SalesOrderStatus, SalesOrderStatus][] = [
   ['draft', 'confirmed'],
@@ -76,7 +75,7 @@ describe('the transition table', () => {
     expect(canTransition('draft', 'confirmed')).toBe(true);
   });
 
-  it('lets a draft and a confirmed order be cancelled, which is what section 12.3 ruled', () => {
+  it('lets a draft and a confirmed order be cancelled, as section 12.3 specifies', () => {
     expect(canTransition('draft', 'cancelled')).toBe(true);
     expect(canTransition('confirmed', 'cancelled')).toBe(true);
   });
@@ -96,8 +95,8 @@ describe('the transition table', () => {
   });
 
   it('never lets a cancelled order come back', () => {
-    // Section 12.3 makes correction a new document. Reinstating one is not a transition this
-    // contract describes, and an empty destination list is the honest way to say so.
+    // Section 12.3 makes correction a new document. Reinstating one is not a transition the
+    // architecture describes, and an empty destination list is the honest way to say so.
     for (const status of SALES_ORDER_STATUSES) {
       expect(canTransition('cancelled', status)).toBe(false);
     }

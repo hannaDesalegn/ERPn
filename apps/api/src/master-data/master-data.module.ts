@@ -6,8 +6,7 @@
  * becomes its own module under section 15.7.
  *
  * Reads only. Section 2.9 makes administering master data a company's own screens, which are not
- * this. These exist because a sales order names a customer, a warehouse and a product, and nothing
- * could offer a real one until now.
+ * this. These exist because a sales order names a customer, a warehouse and a product.
  */
 
 import { Module } from '@nestjs/common';

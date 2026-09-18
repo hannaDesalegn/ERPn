@@ -532,8 +532,8 @@ describe('Confirming a sales order', () => {
 
     it('follows the balance key, not the order the lines happen to be in', async () => {
       // THE REGRESSION TEST FOR THE DEADLOCK. Section 10.2 requires the acquisition order to be
-      // documented and followed, and this loop used to follow line order, which is an order
-      // within one document and none at all across two. Two orders naming the same two products
+      // documented and followed, and line order does not qualify: it is an order within one
+      // document and none at all across two. Two orders naming the same two products
       // in opposite line order would acquire the same two locks in opposite sequences.
       //
       // The sequence is observable because a reservation is written immediately after its lock
@@ -1073,8 +1073,8 @@ describe('Confirming a sales order', () => {
 
   describe('two orders racing for the last unit', () => {
     it('confirms only the one that got there first', async () => {
-      // The guarantee the reservation increment proved, still intact now that reservations are
-      // composed into confirmation.
+      // The reservation operation's guarantee, still intact when it is composed into
+      // confirmation.
       await stock(IN_A1, WIDGET[COMPANY_A1]!, '1');
       const mine = await draft(TENANT_A, COMPANY_A1, [
         { productId: WIDGET[COMPANY_A1]!, quantity: '1' },

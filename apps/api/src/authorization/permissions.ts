@@ -1,7 +1,7 @@
 /**
  * The permission catalogue and the default role templates.
  *
- * Contract section 2.7: the permission catalogue is code, roles are data owned by each company.
+ * Architecture section 2.7: the permission catalogue is code, roles are data owned by each company.
  * This file is the code half. It is the single authority for which capability strings exist, and
  * nothing may grant a string that is not listed here.
  *

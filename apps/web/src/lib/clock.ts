@@ -9,12 +9,9 @@
  * An aging bucket computed from one date next to a caption printed from another is the bug
  * this prevents, and it is easy to ship because the two usually coincide.
  *
- * THE DEFAULT IS REAL TIME, and as of the sales order module that is no longer negotiable.
- * The fixture layer used to pin this to its own anchor on import, which was right while every
- * date on screen came from fixtures and wrong the moment one did not: an audit event the
- * server recorded a minute ago was measured against a date weeks in the past, so the trail
- * read "just now" forever. Contract section 16.1 gave that override the removal trigger
- * "when the API supplies dates", and it does.
+ * THE DEFAULT IS REAL TIME. Pinning it to the fixture anchor would measure an audit event the
+ * server recorded a minute ago against a date weeks in the past, so a real trail would read
+ * "just now" forever.
  *
  * Fixture derived figures that still need the anchor ask for it explicitly, through
  * `agingReference` in the service layer, rather than bending everyone else's clock.

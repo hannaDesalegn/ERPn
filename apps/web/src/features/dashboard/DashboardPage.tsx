@@ -42,9 +42,9 @@ function KpiTile({ kpi }: { kpi: Kpi }) {
     <>
       <div className="flex items-start justify-between gap-1">
         <p className="text-xs font-medium text-secondary">{kpi.label}</p>
-        {/* Neutral info affordance. This previously used the warning triangle,
-            which is the same glyph as a critical action item, so eight KPI
-            tiles read as eight problems. */}
+        {/* Neutral info affordance, not the warning triangle: that is the glyph
+            for a critical action item, and eight KPI tiles would read as eight
+            problems. */}
         <span
           className="cursor-help text-muted transition-colors hover:text-secondary"
           title={kpi.help}
@@ -163,8 +163,7 @@ export function DashboardPage() {
       <PageHeader
         title="Dashboard"
         // The company being looked at, which matters in a product where one person reaches
-        // several. The job title this used to show came from a fixture user and the server
-        // does not send one, so inventing it here is exactly what this increment removes.
+        // several. No job title: the server does not send one, and it is not invented here.
         subtitle={activeCompany.name}
         meta={<span className="text-xs text-muted">As at {formatDate(todayISO())}</span>}
       />

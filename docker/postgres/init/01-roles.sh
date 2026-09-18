@@ -1,7 +1,7 @@
 #!/bin/sh
 # Creates the two database roles the application design depends on.
 #
-# Architecture contract section 7.1, ratified: an owning role that runs migrations and holds
+# Architecture section 7.1: an owning role that runs migrations and holds
 # DDL rights, and a restricted application role the API connects as.
 #
 # NEITHER OF THEM IS A SUPERUSER, and that is the point of this script rather than an

@@ -1,7 +1,7 @@
 /**
  * The guard every company-partitioned repository starts with.
  *
- * Contract section 6.3 requires every repository method to take an actor context and makes an
+ * Architecture section 6.3 requires every repository method to take an actor context and makes an
  * unscoped query impossible to construct through the public interface. This is where that
  * becomes a refusal rather than a convention, for the tables a company owns outright.
  *

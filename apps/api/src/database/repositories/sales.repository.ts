@@ -3,7 +3,7 @@
  *
  * Nothing here is re-exported from the data layer's public entry point. These classes are
  * constructed only by `UnitOfWork`, inside a transaction whose tenant and company context is
- * already set. Contract section 6.3: constructing an unscoped query must not be possible through
+ * already set. Architecture section 6.3: constructing an unscoped query must not be possible through
  * the public interface of the data layer.
  *
  * THE TWO RULES EVERY METHOD FOLLOWS, and which a reviewer should check for:
@@ -146,7 +146,7 @@ export class DrizzleSalesOrderRepository implements SalesOrderRepository {
    * what makes two concurrent confirmations resolve to one: both read a draft at the same
    * version, both do the work, and the second matches no row and is told the order moved under
    * it. Section 10.2 does not list sales order rows among those needing a pessimistic lock, so
-   * this is the optimistic mechanism the contract actually asks for here.
+   * this is the optimistic mechanism section 10.1 asks for here.
    */
   async applyTransition(input: SalesOrderTransition): Promise<SalesOrderRecord> {
     const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
@@ -520,8 +520,8 @@ export class DrizzleDocumentNumberSequenceRepository
     const { tenantId, companyId } = requireCompanyScope(this.scope, 'Sales documents');
 
     // A plain read, with no lock. Allocation takes the lock inside the transaction that creates
-    // the document, and that is not this increment. A reader that took the lock here would
-    // serialise every caller that only wanted to know the prefix.
+    // the document, through `allocate`. A reader that took the lock here would serialise every
+    // caller that only wanted to know the prefix.
     const rows = await this.db
       .select()
       .from(documentNumberSequences)

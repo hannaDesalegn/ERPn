@@ -29,10 +29,10 @@ import type {
 /**
  * Every posting purpose the system recognises. A closed list, and a short one.
  *
- * Exactly the three that section 18.2, as amended on 2026-09-15, says the first customer invoice
- * posting writes. Payables, inventory, cost of goods sold, the two interim accounts section 9.4
- * requires and the exchange difference account section 9.7 will need are each added by the
- * increment that posts to them, which is the increment that can also say which account they mean.
+ * Exactly the three that customer invoice posting writes (section 9.8). Payables, inventory, cost
+ * of goods sold, the two interim accounts of section 9.4 and the exchange difference account of
+ * section 9.7 are each added with the module that posts to them, which is also the module that
+ * can say which account they mean.
  */
 export const POSTING_ACCOUNT_PURPOSES = [
   'accounts_receivable',

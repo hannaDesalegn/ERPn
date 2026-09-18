@@ -15,7 +15,7 @@ import type { ID, Money, Stamps } from './primitives';
 
 /**
  * Unit of measure. Real ERPs support conversion (buy in cases of 12, sell in
- * units). We model only the display unit today; a `UomConversion` type is the
+ * units). Only the display unit is modelled; a `UomConversion` type is the
  * natural extension point.
  */
 export type Uom = 'unit' | 'kg' | 'litre' | 'box' | 'case' | 'metre';

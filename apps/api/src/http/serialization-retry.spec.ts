@@ -2,7 +2,7 @@
  * Retrying only what section 10.3 says to retry.
  *
  * Two properties matter and they pull against each other. A concurrency refusal must be tried
- * again, because the contract requires it and because the transaction rolled back leaving
+ * again, because section 10.3 requires it and because the transaction rolled back leaving
  * nothing behind. Everything else must not, because a refusal, a validation failure and a
  * version conflict are answers, and repeating the work behind one of them is how a retry turns
  * an honest refusal into three, or worse, into an operation the caller was told not to do.

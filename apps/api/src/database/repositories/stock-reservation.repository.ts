@@ -10,8 +10,8 @@
  * check so that a call from anywhere else fails review on the name.
  *
  * RELEASE IS THE SAME SHAPE. `releaseUnderBalanceLock` stamps one row and says nothing about
- * whether the balance row for its key was locked first. Section 12.3's ruling of 2026-09-13 made
- * release a stamp rather than a delete, and migration 0012 grants UPDATE and still no DELETE, so
+ * whether the balance row for its key was locked first. Section 12.3 makes release a stamp rather
+ * than a delete, and migration 0012 grants UPDATE and still no DELETE, so
  * the record of what was held survives every release the application can perform.
  */
 

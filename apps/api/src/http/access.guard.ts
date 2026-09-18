@@ -1,7 +1,7 @@
 /**
  * The single gate every request passes through.
  *
- * Contract section 6.2: deny by default. Registered globally rather than per controller, because
+ * Architecture section 6.2: deny by default. Registered globally rather than per controller, because
  * a guard you have to remember to apply is a guard that will be forgotten on the two hundredth
  * route, and section 6.3 makes the same argument about scoped queries: the safe shape is the one
  * where forgetting produces a refusal rather than an opening.

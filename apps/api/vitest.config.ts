@@ -6,7 +6,7 @@ import { swcPlugin } from './vitest.shared.js';
  *
  * Integration tests live in `*.int.spec.ts` and are excluded here so that `npm run test`
  * stays runnable with nothing else started. They run under vitest.integration.config.ts,
- * which requires a real PostgreSQL, as contract sections 13.1 and 13.2 demand.
+ * which requires a real PostgreSQL, as architecture sections 13.1 and 13.2 demand.
  */
 export default defineConfig({
   plugins: [swcPlugin()],

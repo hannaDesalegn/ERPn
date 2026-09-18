@@ -1,7 +1,7 @@
 /**
  * Creating a sales order draft.
  *
- * A draft and nothing else. Contract section 12.2 makes confirmation the irreversible moment
+ * A draft and nothing else. Architecture section 12.2 makes confirmation the irreversible moment
  * that validates, authorizes, applies side effects, allocates a number, writes an audit record
  * and commits, all in one transaction or none of it. None of that is here: a draft is editable
  * and has no side effects, nothing is reserved, nothing is owed, nothing is posted.
@@ -130,12 +130,10 @@ export class SalesOrderDraftError extends Error {
 /**
  * A sales order as a screen needs it: the document, its lines, and the names it points at.
  *
- * EXACTLY WHAT THE DATABASE HOLDS, AND NOTHING ELSE. Three things the current detail screen shows
- * have no source here and are deliberately absent rather than invented. The invoiced total needs
- * an invoices table that does not exist. The related documents need the link table section 12.4
- * describes, which also does not exist and which that section is explicit must not be a stored
- * array. Notes are not modelled on a sales order at all. Section 16.1 removes the fixture layer
- * per module as endpoints land, and those three belong to modules whose endpoints have not.
+ * EXACTLY WHAT THE DATABASE HOLDS, AND NOTHING ELSE. The related documents need the link table
+ * section 12.4 describes, which does not exist and which that section is explicit must not be a
+ * stored array. Notes are not modelled on a sales order at all. Both are absent rather than
+ * invented.
  *
  * FIGURES ARE DECIMAL STRINGS, as section 4.3 requires. Converting them to whatever a client
  * renders is the client's boundary, not this one.
@@ -283,10 +281,9 @@ export class SalesOrderService {
    * what makes an edit a rewrite rather than a reconciliation.
    *
    * A REPLACEMENT, NOT A PATCH. The caller sends the draft as it should now be, and every line is
-   * priced from master data and the submitted quantity exactly as creation prices it. The contract
-   * does not specify a request shape; this one is chosen because pricing already recomputes each
-   * line from scratch, so a replacement and a patch would run the same code with the patch adding
-   * a per line vocabulary the contract never describes.
+   * priced from master data and the submitted quantity exactly as creation prices it. Pricing
+   * already recomputes each line from scratch, so a replacement and a patch would run the same
+   * code, and a patch would only add a per line vocabulary.
    *
    * THE VERSION IS THE WHOLE CONCURRENCY STORY, per section 10.1. The header write carries the
    * version the caller read, so two people editing one draft resolve to one winner and the loser
@@ -294,9 +291,9 @@ export class SalesOrderService {
    * write, inside the same transaction, so a loser removes nothing: its update matched no row, it
    * threw, and the transaction that would have deleted the lines never committed.
    *
-   * NO AUDIT RECORD, AND THAT IS A RULING RATHER THAN AN OVERSIGHT. Section 7.1 says a change
+   * NO AUDIT RECORD, AND THAT IS A RULE RATHER THAN AN OVERSIGHT. Section 7.1 says a change
    * cannot exist without its audit record, and section 12.2 says a draft has no side effects. Read
-   * together, and as the project lead settled on 2026-09-13, document audit begins at confirmation:
+   * together, as section 7.1 states, document audit begins at confirmation:
    * creating and editing a draft are pre-confirmation mutations of something that has promised
    * nobody anything, and confirmation is the lifecycle boundary where the trail starts. Creation
    * already ships unaudited and stays that way; this matches it rather than introducing a trail
@@ -449,8 +446,8 @@ export class SalesOrderService {
           salesRepUserId: input.salesRepUserId ?? null,
           orderDate: input.orderDate,
           expectedDeliveryDate: input.expectedDeliveryDate ?? null,
-          // From the company, never from the caller. A caller-chosen currency would be a
-          // caller-chosen exchange rate one increment later.
+          // From the company, never from the caller. A caller-chosen currency would become a
+          // caller-chosen exchange rate as soon as multi-currency exists.
           currency: company.baseCurrency,
         });
 
@@ -527,7 +524,7 @@ export class SalesOrderService {
    * scoped order read whether the caller can see the document before asking what happened to it.
    * Another company's order is not found, exactly as the detail read answers, per section 6.1.
    *
-   * A DRAFT HAS AN EMPTY TRAIL, and that is the ruling rather than a gap. Document audit begins
+   * A DRAFT HAS AN EMPTY TRAIL, and that is the rule rather than a gap. Document audit begins
    * at confirmation, so an order nobody has confirmed has nothing recorded about it and the
    * answer is an empty list rather than an invented entry.
    *

@@ -70,7 +70,7 @@ export function SalesOrderDetailPage() {
   /**
    * One idempotency key per intent, not per attempt.
    *
-   * Contract section 11 is explicit about this: pressing the button once produces one key however
+   * Architecture section 11 is explicit about this: pressing the button once produces one key however
    * many times the request is transmitted. So the key is made when this order is opened and reused
    * by every retry, which is what lets the server tell a repeated intent from a new one. Making a
    * fresh key inside the click handler would turn each retry into a new intent and defeat the
@@ -208,7 +208,7 @@ export function SalesOrderDetailPage() {
   const isDraft = so.status === 'draft';
   const isCancelled = so.status === 'cancelled';
   /**
-   * The two states section 12.3's ruling permits cancelling from.
+   * The two states section 12.3 permits cancelling from.
    *
    * Presentation, not enforcement. The server refuses the same request whatever this drew,
    * and section 12.1’s table is the authority. This exists so the interface does not offer
@@ -286,8 +286,8 @@ export function SalesOrderDetailPage() {
             )}
             {/*
               From a confirmed order, which is the one state the server invoices from. An invoice
-              may be raised before any delivery: the posting ruling bills what the customer agreed
-              to, and deliveries do not exist yet.
+              may be raised before any delivery: section 9.8 bills what the customer agreed to, and
+              deliveries are not implemented.
             */}
             {can('invoices:create') && so.status === 'confirmed' && (
               <Button
@@ -327,7 +327,7 @@ export function SalesOrderDetailPage() {
         no such document exists. So the step between pressing the button and the request is a
         real one rather than ceremony.
 
-        The reason is optional, which is what the ruling says. It is stored in the audit
+        The reason is optional, per section 12.3. It is stored in the audit
         record and nowhere else, so the field says so rather than implying it becomes a
         property of the order.
       */}
@@ -431,11 +431,9 @@ export function SalesOrderDetailPage() {
                   screen already uses for the same absence. */}
               <Field label="Sales rep">{so.salesRep?.name ?? 'Not assigned'}</Field>
               {/*
-                Not on the order and not asked for. Payment terms are a property of the
-                customer, the customer module has no read endpoint, and the field used to hold
-                a skeleton that never resolved because the query behind it could not succeed.
-                An empty cell is what the project rules call for while a value is absent; a
-                loading state that never ends is a claim that something is coming.
+                No payment terms. They are a property of the customer, and the customer module
+                has no read endpoint. A loading state that never ends would be a claim that
+                something is coming, so the field is absent.
               */}
               <Field label="Currency">{so.currency}</Field>
               <Field label="Fulfilment">
@@ -580,14 +578,9 @@ export function SalesOrderDetailPage() {
             wanted a balance, a credit limit, an address and payment terms, and the sales
             order response carries an identifier and a name, because that is what a document
             snapshots. Everything else belongs to a customer read endpoint that does not
-            exist: section 16.1 removes the fixture layer per module as endpoints land, and
-            the customer module has a list and nothing else.
-
-            Until this was changed the page asked the fixture layer about a real backend
-            identifier. The lookup could never match, so the card drew its header over
-            nothing. Mixing real document data with fixture party data on one screen is the
-            failure worth avoiding here, and the smallest correct answer is to show what the
-            document actually carries and link to the rest.
+            exist. Asking the fixture layer about a real backend identifier could never
+            match, and mixing real document data with fixture party data on one screen is the
+            failure worth avoiding, so this shows what the document actually carries.
           */}
           <Card padded={false}>
             <CardHeader title="Customer" />

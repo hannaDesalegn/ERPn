@@ -1,9 +1,8 @@
 /**
  * Posting a customer invoice.
  *
- * Section 12.2's irreversible moment for the second document in this system, and section 17.5's
- * slice 3: one atomic transaction writing the status change, the journal entry and its lines, the
- * audit record and the document number. Like confirmation, it is composition: the transition
+ * Section 12.2's irreversible moment for the customer invoice: one atomic transaction writing the
+ * status change, the journal entry and its lines, the audit record and the document number. Like confirmation, it is composition: the transition
  * table, the grants read, the gapless allocator, the journal repository and the audit append were
  * each built and proved on their own, and none of them is reimplemented here.
  *
@@ -19,9 +18,8 @@
  *   5. write the audit record                                   repositories.audit.append
  *   6. commit                                                   the caller's unit of work
  *
- * WHAT IT DOES NOT WRITE, and this is a ruling rather than an omission. Section 18.2 on
- * 2026-09-15: the first customer invoice posting writes accounts receivable, revenue and tax and
- * nothing else. No stock movement, no balance change, no released reservation, no cost of goods
+ * WHAT IT DOES NOT WRITE, and this is a rule rather than an omission. Section 9.8: customer invoice
+ * posting writes accounts receivable, revenue and tax and nothing else. No stock movement, no balance change, no released reservation, no cost of goods
  * sold, no delivery interim entry, no delivered quantity. An invoice may be posted before a
  * delivery exists, and an invoiced but undelivered order keeps its reservation because only
  * delivery or cancellation releases one. A reader looking for the inventory half of this
@@ -149,7 +147,7 @@ export interface PostedCustomerInvoice {
 /** The capability section 6.2 requires for this operation, from the existing catalogue. */
 const REQUIRED_PERMISSION = 'invoices:post';
 
-/** The three purposes section 18.2 rules this posting writes, and no fourth. */
+/** The three purposes this posting writes, per section 9.8, and no fourth. */
 const RECEIVABLE = 'accounts_receivable';
 const REVENUE = 'sales_revenue';
 const TAX = 'tax_payable';
@@ -204,8 +202,8 @@ export async function postCustomerInvoice(
   }
 
   // Every source order, re-read now rather than trusted from when the draft was raised. An order
-  // cancelled in the meantime cannot be billed, and section 18.2 keeps the invoiceable set to
-  // confirmed orders for the reasons the draft operation states.
+  // cancelled in the meantime cannot be billed, and the invoiceable set is confirmed orders only,
+  // for the reasons the draft operation states.
   const orders = new Map<string, SalesOrderRecord>();
   for (const orderId of [...new Set(lines.map((line) => line.sourceSalesOrderId))]) {
     const order = await repositories.salesOrders.findById(orderId);
@@ -229,7 +227,7 @@ export async function postCustomerInvoice(
   //
   // WHAT IS RE-READ AND WHAT IS NOT. The unit price and the discount are the commercial terms the
   // customer agreed to, snapshotted from the order line when the draft was raised, and section
-  // 18.2 on 2026-09-16 rules that posting does not replace them with today's catalogue. The tax
+  // 3.4 rules that posting does not replace them with today's catalogue. The tax
   // rate is the exception section 2.9 names: it goes through one resolver, and the rate on a
   // draft is a working figure the committing transaction recomputes.
   //
@@ -326,8 +324,8 @@ export async function postCustomerInvoice(
 
   // ---- Step 3: apply the side effects. -------------------------------------------------
   //
-  // THE QUANTITY FIRST, AND THIS IS THE AUTHORITATIVE CONCURRENCY POINT. Section 18.2 on
-  // 2026-09-16: a draft claims nothing, so two drafts may describe the same remainder and posting
+  // THE QUANTITY FIRST, AND THIS IS THE AUTHORITATIVE CONCURRENCY POINT. Section 12.2: a draft
+  // claims nothing, so two drafts may describe the same remainder and posting
   // is where it is validated and consumed. The remainder is tested inside the statement that
   // consumes it, so two postings racing for one remainder resolve to one winner and one refusal,
   // and neither can read a figure that another transaction is about to change.
@@ -367,7 +365,7 @@ export async function postCustomerInvoice(
   // transaction: a rollback after this point leaves the number unissued rather than skipped.
   const allocated = await allocateCustomerInvoiceNumber(repositories);
 
-  // ---- Still step 3: the entry section 17.5 asks for. ----------------------------------
+  // ---- Still step 3: the journal entry. -------------------------------------------------
   //
   // Receivables debited for the gross, revenue credited for the net, tax credited for the
   // difference. The three figures are the invoice's own totals, so the entry equals the document

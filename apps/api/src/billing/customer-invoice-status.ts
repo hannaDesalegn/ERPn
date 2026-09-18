@@ -1,15 +1,15 @@
 /**
  * What states a customer invoice can be in, and which moves between them are legal.
  *
- * Contract section 12.1 requires the legal transitions to be declared in an explicit transition
+ * Architecture section 12.1 requires the legal transitions to be declared in an explicit transition
  * table, enforced server side, with an illegal transition answering a domain error that names the
  * current state and the attempted one rather than a generic failure. This file is that table for
  * the invoice, in the shape `sales/sales-order-status.ts` already established for the order.
  *
  * NO TRANSITION IS PERFORMED HERE. This decides legality and nothing else. Writing the status,
  * allocating the number, posting the journal entry and recording the audit are the posting
- * transaction's work, and section 12.2 is emphatic that it does all of them or none. That
- * transaction is the next increment; nothing in this one performs a transition at all.
+ * transaction's work (`post-customer-invoice.ts`), and section 12.2 requires it to do all of them
+ * or none.
  *
  * WHY THE UNION IS TWO VALUES. The domain model in `apps/web/src/domain/billing.ts` lists
  * `partially_paid`, `paid` and `overdue` beside `draft` and `posted`. All three are conclusions
@@ -20,17 +20,10 @@
  * decision, and it can make it when it has the allocations to derive them from.
  *
  * WHY `cancelled` IS NOT HERE EITHER, and it is a different reason. Section 12.3 requires a
- * cancellation rule per document type, and the invoice has none. That section rules the sales
- * order's cancellation explicitly and then leaves cancelling a document that has posted to the
- * ledger as a `[FUT]` for the accounting slice, saying nothing at all about abandoning a draft.
- * Admitting the value now would be inventing the rule that section reserves, in the schema, where
- * it is hardest to revisit. The sales order carried the same omission until 2026-09-13.
- *
- * WHY `draft` TO `posted` IS DECLARED THOUGH NOTHING CAN PERFORM IT. Section 17.5 states the move
- * in as many words: slice 3 posts the customer invoice, in one atomic transaction writing the
- * status change, the journal entry and its lines, the audit record and the document number. The
- * contract describing a move is the bar `draft` to `confirmed` had to meet on the sales order, and
- * this meets it. What the table must not contain is a move the contract has not described.
+ * cancellation rule per document type, and no rule exists for the invoice: a posted invoice is
+ * corrected by a credit note, which is a new document, and abandoning a draft is not specified.
+ * Admitting the value without a rule would put an unspecified behaviour in the schema, where it is
+ * hardest to revisit.
  *
  * DENY BY DEFAULT. A pair that is not listed is illegal, in the same posture section 6.2 takes for
  * authorization. Forgetting to add one leaves the move refused rather than silently permitted.
@@ -57,7 +50,7 @@ export type CustomerInvoiceStatus = (typeof CUSTOMER_INVOICE_STATUSES)[number];
 export const CUSTOMER_INVOICE_TRANSITIONS: Readonly<
   Record<CustomerInvoiceStatus, readonly CustomerInvoiceStatus[]>
 > = {
-  // Section 17.5's posting transaction, which is the next increment. Nothing performs it yet.
+  // Performed by the posting transaction in `post-customer-invoice.ts`.
   draft: ['posted'],
   // Refused on purpose, not omitted. Correction is a credit note, per section 12.3.
   posted: [],

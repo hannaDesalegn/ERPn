@@ -1,39 +1,20 @@
-# Production Architecture
+# Architecture
 
-**Status:** active architectural contract
-**Created:** 2026-09-09
-**Applies to:** the entire ERP system, backend and frontend
+The design specification for the ERP: multi-tenancy, the backend and frontend boundary, database
+principles, authentication, authorization, audit, inventory and accounting rules, concurrency,
+idempotency, the document lifecycle, testing, security and infrastructure.
 
----
-
-## How to use this document
-
-This document is the architectural contract for the project. It exists because the
-repository currently contains a well built frontend over fixture data, and the goal is a
-production ERP for wholesale distribution. Those two things have very different
-requirements, and the gap between them has to be crossed deliberately rather than by
-accretion.
-
-Three rules govern it.
-
-1. **Check before you build.** Before implementing a feature, check the proposal against
-   this document. If the proposal violates a `[DEC]` or fails a `[REQ]`, say so before
-   writing code, and either change the proposal or amend this document. Silently building
-   something that contradicts a clause here is the failure mode this file exists to prevent.
-2. **Temporary means temporary.** Every `[TEMP]` clause carries a removal trigger. A `[TEMP]`
-   with no trigger is a defect in this document.
-3. **Amendments are explicit.** Changing a `[DEC]` requires an entry in section 18 stating
-   what changed, when, and why. Decisions are allowed to change. Drifting away from them
-   without saying so is not.
+Source code comments cite this document by section number, for example "section 6.3".
 
 ### Tag legend
 
 | Tag | Meaning |
 |---|---|
-| `[REQ]` | **Production requirement.** Must be true before real users and real money touch the system. Non negotiable. |
-| `[DEC]` | **Architectural decision.** Decided now and binding. Changing it requires an amendment in section 18. |
-| `[TEMP]` | **Temporary development or mock behaviour.** Acceptable today, carries an explicit removal trigger. Must never become load bearing. |
-| `[FUT]` | **Future consideration.** Deliberately not decided yet. Recorded so it is not forgotten and so today's design does not foreclose it. |
+| `[REQ]` | **Requirement.** Must hold before real users and real money touch the system. |
+| `[DEC]` | **Architectural decision.** Binding for the codebase. |
+| `[FUT]` | **Future consideration.** Deliberately not decided yet, recorded so today's design does not foreclose it. |
+
+Where the implementation does not yet meet a `[REQ]` or `[DEC]`, section 16 says so.
 
 ### Contents
 
@@ -52,9 +33,8 @@ Three rules govern it.
 13. Testing
 14. Security
 15. Infrastructure and deployment
-16. Current state: what is temporary, and what must never be faked
-17. First vertical slice
-18. Open questions and amendment log
+16. Implementation status and known limitations
+17. Security acceptance criteria
 
 ---
 
@@ -67,17 +47,19 @@ domain, the data and every business rule. Clients render a view of what their se
 permitted to see, and request operations that the backend validates, authorizes, performs
 and records.
 
-`[DEC]` The repository becomes a monorepo with three units:
+`[DEC]` The repository is a monorepo:
 
 ```
 apps/api            backend: domain, business rules, persistence, authorization, audit
-apps/web            the existing React application, re-pointed at the API
-packages/contracts  request and response schemas, generated client types, shared enums
+apps/web            the React application, reading the API through its service layer
 ```
 
-The existing frontend is an asset, not a prototype to discard. It already treats every read
-as asynchronous, handles loading, empty and error states, and renders behind permission
-checks. Re-pointing its service layer at HTTP is a contained change and is the intended path.
+`[FUT]` A shared `packages/contracts` unit holding request and response schemas, generated
+client types and shared enums, per section 1.3.
+
+The frontend treats every read as asynchronous, handles loading, empty and error states, and
+renders behind permission checks. Its service layer is the only code that knows where data
+comes from, so moving a screen from fixtures to the API is a contained change.
 
 ### 1.2 Stack
 
@@ -94,7 +76,7 @@ produces wrong numbers rather than crashes, which is worse.
 `[DEC]` Schema and migrations are owned by a migration tool with versioned, reviewed,
 forward only migration files. Migrations are never generated implicitly at application start.
 
-`[DEC]` *Ratified 2026-09-10. Final ruling on migration tooling.* Migrations are handwritten SQL
+`[DEC]` Migrations are handwritten SQL
 files, versioned and committed, applied by a small runner built on the existing `pg` dependency.
 `drizzle-orm` is retained for typed schema definitions and application queries. `drizzle-kit` is
 not used.
@@ -102,9 +84,9 @@ not used.
 Two reasons, and the second matters more than the first.
 
 The immediate one is that `drizzle-kit` depends on the deprecated `@esbuild-kit` packages, which
-carry four moderate advisories that npm overrides cannot resolve in this workspace. Sections 14.8
-and 14.9 require the audit to pass without suppression, and the precedent set with the Express
-adapter is to remove a dependency path rather than whitelist it.
+carry moderate advisories that npm overrides cannot resolve. Sections 14.8 and 14.9 require the
+dependency audit to pass without suppression, and the approach taken with the HTTP adapter is to
+remove a dependency path rather than whitelist it.
 
 The structural one is that this schema needs things a schema DSL cannot express. Role creation,
 `GRANT` and `REVOKE`, row level security policies, check constraints with domain specific
@@ -113,7 +95,7 @@ tenant. Most of every migration here would be handwritten SQL regardless, so gen
 remainder buys little and costs a tool that must be kept clean.
 
 `[REQ]` The cost of this choice is drift between the SQL and the Drizzle definitions, and it is
-paid for by a test rather than by discipline. The schema verification required by criterion 28
+paid for by a test rather than by discipline. The schema verification required by criterion 29
 compares the **running** database against the Drizzle definitions, not against the migration
 source, so a hand edit to either side that the other does not match fails the build. Generation
 would not have caught this either, since a generated migration can still be hand edited after.
@@ -125,7 +107,7 @@ that would have silently diverged environments becomes a failed deployment inste
 `[REQ]` The runner connects as the owning role, never the application role, per section 7.1. It
 is a separate gated step and never runs at application start, per section 15.4.
 
-`[DEC]` *Ratified 2026-09-09.* The stack is React with TypeScript and Vite on the client,
+`[DEC]` The stack is React with TypeScript and Vite on the client,
 NestJS with TypeScript on the server, PostgreSQL for data, and Drizzle for schema, migrations
 and queries.
 
@@ -140,14 +122,14 @@ constraints, common table expressions for ledger queries, and row level security
 all first class concerns here, and a query builder that stays close to SQL serves them better
 than an abstraction that hides them.
 
-`[DEC]` *Ratified 2026-09-09.* The NestJS HTTP adapter is Fastify, not Express. The reason is
+`[DEC]` The NestJS HTTP adapter is Fastify, not Express. The reason is
 the dependency audit required by sections 14.8 and 15.4: the Express platform package depends
 on multer, which carries unpatched high severity advisories that npm overrides did not resolve,
 and the product has no upload surface to justify carrying it. Removing the dependency path was
 preferred over suppressing the finding. Fastify binds only to the interface it is given, so the
 API takes a `HOST` setting defaulting to loopback, and a container must set it explicitly.
 
-`[DEC]` Redis is introduced only where it earns its place, and not in slice 1. The likely uses
+`[DEC]` Redis is introduced only where it earns its place, and is not used today. The likely uses
 are rate limiting counters, background job queues, and caching. Sessions stay in PostgreSQL
 until measurement shows a reason to move them, because a session store that can be queried and
 joined alongside users and audit records is easier to operate and to reason about.
@@ -164,8 +146,6 @@ the other's types.
 
 ### 1.4 What this architecture is not
 
-*Amended 2026-09-09. The original text said the system was being built for one business. That
-is no longer true; see section 2.*
 
 `[DEC]` The system is configuration driven within a fixed schema. Each company configures the
 domains listed in section 2.9 through the administration UI, and that configuration is data.
@@ -173,7 +153,7 @@ domains listed in section 2.9 through the administration UI, and that configurat
 `[DEC]` It is not a metadata driven platform. Odoo and ERPNext let a customer add a field, a
 doctype or a workflow without a code change, which is a much larger commitment: it means user
 defined schema, a form renderer driven by metadata, and migrations that cannot assume the shape
-of a table. We are not building that. A customer who needs a field the product does not have
+of a table. This system does not do that. A customer who needs a field the product does not have
 gets it in a release, not by creating it themselves.
 
 The distinction to hold onto: **configurable within a schema we control**, not **extensible into
@@ -187,9 +167,8 @@ pattern of their requests is known, rather than guessing now.
 
 ## 2. Multi-tenancy and company configuration
 
-This section was added on 2026-09-09 when the product goal was confirmed. It is the defining
-characteristic of the system and it constrains almost every other section. Where it conflicts
-with an earlier clause, this section wins and the earlier clause has been amended.
+Multi-tenancy is the defining characteristic of the system and constrains almost every other
+section.
 
 ### 2.1 The product shape
 
@@ -203,17 +182,17 @@ never a deployment.
 
 ### 2.2 Two words that must not be confused
 
-The reference systems separate two concepts that are easy to blur, and we adopt the same
-separation.
+The reference systems separate two concepts that are easy to blur, and this system adopts the
+same separation.
 
 | Concept | Meaning here |
 |---|---|
 | **Tenant** | An independent customer of the product. Complete isolation. No user, document or configuration is ever shared or visible across tenants. |
 | **Company** | A legal entity inside a tenant. A single customer may run two trading entities that share a user directory and possibly a product catalogue. |
 
-`[DEC]` The system models both. For the first release a tenant contains exactly one company,
-and the schema carries both identifiers from the first migration, so that a customer acquiring a
-second entity is a configuration change rather than a migration.
+`[DEC]` The system models both, and a tenant may contain several companies. The schema carries
+both identifiers on every tenant-scoped table, so a customer acquiring a second entity is a
+configuration change rather than a migration.
 
 `[FUT]` Intercompany transactions, consolidated reporting and shared master data between
 companies inside one tenant. Recorded now because the identifiers exist; not built until asked.
@@ -241,7 +220,7 @@ permission.
 
 ### 2.4 Tenant isolation strategy
 
-`[DEC]` *Ratified 2026-09-09, closing open question 5.* A shared schema, with `tenant_id` and
+`[DEC]` A shared schema, with `tenant_id` and
 `company_id` on every business table, mandatory scoping in the data access layer, and PostgreSQL
 row level security as a second, database enforced layer.
 
@@ -256,7 +235,6 @@ covers it, contradicts this clause.
 `BYPASSRLS`, or a table owner, is exempt from its own policies, so the second layer would be
 silently absent. Migrations run as a different role from the application, per section 7.1.
 
-*Added 2026-09-09, ruling on how policies learn the current tenant.*
 
 `[DEC]` The tenant and company context reaches the database as transaction local settings, set
 with `SET LOCAL` at the start of the transaction from the values resolved out of the session.
@@ -278,7 +256,6 @@ consequences that must both hold:
 rows rather than all rows. Section 14.9 requires the absence of a control to be tested, and this
 is the case where getting it backwards is worst.
 
-*Amended 2026-09-10, adding a third setting alongside the tenant and company ones.*
 
 `[REQ]` The acting person also reaches the database as a transaction local setting. It is set
 from the same session-derived scope, it is empty for operations that have no person behind them,
@@ -310,14 +287,13 @@ only for multiple legal entities inside a single customer's database. Their mode
 their distribution model: both are self-hostable products where a customer frequently runs their
 own instance, so a database boundary per customer is the natural unit.
 
-We are choosing differently because we operate the deployment rather than shipping it. A shared
-schema gives one migration to run, one place to fix a bug, and onboarding that costs a row
-rather than a provisioning job. The price is that isolation becomes a property of our code
-rather than of the database, which is precisely why row level security is part of the
-recommendation and not an optional extra.
+This system differs because it is operated as one deployment rather than shipped for customers
+to host. A shared schema gives one migration to run, one place to fix a bug, and onboarding that
+costs a row rather than a provisioning job. The price is that isolation becomes a property of the
+application code rather than of the database, which is precisely why row level security is a
+required second layer rather than an optional extra.
 
-`[REQ]` Whichever option is approved, the isolation boundary must be enforced below the
-application layer as well as inside it. Defence in depth is not negotiable when the data is
+`[REQ]` The isolation boundary is enforced below the application layer as well as inside it. Defence in depth is not negotiable when the data is
 other companies' books.
 
 ### 2.5 Company context is resolved server side
@@ -329,7 +305,6 @@ body, a query parameter, a path segment, a client supplied header, or any fronte
 company against the user's membership rows, updates the session, writes an audit record, and
 only then serves data from the new company.
 
-*Expanded 2026-09-10, when the increment that implements this found the sequence underspecified.*
 
 `[REQ]` A session has two states, and both are legitimate. Authenticated with no company, which
 is where every session begins, and authenticated inside one company. The first can read identity
@@ -377,7 +352,7 @@ role they hold elsewhere. Roles do not travel between companies.
 rather than the membership.
 
 The alternative, an account per company, was rejected because it forces a person who works for
-two of our customers, such as an external accountant, to hold two credentials, and it makes
+two customers of the product, such as an external accountant, to hold two credentials, and it makes
 credential compromise harder to reason about rather than easier.
 
 ### 2.7 Roles are per company, capabilities are not
@@ -393,7 +368,6 @@ else.
 grant a capability they do not themselves hold. This is the privilege escalation rule from
 section 6.6, applied inside the tenant boundary.
 
-*Added 2026-09-09, ruling on how the catalogue is stored.*
 
 `[DEC]` A granted capability is stored as its permission string, validated against the compiled
 catalogue on write. There is no `permissions` table. A seeded table with a foreign key would
@@ -442,8 +416,6 @@ administration UI, and never a code change:
   throttling, is deployment level configuration; see section 5.3.
 - chart of accounts, and the accounts that document postings map to
 
-*Amended 2026-09-11, resolving where the authoritative tax rate lives. Section 3.3 required the
-server to recompute tax from its own master data and no section said which master data.*
 
 `[DEC]` **The authoritative tax rate is a standard rate held per company, alongside the other
 fiscal settings above.** Today there is exactly one, which is what section 9.7 means when it puts
@@ -472,9 +444,8 @@ makes the future engine an addition rather than a rewrite: when jurisdictions, e
 reverse charge arrive under section 9.7, the resolution changes inside that function and the
 stored snapshot on every past line is untouched.
 
-`[FUT]` Tax registration numbers on the company and on each party already exist in the domain
-model and are not yet persisted. They are required on a legally valid invoice and arrive with
-invoice posting rather than here.
+`[REQ]` Tax registration numbers are held on the company and on each customer, because a
+legally valid invoice prints them.
 
 `[DEC]` Configuration is validated against the same rules as any other write. A company cannot
 configure itself into an invalid state, for example a numbering series that would produce
@@ -543,18 +514,20 @@ stated rounding tolerance.
 `[DEC]` Persistence models and read models are different shapes and are not unified.
 
 Persistence models are normalised: a stock movement row stores a product id, not a product
-name. Read models are denormalised for display and are what the API returns. The current
-`src/domain` types are read models, and after the split they live in `packages/contracts` as
-API contracts rather than being described as the persistence specification.
+name. Read models are denormalised for display and are what the API returns. The frontend's
+`src/domain` types are read models, not the persistence specification.
 
 `[REQ]` Denormalised text on a persisted row is permitted only where it is a legal snapshot
 of a past agreement. An invoice line description is frozen correctly, because it records what
 the customer was billed for. A product name on a stock movement is a cache, it goes stale on
 rename, and it belongs in the read model instead.
 
-`[TEMP]` `src/domain` currently serves as both the specification and the frontend's types.
-**Removal trigger:** the monorepo split, at which point it becomes a consumer of
-`packages/contracts` and the server owns the persistence schema.
+`[DEC]` The price an invoice bills is the one its source sales order line agreed. Unit price and
+discount are copied from the order line when the invoice draft is raised, and posting validates
+current state without replacing them: a catalogue price that changed after the order was agreed
+never moves an invoice. The tax rate is not copied, because section 2.9 sends every document line
+through one resolver and makes the rate on a draft a working figure the committing transaction
+recomputes.
 
 ---
 
@@ -592,8 +565,6 @@ updated_at     timestamptz
 updated_by     user id
 ```
 
-*Amended 2026-09-10. `version` was previously listed above without qualification, which the
-first migration could not satisfy for three tables where the column would have had no reader.*
 
 `[REQ]` **Mutable** tables additionally carry `version integer`, for the optimistic locking in
 section 10.1. A table is mutable when a row can be updated after it is written, which is the
@@ -607,7 +578,7 @@ added later inherits it only if the same reasoning applies:
 | Association tables, insert and delete only | A row is created or removed, never edited, so there is no update to lose. Adding a column to hold a number nobody increments invites a future contributor to trust it. |
 | Append-only tables | Rows are never updated at all. `audit_events` goes further: section 7.1 revokes `UPDATE` and `DELETE` from the application role, so an update is refused by the database before optimistic locking could apply. |
 | Tables where `updated_at` never changes | Same argument, stated generally. |
-| **Ephemeral operational state where last write wins is the explicit concurrency model** | Added 2026-09-10. See the conditions below. `sessions` is the current and only example. |
+| **Ephemeral operational state where last write wins is the explicit concurrency model** | See the conditions below. `sessions` is the only example. |
 
 **The fourth shape, deliberately narrow.** `sessions.last_seen_at` is refreshed by nearly every
 request, and two parallel requests from one user updating it are both correct. Optimistic locking
@@ -654,8 +625,8 @@ currency      char(3), stored alongside every amount
 
 The reason for split precision is concrete to this business. A distributor sells cable ties
 at a fraction of a cent per unit inside a pack of one thousand, and buys at four or more
-decimal places from a supplier price list. Two decimal places on unit prices, which is what
-the current frontend model assumes, loses money on the first real price list. ERPNext and
+decimal places from a supplier price list. Two decimal places on unit prices loses money on the
+first real price list. ERPNext and
 Business Central both carry higher precision on unit prices than on document totals for this
 exact reason.
 
@@ -666,10 +637,6 @@ a JavaScript `number` for money.
 
 `[REQ]` Rounding is explicit, stated per operation, and applied at defined points only. Any
 rounding difference on a document is allocated to a stated line rather than silently absorbed.
-
-`[TEMP]` The frontend currently models money as integer minor units at two decimal places in
-`lib/money.ts`. **Removal trigger:** adoption of the contracts package. This is a required
-migration, not an optional cleanup.
 
 ### 4.4 Quantities
 
@@ -686,15 +653,10 @@ draft that was never confirmed, and even then it is recorded in the audit log.
 
 ### 4.6 Tenant and company scope
 
-*Amended 2026-09-09. This was previously an assumption pending an open question. The product
-goal is now confirmed, so it is a requirement.*
 
-*Amended again 2026-09-09. The original wording said every business table without exception,
-which the global identity tables cannot satisfy. The exception is now named and closed rather
-than discovered per table.*
 
-`[REQ]` Every **tenant-scoped** table carries `tenant_id` and `company_id` from the first
-migration, and every query against it is scoped by both. See section 2.4 for the isolation
+`[REQ]` Every **tenant-scoped** table carries `tenant_id` and `company_id`, and every query
+against it is scoped by both. See section 2.4 for the isolation
 strategy and section 2.2 for why the two identifiers are distinct.
 
 `[REQ]` On a tenant-scoped table the scope columns are not nullable, and they are the leading
@@ -705,17 +667,16 @@ afterthought filter.
 Section 6.3 describes the mechanism; this clause states the invariant.
 
 **The global tables, which is a closed list.** These sit outside the tenant boundary because
-section 2.6 ratified one account per person reaching every company they belong to. Forcing scope
-columns onto them would mean a user row per tenant, which is the model that ruling rejected.
+section 2.6 gives one account per person, reaching every company they belong to. Forcing scope
+columns onto them would mean a user row per tenant, which is the model section 2.6 rejects.
 
 | Table | Why it is global |
 |---|---|
 | `tenants` | It is the boundary. It cannot be inside itself. |
 | `users` | One person, one account, one credential, per section 2.6 |
 | `sessions` | Belongs to a global user. Carries the active company as state rather than as scope. |
-| `auth_throttle` | Added 2026-09-10. Authentication precedes tenant resolution. See below. |
+| `auth_throttle` | Authentication precedes tenant resolution. See below. |
 
-*`auth_throttle` added 2026-09-10, following the amendment procedure this section requires.*
 
 **Why `auth_throttle` is necessarily global.** Section 5.2 requires login to be rate limited per
 address and per account. Both measurements happen before any tenant is known, and the per-address
@@ -729,26 +690,19 @@ reason: an audit row is written once and never revised, so a counter derived fro
 scan of every prior attempt rather than a single locked row, and the atomic upsert that makes the
 limiter unbypassable under concurrency has nowhere to happen.
 
-*Corrected 2026-09-10. This paragraph previously said the application could write authentication
-audit rows and never read one back. The second half was right and the first half was wrong: the
-select policy also governed the `RETURNING` clause of the insert, so those rows could not be
-written either. See the ruling in section 7.3.*
 
 `[REQ]` `auth_throttle` holds only authentication throttling state: a scope kind, a scope key, a
 counter, a window, and a lock expiry. It carries no business data and is never joined to a
-tenant-scoped table. If a future change would put anything else in it, that change needs its own
-amendment.
+tenant-scoped table. Anything else belongs elsewhere.
 
-*Corrected 2026-09-10. This clause first said the table carried no personal data beyond the
-address. It carries more than that, and the correction is recorded rather than quietly made.*
 
 `[REQ]` The scope key holds a client address for the address dimension and the lowercased
 attempted email for the account dimension. An attempted email is personal data whether or not it
 matches an account, so this table is in scope for retention and erasure obligations. Section 5.2
 requires the per-account dimension, and it cannot be counted without naming what was attempted.
 
-`[FUT]` A reaper that deletes rows whose window and lockout have both elapsed. Not built. Until
-it exists, a row survives its own usefulness, which is a retention question rather than a
+`[FUT]` A reaper that deletes rows whose window and lockout have both elapsed. Until it exists,
+a row survives its own usefulness, which is a retention question rather than a
 security one. A stale row grants nothing: an elapsed lock is reported as no lock, and an elapsed
 window restarts the count on the next failure.
 
@@ -757,8 +711,8 @@ clause below refuses the "it is not really tenant data" argument, and that refus
 exemption here rests on a narrower fact: this table is written before a tenant exists to scope it
 to, which is true of nothing else in the system except authentication itself.
 
-`[REQ]` This list is closed. A new global table requires an amendment naming it here and saying
-why scope cannot apply, because "it is not really tenant data" is the reasoning behind every
+`[REQ]` This list is closed. A new global table must be named here with the reason scope cannot
+apply, because "it is not really tenant data" is the reasoning behind every
 cross-tenant leak. Reference tables that are genuinely universal, meaning currency codes and
 country codes, remain a separate exception and are read only to the application.
 
@@ -786,7 +740,7 @@ volume justifies it. The schema should not make this harder than necessary.
 ### 5.1 Mechanism
 
 `[DEC]` Server side sessions. The client receives an opaque session identifier in a cookie
-with `HttpOnly`, `Secure` and `SameSite=Lax`. The session record lives in PostgreSQL.
+with `HttpOnly`, `Secure` and `SameSite=Strict`. The session record lives in PostgreSQL.
 
 `[DEC]` Not a JWT in local storage. Two reasons, both operational. An ERP must be able to
 terminate a session immediately when someone is dismissed or a credential is suspected
@@ -821,25 +775,20 @@ than trusted from a cookie attribute.
 `[REQ]` Logout invalidates the session server side. A replayed cookie after logout is
 rejected.
 
-*Added 2026-09-10, resolving a contradiction found while implementing authentication.*
 
 `[DEC]` **Authentication-time policy is deployment level configuration, not per-company.** That
 covers session idle and absolute lifetime, password rules, and login throttling thresholds.
 
-Section 2.9 lists security policies among the domains a company configures. Taken literally that
-is impossible for these three, because authentication happens before any company is known: at the
-moment a password is checked and a session is created, there is no company whose policy could
-apply. The two clauses could not both hold as written, so this one settles it for the
-authentication path and section 2.9 now points here.
+Authentication happens before any company is known: at the moment a password is checked and a
+session is created, there is no company whose policy could apply. Section 2.9's company security
+policies therefore start after a company is resolved.
 
 `[REQ]` The values are validated at startup alongside the rest of the configuration, per section
 15.2, so a malformed security setting fails the boot rather than the first login.
 
 `[FUT]` Per company overrides, applied after company context is resolved rather than at
 authentication. A company could then shorten its own session lifetime or raise its own password
-requirements, with the deployment value as the floor. This is deliberately not built now: it needs
-company context, which belongs to a later increment, and building half of it would mean a policy
-that applies to some sessions and not others depending on when it was read.
+requirements, with the deployment value as the floor.
 
 ### 5.4 Identity is separate from authorization
 
@@ -847,22 +796,18 @@ that applies to some sessions and not others depending on when it was read.
 are separate layers, and the user table carries an `external_subject_id` column from the
 first migration so an external identity provider can be introduced without restructuring.
 
-`[FUT]` Single sign on via OIDC. Pending the open question in section 18.1.
+`[FUT]` Single sign on via OIDC. In a multi-tenant product this is usually per tenant, with each
+customer bringing their own identity provider, which makes it tenant configuration rather than a
+global switch.
 
 `[FUT]` Multi factor authentication, required for roles that can approve spending, post to
 the ledger, or manage users.
 
-### 5.5 What is temporary today
+### 5.5 The frontend never chooses an identity
 
-`[TEMP]` `app/session.tsx` imports the user list from `mocks/reference.ts` and selects an
-identity from `localStorage`. The top bar role switcher is a review tool.
-**Removal trigger:** slice 1. The session provider fetches `/me`, the mocks import is
-deleted, and the switcher is either removed or gated behind a development flag that is
-compiled out of production builds.
-
-**This is production critical behaviour and must never be faked beyond slice 1.** A frontend
-that chooses its own identity is not an authentication system, and no amount of backend work
-later compensates for having built on it.
+`[REQ]` The frontend reads the signed-in user, the companies they may enter and their effective
+permissions from `/me`. It holds no user list, no role switcher and no way to become someone
+else. A frontend that chooses its own identity is not an authentication system.
 
 ---
 
@@ -870,11 +815,8 @@ later compensates for having built on it.
 
 ### 6.1 Four dimensions
 
-*Amended 2026-09-09. Tenant and company scope was added as the outermost dimension when the
-product goal was confirmed.*
 
 `[DEC]` Authorization has four dimensions, evaluated in this order, all enforced server side.
-The current permission model covers only the third.
 
 | Order | Dimension | Question | Example |
 |---|---|---|---|
@@ -894,8 +836,7 @@ companies hold.
 
 ### 6.2 Operation level
 
-`[DEC]` Role based access control with `resource:action` permission strings, carried forward
-from the existing model. The split between `create` and the state changing verbs `confirm`,
+`[DEC]` Role based access control with `resource:action` permission strings. The split between `create` and the state changing verbs `confirm`,
 `approve` and `post` is retained, because that split is what encodes segregation of duties.
 
 `[REQ]` Deny by default. Every route declares the permission it requires. A route that
@@ -905,8 +846,6 @@ declares none fails to register, and a test proves it.
 `/me` for display purposes only. The client never sends its own permissions, and the server
 never reads a role from a request body or header.
 
-*Expanded 2026-09-10, when the increment implementing this found "declares the permission it
-requires" too narrow to cover every route the system actually has.*
 
 `[REQ]` A route declares its access as exactly one of three things, and there is no fourth
 meaning "whatever is convenient" and no default for a route that says nothing:
@@ -920,7 +859,7 @@ meaning "whatever is convenient" and no default for a route that says nothing:
 `[REQ]` The authenticated declaration is confined to routes whose purpose is to tell a caller
 what they may do and where: `/me` and the company switch. Requiring a capability for either
 would mean needing a company before one could be chosen. Neither returns anything the caller has
-not already proved they may see. Any other use of it is an amendment.
+not already proved they may see. No other route uses it.
 
 `[REQ]` The guard is registered globally rather than per route or per controller. A guard that
 must be remembered will be forgotten, and section 6.3 makes the same argument about scoped
@@ -953,9 +892,8 @@ what it did return.
 query must not be possible through the public interface of the data layer. Background jobs
 and migrations use an explicitly named system context, which is greppable and reviewable.
 
-`[REQ]` `User.warehouseIds` becomes enforced scope rather than decoration. Today the field
-exists, is populated for two fixture users, is rendered as a count on the admin screen, and
-is enforced nowhere.
+`[REQ]` Warehouse restrictions on a membership are enforced as scope in the query, not as a
+display attribute.
 
 ### 6.4 Field level
 
@@ -992,10 +930,8 @@ against the granting user's effective permissions.
 the affected user's sessions. The chosen behaviour is stated in the implementation, not left
 ambiguous.
 
-### 6.7 What is temporary today
+### 6.7 Frontend route guards
 
-*Discharged 2026-09-10. Every route showing business data declares the permission it needs and
-renders an explanation instead of the page when the session does not hold it.*
 
 `[REQ]` A frontend route guard is presentation, never enforcement. It reads the permissions
 `/me` reported, which is a report rather than an authority, so a user who edits them reaches the
@@ -1019,7 +955,7 @@ can never exist without its change.
 `[REQ]` The actor is taken from the authenticated session. Never from a request body, a
 header, or any client supplied value.
 
-`[REQ]` *Ratified 2026-09-09, closing open question 7.* The audit table is append only, enforced
+`[REQ]` The audit table is append only, enforced
 by database grants: the application role holds `INSERT` and `SELECT` on it and nothing else. This
 is a grant, not a convention, so that application code cannot revise history even by mistake. The
 trigger alternative was rejected because a trigger is application adjacent logic that a superuser
@@ -1032,25 +968,25 @@ application role never owns a table, because an owner can always grant itself ba
 revoked. Local development and continuous integration both use the two role setup, so that a
 grant mistake fails in development rather than in production.
 
-`[REQ]` *Added 2026-09-10.* **Neither role is a superuser.** A superuser bypasses row level
+`[REQ]` **Neither role is a superuser.** A superuser bypasses row level
 security entirely, including on a table with `FORCE ROW LEVEL SECURITY`. An owning role that was
 a superuser would therefore have every policy unenforced against it: seeded rows would skip
 `WITH CHECK`, and any isolation test written against that role would pass whether the policies
 worked or not. The owning role gets DDL rights by owning the database and schema, not by being a
 superuser. A superuser account may exist to provision those two roles and is used for nothing
-else.
+else. An isolation test run as a superuser passes whether the policies work or not.
 
-This was found in practice rather than in review. A first pass at the isolation tests ran as the
-provisioning superuser and reported that cross-tenant inserts succeeded, which looked like a
-missing policy and was in fact a test that could never have failed.
+`[DEC]` Document audit begins at the lifecycle boundary of section 12.2: confirming a sales order,
+posting an invoice. Creating and editing a draft have no side effects and are not audited, so a
+draft's trail is empty rather than holding a record of a promise nobody made.
 
 ### 7.2 Structured, not preformatted
 
 `[DEC]` Field changes are stored as structured data: the field path, and typed old and new
 values in JSONB. Not preformatted display strings.
 
-The current model stores before and after as rendered text, for example a currency formatted
-amount with a symbol. That freezes today's formatting choices into a permanent legal record,
+Storing before and after as rendered text, for example a currency formatted amount with a
+symbol, would freeze today's formatting choices into a permanent legal record,
 makes the log unqueryable, and means a locale or currency display change silently rewrites how
 history reads. Values are stored raw and rendered at display time.
 
@@ -1063,8 +999,6 @@ transaction id.
 The actor's role is captured as it was, not looked up later. Roles change, and an audit record
 that reports today's role for last year's action is misleading.
 
-*Amended 2026-09-09. Company cannot be present on every record, and pretending otherwise would
-have made the authentication events unrecordable.*
 
 `[REQ]` `tenant_id` and `company_id` are nullable on the audit table alone, because a failed
 login happens before any company is known and criterion 18 requires it to be audited anyway.
@@ -1075,21 +1009,16 @@ document event is then a constraint violation, not a silent hole.
 `[REQ]` The audit table is the only table permitted this exemption. It is granted because the
 alternative is not auditing authentication, which is worse.
 
-*Amended 2026-09-10, after the policy written for the clause above was found to block the writes
-it was meant to permit.*
 
 `[REQ]` A platform level audit row, meaning one whose `tenant_id` is null, is readable only in a
 transaction that has no tenant context at all. A tenant scoped transaction sees its own rows and
 no platform row; an empty context sees platform rows and no tenant's rows. Neither direction
 crosses a tenant boundary and no context ever sees two tenants.
 
-The original policy compared `tenant_id` to the current context and nothing else, on the reasoning
-that authentication records belong to platform administration under section 2.8. That reasoning
-was sound and the policy was not. PostgreSQL applies `SELECT` policies to the `RETURNING` clause of
-an `INSERT`, and the audit repository returns the row it appends, so a platform row failed the
-check and the whole insert was rejected. Every login, failed login and logout would have thrown,
-and criterion 18 was unimplementable. `FORCE ROW LEVEL SECURITY` extended the same blindness to the
-owning role, so nothing could read the rows either.
+The reason is a PostgreSQL detail. `SELECT` policies also apply to the `RETURNING` clause of an
+`INSERT`, and the audit repository returns the row it appends, so a policy that hid platform rows
+from every context would reject the authentication audit writes themselves, and criterion 18
+could not hold.
 
 An empty tenant context exists only inside an explicitly named system scope under section 6.3.
 That is the same context that already reads `users` and `sessions` in full, because section 4.6
@@ -1098,8 +1027,8 @@ still confines platform rows to the four authentication actions, so this cannot 
 tenant business events with the scope left off.
 
 `[FUT]` Platform administration as a product capability, including who may read these rows over
-HTTP, remains section 2.8 and remains unbuilt. This clause governs which database transactions may
-see them, not which people.
+HTTP, per section 2.8. This clause governs which database transactions may see them, not which
+people.
 
 ### 7.4 Two different logs
 
@@ -1110,10 +1039,7 @@ separate retention, volume and audience, even where one event feeds both.
 story. Posted journal entries and stock movements are never updated or deleted, only reversed
 by a further entry.
 
-### 7.5 What is temporary today
-
-`[TEMP]` Audit events are generated by the fixture generator alongside the documents they
-describe. **Removal trigger:** per module, when that module's writes become backend operations.
+### 7.5 Future
 
 `[FUT]` Tamper evidence through hash chaining of audit rows.
 
@@ -1128,8 +1054,7 @@ describe. **Removal trigger:** per module, when that module's writes become back
 `[DEC]` Stock is an append only ledger of immutable movement rows. There is no mutable
 quantity field on a product. Every movement carries the document that caused it.
 
-This is the existing model and it is correct. It is restated here because it is the single
-easiest thing for a future contributor to undo under deadline pressure.
+This is the single easiest rule to undo under deadline pressure, which is why it is stated first.
 
 ### 8.2 The projection is materialised
 
@@ -1154,8 +1079,8 @@ the Business Central model of Item Ledger Entry and Value Entry.
 The reason is that quantity and cost are known at different times. Goods arrive before the
 supplier's bill does. Freight and duty land weeks later and belong to stock that may already
 be sold. A landed cost or a cost correction must adjust valuation without rewriting quantity
-history. Conflating the two is why the current fixture set has an inventory control account
-and a stock valuation that differ by roughly three hundred and twenty one thousand.
+history. Conflating the two leaves the inventory control account and the stock valuation
+disagreeing with no way to explain the difference.
 
 ### 8.4 Unit of measure
 
@@ -1164,9 +1089,10 @@ recorded in the stocking unit. Documents may use a purchase or sales unit, and t
 factor used is recorded on the document line so that a later change to the conversion does not
 alter history.
 
-Buying in cases and selling in units is the defining operation of this business, and the seed
-data already uses box and case units. This must exist before the first stock row is persisted,
-or every quantity in history becomes ambiguous.
+Buying in cases and selling in units is the defining operation of this business. Conversion must
+exist before any product may carry a unit other than its stocking unit, or quantities in history
+become ambiguous. While every product has exactly one unit, its stocking unit, no persisted
+quantity can mean two things.
 
 ### 8.5 Reservation and availability
 
@@ -1180,10 +1106,8 @@ See section 10.2 for the concurrency mechanism.
 
 ### 8.6 Costing
 
-`[REQ]` The costing method declared on a product is actually implemented. Today
-`costingMethod: 'average'` is a label: receipts capitalise at purchase order cost, cost of
-goods sold relieves at the product's static cost price, and valuation uses the same static
-figure. Three bases in one flow.
+`[REQ]` The costing method declared on a product is actually implemented, with receipts, cost of
+goods sold and valuation all on the same basis rather than three different ones.
 
 `[DEC]` Moving average is implemented first, with the cost recalculated on each receipt inside
 the receipt transaction. FIFO is a later addition and the value entry model in 8.3 is what
@@ -1192,8 +1116,7 @@ makes it addable without restructuring.
 ### 8.7 Future
 
 `[FUT]` Virtual locations making goods double entry, in the Odoo model, so that quantities are
-conserved rather than signed. `MovementReason` in the current model preserves what this
-upgrade needs.
+conserved rather than signed. The movement reason already preserves what this upgrade needs.
 
 `[FUT]` Lot, batch and serial tracking, with expiry. Required if the catalogue ever includes
 regulated or perishable goods.
@@ -1202,9 +1125,7 @@ regulated or perishable goods.
 
 `[FUT]` Multi step receipt and delivery routes, for example receive then inspect then stock.
 
-`[FUT]` Stock transfers with in transit ownership. This is the one placeholder screen in the
-current application, and it is unbuilt for the right reason: the workflow is genuinely
-undefined, not merely unimplemented.
+`[FUT]` Stock transfers with in transit ownership.
 
 ---
 
@@ -1223,19 +1144,10 @@ application code.
 `[REQ]` Account balances, customer balances and supplier balances are derived from the ledger.
 No entity carries a stored balance column that is treated as a source of truth.
 
-`[TEMP]` `mocks/reference.ts` seeds static `Account.balance` values that contradict the ledger.
-The chart of accounts screen correctly ignores them, but the dashboard cash position reads
-them, so the same figure differs between two screens: roughly two hundred and ninety eight
-thousand on the dashboard against negative forty two thousand in the ledger.
-**Removal trigger:** immediate, ahead of slice 1 if convenient, since it is a live
-contradiction rather than a missing feature.
-
 ### 9.3 Opening balances are entries
 
-`[REQ]` Opening balances are a posted journal entry like any other. The current fixtures
-create seventy two opening stock movements with no corresponding entry, which is why the
-ledger shows negative cash and an understated inventory account: the books have no opening
-balance sheet at all.
+`[REQ]` Opening balances are a posted journal entry like any other. Opening stock loaded as
+quantity alone leaves the books without an opening balance sheet.
 
 ### 9.4 Interim accounts bridge timing
 
@@ -1243,8 +1155,7 @@ balance sheet at all.
 accounts.
 
 Receipt and billing happen at different times, as do delivery and invoicing. Without interim
-accounts the inventory control account only moves when the bill posts, which is exactly the
-current defect. Odoo calls these stock interim accounts, and every system that does perpetual
+accounts the inventory control account only moves when the bill posts. Odoo calls these stock interim accounts, and every system that does perpetual
 inventory under this accounting model has an equivalent.
 
 ### 9.5 Control account reconciliation
@@ -1257,15 +1168,16 @@ inventory under this accounting model has an equivalent.
 | Accounts payable | sum of open supplier bill balances |
 | Inventory | stock valuation from the value ledger |
 
-`[REQ]` A legitimate difference must be explainable and documented. The current receivables
-difference is a good example of a correct one: an unallocated customer receipt credits
-receivables without being applied to an invoice. That is correct accounting and exactly why
+`[REQ]` A legitimate difference must be explainable and documented. An unallocated customer
+receipt is an example of a correct one: it credits receivables without being applied to an
+invoice. That is correct accounting and exactly why
 unallocated cash must stay visible.
 
 ### 9.6 Periods
 
 `[REQ]` Accounting periods can be closed, and a closed period rejects new postings. Enforced
-inside the posting transaction, never by hiding a button.
+inside the posting transaction, never by hiding a button. Until periods exist, nothing stands in
+for them: no simulated period, and no posting refused as though a period were closed.
 
 ### 9.7 Currency
 
@@ -1276,13 +1188,23 @@ realised foreign exchange gain or loss entry.
 `[FUT]` Period end revaluation of open foreign currency balances.
 
 `[FUT]` A tax engine beyond a single rate: jurisdictions, exemptions, and reverse charge for
-cross border trade within the European Union, which the current fixture set implies. The single
-rate this is "beyond" is the company standard rate ruled in section 2.9 on 2026-09-11, and the
+cross border trade. The single rate is the company standard rate of section 2.9, and the
 resolution function named there is where this engine replaces it.
 
 `[FUT]` Analytical dimensions or cost centres.
 
-`[FUT]` Profit and loss and balance sheet reports. The types exist; the service does not.
+`[FUT]` Profit and loss and balance sheet reports.
+
+### 9.8 Customer invoice posting
+
+`[DEC]` A customer invoice is raised from one or more confirmed sales orders. Posting it writes
+accounts receivable, revenue and tax, and nothing else: no stock movement, no inventory relief,
+no cost of goods sold and no interim entry. An invoice may therefore be posted before delivery,
+and an invoiced but undelivered order keeps its reservation, because only delivery or
+cancellation releases one. Quantity and cost effects belong to the delivery and costing path.
+
+`[DEC]` A company's default chart holds exactly the three accounts this posting uses, and a
+mapping from posting purpose to account. A tax line of zero is not written.
 
 ---
 
@@ -1311,7 +1233,7 @@ at the same moment, both reading a balance of ten, both succeeding, and the ware
 discovering the oversell at picking time.
 
 `[REQ]` A lock acquisition order is documented and followed, so that deadlocks are designed out
-rather than retried around.
+rather than retried around. It is stated once, in `apps/api/src/inventory/lock-order.ts`.
 
 ### 10.3 Isolation
 
@@ -1332,9 +1254,6 @@ gaps when a transaction rolls back. Invoice numbering in many jurisdictions must
 which forces a counter row locked inside the posting transaction, accepting the serialisation
 cost. Business Central calls these No. Series and ERPNext calls them Naming Series; both treat
 it as first class and configurable because it varies by country and by document type.
-
-`[TEMP]` Document numbers are currently produced by an incrementing JavaScript counter in the
-fixture generator. **Removal trigger:** the first backend document creation, in slice 2.
 
 ---
 
@@ -1388,6 +1307,12 @@ following in one transaction, or none of it:
 
 `[REQ]` If any step fails, the whole operation fails. There is no partial post.
 
+`[DEC]` Raising a draft claims nothing. Two invoice drafts may describe overlapping uninvoiced
+remainders of one order line, and both are legitimate until one is posted. Posting re-reads each
+source line inside its transaction, validates the remainder against the stored figure, and
+consumes it atomically, so two postings racing for one remainder resolve to one winner and one
+refusal.
+
 ### 12.3 After posting
 
 `[REQ]` A posted document is immutable. Correction is a new document that reverses it: a
@@ -1396,27 +1321,25 @@ credit note, a reversing journal entry, a return.
 `[REQ]` Cancellation rules are explicit per document type, including whether cancelling
 releases reserved stock and what accounting consequence it carries.
 
-**The sales order's cancellation rule.** *Ruled 2026-09-13.* The clause above requires this to
-be written down per document type, and the sales order is the first document type that exists.
+**The sales order's cancellation rule.**
 
 `[DEC]` A sales order may be cancelled from `draft` and from `confirmed`. Every other state
 refuses, and `partially_delivered` refuses for a stated reason rather than an oversight: a
 partially delivered order has goods with a customer, and undoing that is a return, which the
-clause above already makes a new document. Nothing can reach that state until the delivery
-module exists, so the rule is written when the document that produces it is.
+clause above already makes a new document.
 
 `[DEC]` A cancelled draft keeps a null document number. Section 10.4's numbering is gapless
 because a number, once issued, is a fact about a document the business raised. A draft that was
 abandoned raised nothing, and spending a number on it would put a gap in the meaning of the
-series rather than in the series itself. The number and status check constraint is amended to
-admit exactly this pairing, and continues to refuse a confirmed order without a number.
+series rather than in the series itself. The number and status check constraint admits exactly
+this pairing, and refuses a confirmed order without a number.
 
 A cancelled draft is therefore cancelled and not deleted, which is the posture section 4.5
 prefers. That section permits deleting a draft that was never confirmed; it does not require it,
 and cancellation keeps the order, its lines and its trail where deletion would keep none of them.
 
 `[DEC]` Cancelling releases every reservation the order still holds. Reservations are released,
-never deleted: `stock_reservations` gains a `released_at` stamp, and section 8.5's reserved
+never deleted: `stock_reservations` carries a `released_at` stamp, and section 8.5's reserved
 figure sums only the rows where it is null. The history of what was held, for which line, and
 until when, survives the release, which a delete would discard. The release runs under the same
 balance row lock section 10.2 requires of the reservation itself, so availability cannot be read
@@ -1428,16 +1351,13 @@ would leave a confirmed order with no stock behind it.
 
 `[REQ]` Cancelling a sales order has no accounting consequence. A sales order posts to no
 ledger, so there is nothing to reverse: the accounting consequence of a sale begins at the
-invoice, and cancelling a document that never reached the ledger cannot reach it either. This is
-stated rather than left implicit because the clause above requires the statement, and an absent
-consequence is an answer to it.
+invoice, and cancelling a document that never reached the ledger cannot reach it either.
 
-`[FUT]` Cancelling a document that has posted to the ledger, meaning an invoice, is the
-accounting slice's to rule. It will not be an amendment to this clause but a rule of its own,
-because a credit note is a new document rather than a status change.
+`[FUT]` Correcting a posted invoice, which is a credit note: a new document rather than a status
+change.
 
 `[DEC]` A cancellation may carry a reason, and the reason is optional. It is kept in the audit
-record's payload and nowhere else. `sales_orders` gains no column for it: a reason is something
+record's payload and nowhere else. `sales_orders` has no column for it: a reason is something
 somebody said once about a transition, which is what section 7.2's structured change payload is
 for, and a column would make it a mutable property of the order that a later edit could rewrite.
 
@@ -1446,14 +1366,8 @@ for, and a column would make it a mutable property of the order that a later edi
 `[DEC]` Document relationships are stored in a link table with a typed relation, and the
 related documents view is derived by query.
 
-`[TEMP]` Documents currently carry a stored `links` array that the fixture generator
-pre-populates, including downstream documents pushed backwards onto the parent.
-**Removal trigger:** the first backend document module. A stored graph can drift from the
-facts, which is the second source of truth problem this document forbids elsewhere.
-
-`[TEMP]` `resolveDocumentRefs` in `services/sales.service.ts` is synchronous and reads the
-in-memory fixture database during render. **Removal trigger:** the document links endpoint. It
-is the one place the service seam is genuinely broken today.
+`[REQ]` Documents never carry a stored array of related documents. A stored graph drifts from
+the facts it claims to describe, which is a second source of truth.
 
 ---
 
@@ -1521,8 +1435,6 @@ only. Otherwise a crafted request sets `status`, `postedAt` or `companyId`.
 request additionally requires a custom header that a cross origin form cannot set, and the
 origin is checked server side. `SameSite` alone is defence in depth, not the whole control.
 
-*Implemented 2026-09-10. The clause above was specific enough to build from; what follows records
-the one decision it left open.*
 
 `[REQ]` The header carries a token bound to the session rather than a fixed value. A plain
 double submit, where the server only checks that the header equals the cookie, is satisfied by
@@ -1545,8 +1457,8 @@ apply. Login forgery signs a victim into an account the attacker controls, which
 than acting as the victim and still refused.
 
 `[REQ]` Enforcement is one boundary, applied to every route, and it authenticates nothing and
-authorizes nothing. Three guards answer three questions in order: did this come from our own
-page, is there a live session, may this person do this here. A forged request is refused before
+authorizes nothing. Three guards answer three questions in order: did this come from the
+application's own page, is there a live session, may this person do this here. A forged request is refused before
 anything reads the database.
 
 ### 14.5 Cross site scripting
@@ -1586,23 +1498,22 @@ session identifiers, or personal data beyond what is necessary.
 
 ### 14.9 Security assurance progression
 
-*Added 2026-09-09 at the project lead's request.*
 
 `[DEC]` Security is built and proven in stages, and each stage leaves the application more
-testable than it was. It is not a phase before launch and it is not a review the security team
-performs on a finished system.
+testable than it was. It is not a phase before launch and not a review performed only on a
+finished system.
 
-The reason is practical rather than ideological. A penetration test against a system with no
-authorization tests finds the same defects the developers would have found, at a much higher
-cost and much later. The security team's time is worth spending on what automated tests cannot
-reach: chained abuse, business logic, and assumptions nobody wrote down. Getting there requires
-the ordinary controls to be already covered by tests we run ourselves.
+The reason is practical. A penetration test against a system with no authorization tests finds
+the same defects the developers would have found, at a much higher cost and much later. A
+reviewer's time is worth spending on what automated tests cannot reach: chained abuse, business
+logic, and assumptions nobody wrote down. That requires the ordinary controls to be covered by
+the project's own tests first.
 
 `[REQ]` A stage is not complete when its control exists. It is complete when a test proves the
 control works and a test proves the absence of the control fails. Both directions, because a
 test that only asserts the happy path passes equally well when the control is deleted.
 
-**Stage 1, foundation.** Concurrent with the current work.
+**Stage 1, foundation.** In place.
 
 | Control | Where it is specified |
 |---|---|
@@ -1611,7 +1522,7 @@ test that only asserts the happy path passes equally well when the control is de
 | Health endpoint | 15.11 |
 | Continuous integration foundation | 15.4, criterion 27 |
 
-**Stage 2, database and security foundation.** Slice 1 and the first migration.
+**Stage 2, database and security foundation.** In place.
 
 | Control | Where it is specified |
 |---|---|
@@ -1622,7 +1533,7 @@ test that only asserts the happy path passes equally well when the control is de
 | Transaction boundaries | 12.2 |
 | Input validation at the boundary | 14.2, 14.3 |
 
-**Stage 3, application.** Slices 1 to 3, as each surface appears.
+**Stage 3, application.** In place for every surface that exists.
 
 | Control | Where it is specified |
 |---|---|
@@ -1639,7 +1550,7 @@ test that only asserts the happy path passes equally well when the control is de
 correct handling of a control for a feature that does not exist is to not carry the dependency
 that implements it. See the adapter decision in section 1.2.
 
-**Stage 4, before production.** Not before there is something worth deploying.
+**Stage 4, before production.** Not yet in place; see section 16.1.
 
 | Control | Where it is specified |
 |---|---|
@@ -1654,31 +1565,28 @@ that implements it. See the adapter decision in section 1.2.
 
 | Activity | Note |
 |---|---|
-| Penetration testing, OWASP style | Replaces the `[FUT]` in 14.8, which is now stage 5 rather than undated |
-| Authenticated authorization testing | Our matrix test in 13.1 is the floor, not the ceiling |
+| Penetration testing, OWASP style | |
+| Authenticated authorization testing | The matrix test in 13.1 is the floor, not the ceiling |
 | Tenant boundary testing | The negative requirements in 2.10 are the brief |
 | API abuse testing | Business logic, sequencing, and rate limits |
 | Dependency and container scanning | Continuous, not a one off |
 | Remediation and retest | A finding is closed by a retest, never by a claim |
 
-`[REQ]` The security team is given the architecture contract, the authorization matrix, the
-tenant boundary tests and the threat notes, not just a URL. A reviewer who has to rediscover
+`[REQ]` Security reviewers are given this document, the authorization matrix, the tenant
+boundary tests and the threat notes, not just a URL. A reviewer who has to rediscover
 the intended boundaries spends their budget on discovery rather than on finding where the
 boundaries leak.
 
 `[REQ]` No stage is skipped to reach a deadline. A stage may be descoped explicitly, recorded
-in section 18.2 with what was dropped and why, but it is never quietly passed over.
+in section 16.1 with what was dropped and why, but it is never quietly passed over.
 
 ---
 
 ## 15. Infrastructure and deployment
 
-*Expanded 2026-09-09 from a shorter section titled Deployment environments. Thirteen principles
-were recorded at the project lead's request. The previous clauses were absorbed rather than
-duplicated, so each rule still appears exactly once.*
 
-These are principles, not a work item. Section 15.11 states the minimum each slice actually
-needs, so that infrastructure does not become a project that outruns the ERP it exists to serve.
+These are principles. Section 15.11 states what is provisioned today, so that infrastructure is
+built when there is something worth deploying rather than ahead of it.
 
 ### 15.1 The principles, and where each one is stated
 
@@ -1857,45 +1765,55 @@ cross tenant access by platform administration are queryable and alertable.
 `[FUT]` Shipping audit and security events to external monitoring or write once storage, already
 recorded in sections 7.5 and 14.8.
 
-### 15.11 What each slice actually needs
+### 15.11 What is provisioned today
 
-`[DEC]` This section adds no acceptance criteria to slice 1. The criteria in section 17.3 are
-unchanged by it.
-
-| Slice | Infrastructure it pulls in |
+| Stage | Infrastructure |
 |---|---|
-| 1, identity | Docker Compose running PostgreSQL for local and CI. The CI workflow already required by criterion 27. Nothing else. |
-| 2 to 3, documents and posting | A Dockerfile for the API, built and exercised in CI. |
+| Today | Docker Compose running PostgreSQL for local development, and a CI workflow running type checking, lint, unit and integration tests against PostgreSQL, a dependency audit and a secret scan. |
+| Next | A Dockerfile for the API, built and exercised in CI. |
 | Before first customer | Staging environment, deployment pipeline, secret store, TLS, backups with a tested restore, observability and alerting. |
 
-`[DEC]` No Kubernetes, no cloud provisioning, no production pipeline and no deployment tooling
-during slice 1. Building deployment machinery before there is something worth deploying is how
-infrastructure becomes the project.
+`[DEC]` No Kubernetes, no cloud provisioning and no deployment tooling until there is something
+worth deploying.
 
 ---
 
-## 16. Current state: what is temporary, and what must never be faked
+## 16. Implementation status and known limitations
 
-### 16.1 Temporary behaviour and its removal trigger
+### 16.1 What is implemented, and what is not
 
-| What | Where | Removal trigger |
-|---|---|---|
-| Seeded `Account.balance` contradicting the ledger | `mocks/reference.ts`, `mocks/db.ts` | immediate |
-| Cash position read from seeded balances | `mocks/db.ts` | immediate |
-| Entire fixture layer | `src/mocks/` | per module, as endpoints land |
-| Fixture aging measured from the fixture anchor, through `agingReference` | `services/index.ts`, and the four screens that call it | per module, as each screen gets endpoints |
-| Synchronous `resolveDocumentRefs` | `services/sales.service.ts` | document links endpoint |
-| Stored `links` arrays on documents | `src/domain`, `src/mocks` | first backend document module |
-| Money as integer minor units, two decimals | `lib/money.ts` | contracts package adoption |
-| Artificial latency in the service layer | `services/client.ts` | real HTTP |
-| Document numbers from a JavaScript counter | `mocks/generate.ts` | slice 2 |
-| Static cost price used as the costing basis | `mocks/db.ts`, `mocks/generate.ts` | costing implementation, section 8.6 |
-| Permission catalogue and role templates duplicated in the frontend, now only to render the roles admin screen | `web/src/domain/security.ts`, `web/src/lib/permissions.ts`, `web/src/features/admin/AdminPages.tsx` | the company administration screens, which read roles from the API |
+Implemented end to end, backend and browser: authentication and sessions, company membership
+and switching, authorization with row level security, sales orders from draft through
+confirmation and cancellation with stock reservation, and customer invoices from draft through
+posting, with the resulting journal entry and audit trail. Customer invoice editing and
+multi-order invoices exist in the API without a screen.
 
-### 16.2 Production critical behaviour that must never be faked
+Known limitations, each a gap against a clause above:
 
-The following must be real from the moment they exist at all. A convincing simulation of any
-of them is worse than their absence, because it looks finished.
+| Limitation | Clause |
+|---|---|
+| Every screen other than sales orders and customer invoice detail reads built-in fixture data from `apps/web/src/mocks`, and is labelled Sample in the interface. This includes the dashboard, the invoice list, customers, products, stock, purchasing, deliveries, payments, accounting, users and the audit log. | 3.1 |
+| Deliveries, purchasing, supplier bills, payments, credit notes, stock transfers and costing are not implemented. Invoice posting therefore writes no cost of goods sold and no interim entries. | 8.6, 9.4, 12.3 |
+| Accounting periods and period close are not implemented. Postings are accepted without period checks. | 9.6 |
+| Tax is a single standard rate per company, and no endpoint changes it. | 2.9, 9.7 |
+| Field level restriction is not implemented. A role that may read a document sees all of it, for example the warehouse role sees sales order prices. | 6.4 |
+| Warehouse, branch and location scope on a membership is not enforced. | 6.3 |
+| Approval thresholds and segregation of duties rules are not implemented. | 6.5 |
+| No endpoint creates tenants, companies, memberships or invitations. They are created by provisioning code and the demo seed. | 2.8, 2.9 |
+| Role provisioning and company switching do not yet record the actor roles and request id on their audit events. | 7.3 |
+| Primary keys are UUIDv4 rather than UUIDv7. | 4.2 |
+| The `gapless` flag on a number sequence is not read: every sequence uses the gapless mechanism, which satisfies both settings. | 10.4 |
+| Unit of measure conversion is not implemented. Every product has one unit, its stocking unit. | 8.4 |
+| The frontend models money as integer minor units at two decimal places; the API carries exact decimal strings and the frontend rounds at its service boundary. | 4.3 |
+| There is no shared contracts package and no generated OpenAPI document. The frontend declares the response shapes it consumes in its service layer. | 1.3, 3.4 |
+| Document relationships are not stored as edges, so the related documents panel on real documents is empty. | 12.4 |
+| There is no API Dockerfile, no staging environment and no deployment pipeline. | 15.3, 15.4, 15.11 |
+| No scheduled job yet expires idempotency records or login throttle rows, or verifies stock balances against the ledger. | 8.2, 11, 4.6 |
+
+### 16.2 What must never be faked
+
+The following must be real from the moment they exist at all. A convincing simulation of any of
+them is worse than their absence, because it looks finished.
 
 - authentication and session management
 - authorization enforcement, at all four dimensions
@@ -1906,53 +1824,12 @@ of them is worse than their absence, because it looks finished.
 - the atomicity of a posting transaction
 - period close enforcement
 
-### 16.3 What is already right and should not be rebuilt
-
-- documents with independent lifecycles rather than one record with flags
-- payment allocations as a list rather than a single invoice reference
-- stock as a movement ledger with no mutable quantity on the product
-- account balances derived from journal entries
-- per document status unions
-- aggregates computed over the whole filtered set rather than the visible page
-- a single asynchronous service seam, with no component calling the network directly
-- the clock indirection, which prevents an entire class of date bug
-- the disabled action buttons that state what they would do, and the one honest placeholder
-
 ---
 
-## 17. First vertical slice
+## 17. Security acceptance criteria
 
-### 17.1 Why identity first
-
-The slice builds no business value on purpose. Every other slice depends on being able to
-answer "who is doing this", and every operation must write an audit record naming that actor.
-Building a document module first would mean either deferring authorization, which contradicts
-sections 6 and 7, or building it twice.
-
-### 17.2 Scope
-
-*Amended 2026-09-09. Tenant and company context moved into this slice, because it is the
-outermost authorization dimension and cannot be retrofitted around an identity model that was
-built without it.*
-
-**In scope.** Monorepo split. PostgreSQL with migrations. Tenants, companies, users,
-memberships, roles and permissions. Password authentication. Server side sessions carrying the
-active company. The `/me` endpoint. Company switching. Server side authorization middleware with
-deny by default. The scoped repository pattern, where scope means tenant, company and actor. The
-audit table with append only protection. CSRF protection. The frontend session provider
-consuming the API.
-
-**Out of scope.** Business documents, ledgers, inventory, create and edit forms, the company
-administration UI itself, invitations, single sign on, multi factor authentication, platform
-administration tooling, and field level redaction beyond the mechanism being in place.
-
-Seeding is how companies come into existence during this slice. The administration UI that
-creates them is a later slice; the schema, the scoping and the enforcement are this one.
-
-### 17.3 Acceptance criteria
-
-Every criterion below is a test that must pass in continuous integration. "Proven by a test"
-is literal.
+Each criterion below is proven by an automated test that runs in continuous integration. Test
+code cites them by number, for example "criterion 14".
 
 **Authentication**
 
@@ -1984,7 +1861,6 @@ is literal.
 
 **Tenant and company isolation**
 
-These are the criteria that make this a multi-tenant product rather than a single company one.
 Each maps to a negative requirement in section 2.10.
 
 12. The active company is read only from the session. A request that supplies a company
@@ -2030,7 +1906,7 @@ Each maps to a negative requirement in section 2.10.
     PostgreSQL.
 27. Continuous integration runs type checking, lint, unit tests, integration tests against a
     real PostgreSQL instance, and a secret scan. All are required to pass.
-28. Every tenant-scoped table created in this slice carries `tenant_id` and `company_id`, both
+28. Every tenant-scoped table carries `tenant_id` and `company_id`, both
     not null, and the global tables named in 4.6 carry neither. Mutable business tables
     additionally carry `version`; the four exempt shapes in section 4.2, meaning association
     tables, append-only tables, tables whose rows are never updated, and ephemeral operational
@@ -2047,96 +1923,3 @@ Each maps to a negative requirement in section 2.10.
     a test. Section 2.4 requires the empty context to deny.
 32. The application role holds no `UPDATE` or `DELETE` grant on the audit table, and no `DELETE`
     on tenants, companies or users, proven by reading the catalogue.
-
-### 17.4 Definition of done
-
-All thirty two criteria pass in continuous integration. The web application runs against the
-API with no mock identity anywhere in its path. Section 16.1 is updated to strike the rows this
-slice removed. Any decision that changed during implementation is recorded in section 18.2.
-
-### 17.5 The two slices after it, for context
-
-**Slice 2, one document written for real.** Sales order create and confirm. The smallest thing
-that exercises server side validation, gapless number allocation under concurrency, stock
-reservation with two users racing for the last unit, row scoped authorization, an optimistic
-locking conflict surfaced properly in the UI, an audit record, and an idempotent retry.
-
-**Slice 3, one posting touching both ledgers.** Post the customer invoice. One atomic
-transaction writing the status change, the journal entry and its lines, the audit record and
-the document number, with the balance invariant enforced by the database rather than by a
-function that throws.
-
----
-
-## 18. Open questions and amendment log
-
-### 18.1 Open questions
-
-These block specific decisions. Each has a stated default so that work is not blocked while
-they are open.
-
-**Closed**
-
-| # | Question | Ruling | Date |
-|---|---|---|---|
-| 1 | Will the system serve more than one legal entity? | Yes, and more than one independent customer. Multi-tenancy is a core requirement. See section 2. | 2026-09-09 |
-| 3 | Server framework and query layer. | React, Vite, NestJS, PostgreSQL, Drizzle. Redis where it earns its place, not in slice 1. See section 1.2. | 2026-09-09 |
-| 5 | Tenant isolation strategy. | Shared schema with `tenant_id` and `company_id`, mandatory application scoping, and row level security as a second enforcement layer. Neither layer stands alone. See section 2.4. | 2026-09-09 |
-| 7 | Audit hardening mechanism. | A separate restricted application role whose grants do not permit `UPDATE` or `DELETE` on the audit table. Two roles from the first migration. See section 7.1. | 2026-09-09 |
-
-**Open**
-
-| # | Question | Default assumed | What changes with the answer |
-|---|---|---|---|
-| 2 | Is single sign on a requirement, now or foreseeably? | No, but the seam exists. `external_subject_id` on the user table. | Now larger than before. In a multi-tenant product, single sign on is usually per tenant, so a customer brings their own identity provider. That makes it a tenant configuration domain rather than a global switch. |
-| 4 | Which jurisdictions issue invoices, and do any require gapless numbering? | Assume at least one does, per section 10.4. | Determines the default sequence strategy. Now per tenant configuration rather than a single global choice. |
-| 6 | Money precision and transport. | `NUMERIC(19,4)` for amounts, `NUMERIC(19,6)` for unit prices, decimal strings over the wire. See section 4.3. | Blocks the contracts package and the frontend money migration, not the identity schema. |
-| 8 | Does a tenant ever need more than one company in the first release? | No. Schema carries both identifiers; the UI exposes one company per tenant. | If yes, company switching and per company configuration surface earlier than planned. |
-
-### 18.2 Amendment log
-
-| Date | Section | Change | Reason |
-|---|---|---|---|
-| 2026-09-09 | all | Document created | Establishing the architectural contract before further implementation |
-| 2026-09-09 | new section 2 | Multi-tenancy and company configuration added. All sections from the old 2 onward renumbered by one. | Product goal confirmed: one product serving many independent companies |
-| 2026-09-09 | 1.2 | Stack ratified as React, Vite, NestJS, PostgreSQL, Drizzle. Redis deferred. | Open question 3 closed by the project lead |
-| 2026-09-09 | 1.4 | Rewritten. The claim that the system is built for one business was withdrawn. Replaced with configuration driven within a fixed schema, and the distinction from metadata driven platforms sharpened. | Contradicted by the confirmed product goal |
-| 2026-09-09 | 4.6 | Upgraded from `[DEC]` to `[REQ]`. Now requires `tenant_id` alongside `company_id`, non nullable, leading index columns. | Tenant isolation is no longer optional |
-| 2026-09-09 | 6.1 | Authorization went from three dimensions to four. Tenant and company scope added as the outermost, evaluated first, not grantable by any role. | Multi-tenancy makes company scope an authorization boundary rather than a data filter |
-| 2026-09-09 | 17.2, 17.3 | Tenant and company context moved into slice 1. Six isolation acceptance criteria added, numbered 12 to 17, and the remainder renumbered. | Company context cannot be retrofitted around an identity model built without it |
-| 2026-09-09 | 15 | Retitled from Deployment environments to Infrastructure and deployment. Thirteen principles recorded, existing clauses absorbed rather than duplicated. Section 15.11 bounds what each slice pulls in. | Infrastructure principles requested by the project lead, without expanding slice 1 |
-| 2026-09-09 | 14.9 | Security assurance progression added: five stages, each mapping controls to the sections that specify them. The undated penetration test in 14.8 became stage 5. | Security must be progressively testable rather than deferred to a review at the end |
-| 2026-09-09 | 1.2 | HTTP adapter ratified as Fastify rather than Express, and a HOST setting added defaulting to loopback. | The Express platform package carries unpatched multer advisories that npm overrides did not resolve; the dependency audit in 14.8 and 15.4 must pass without suppression |
-| 2026-09-09 | 4.2, 8.6, 16.2, 17.4 | Corrected six references left stale by the section 2 renumbering. 4.2 also gained `tenant_id`, which it had omitted while 4.6 required it. | Bookkeeping errors in the renumbering, and a genuine contradiction between 4.2 and 4.6 that the first migration would otherwise have followed |
-| 2026-09-09 | 2.4 | Tenant isolation ratified as shared schema with row level security as a mandatory second layer. The approval callout was removed and two clauses added: neither layer may stand alone, and the application role must not bypass row level security. | Open question 5 closed by the project lead |
-| 2026-09-09 | 7.1 | Audit hardening ratified as revoked grants on a separate restricted application role, rejecting the trigger alternative. Two database roles required from the first migration, in every environment. | Open question 7 closed by the project lead |
-| 2026-09-09 | 4.6 | Scope requirement narrowed from every business table to every tenant-scoped table, with `tenants`, `users` and `sessions` named as a closed global exception and still subject to authorization. | The blanket wording contradicted the one account per person ruling in 2.6 and could not be satisfied by the first migration |
-| 2026-09-09 | 7.3 | `tenant_id` and `company_id` made nullable on the audit table alone, constrained to the authentication actions. | A failed login precedes any company, and criterion 18 requires it audited |
-| 2026-09-09 | 2.4 | Row level security context ruled to be transaction local settings via `SET LOCAL`, requiring every scoped query to run in a transaction, policies to deny on empty context, and a test proving no context returns no rows. | The mechanism was unspecified and the default failure mode is the dangerous one |
-| 2026-09-09 | 2.7 | Granted capabilities stored as permission strings with no `permissions` table, validated on write and asserted against the catalogue at startup. | A seeded table would duplicate what the code already defines |
-| 2026-09-10 | 1.2 | Migration tooling ruled final: handwritten versioned SQL applied by a runner on `pg`, `drizzle-orm` kept for typed schema and queries, `drizzle-kit` dropped. Forward only, checksummed, run as the owning role. | `drizzle-kit` carries unpatchable moderate advisories, and grants, policies and composite tenant keys cannot be expressed in a schema DSL anyway |
-| 2026-09-10 | 17.3 | Criterion 28 narrowed to tenant-scoped tables and four criteria added, numbered 29 to 32: live schema matches the Drizzle definitions, row level security enabled and forced, empty context returns no rows, and audit grants verified from the catalogue. | Drift protection is the price of handwritten migrations, and the isolation controls need catalogue level proof rather than trust in the migration text |
-| 2026-09-10 | 7.1 | Added the requirement that neither database role is a superuser, with the owning role taking DDL rights from owning the database and schema instead. | A superuser bypasses row level security even with FORCE, which made the first isolation tests incapable of failing |
-| 2026-09-10 | 4.2, 17.3 | `version` narrowed from every business table to mutable tables only, with association tables and append-only tables exempted by reason rather than by name. Criterion 28 updated to match, and an unused `version` on an exempt table made a defect in its own right. | A version column on a table that is never updated has no reader, and a concurrency control nobody checks is worse than an absent one |
-| 2026-09-10 | 4.2, 17.3 | Added a fourth `version` exemption for ephemeral operational state under an explicit last-write-wins model, gated on four conditions that all must hold. `sessions` is the only example. Criterion 28 updated to name all four shapes. | `sessions.last_seen_at` is written by ordinary concurrent requests from one principal, where optimistic locking would produce conflicts that describe nothing real |
-| 2026-09-10 | 4.6 | `auth_throttle` added to the closed list of global tables, with the reasoning stated and the infrastructure-exemption argument explicitly refused. | Authentication precedes tenant resolution, and per-address throttling has no user row or tenant to attribute an attempt to |
-| 2026-09-10 | 2.9, 5.3 | Authentication-time policy ruled deployment level: session lifetime, password rules and login throttling. Section 2.9 narrowed to point at 5.3. Per-company override recorded as future. | 2.9 made these per-company, but authentication happens before any company is known, so the two clauses could not both hold |
-| 2026-09-10 | 7.3, 4.6 | Platform level audit rows ruled readable only in an empty tenant context, replacing a select policy that admitted none. The stale claim in 4.6 that such rows could be written but not read was corrected. | The policy governed the `RETURNING` clause of the insert as well, so authentication audit rows could not be written at all and criterion 18 was unimplementable |
-| 2026-09-10 | 4.6 | Corrected the claim that `auth_throttle` carries no personal data beyond an address. It carries the attempted email, which is personal data whether or not it matches an account. Retention obligation stated and the missing reaper recorded as future. | Review of 6b612f2 against the table the migration actually creates |
-| 2026-09-10 | 16.1 | Three temporary behaviours registered as the HTTP surface landed: SameSite as the only cross site defence, per-controller session authentication instead of a global deny-by-default guard, and `/me` reporting roles without effective permissions. | Each is a control that is deliberately partial in this increment, and an unregistered partial control is indistinguishable from a finished one |
-| 2026-09-10 | 6.2, 16.1 | Route access declared as one of three kinds, with the authenticated kind confined by rule to `/me` and the company switch. The guard ruled global, and enforcement ruled to re-derive rather than cache. Two 16.1 entries closed as the authorization layer landed, and the duplicated frontend permission vocabulary registered in their place. | "Every route declares the permission it requires" had no way to describe sign in, the health probes, or the two routes that tell a caller what they may do, and an undescribable route is one someone will leave undeclared |
-| 2026-09-10 | 6.7, 16.1 | The mock identity and route authorization temporary clauses discharged as the frontend began consuming `/me`. A clause added stating that a frontend route guard is presentation and never enforcement. | The frontend now has guards that look like access control, and the one thing worth writing down about them is that they are not |
-| 2026-09-10 | 14.4, 16.1 | Cross site request forgery implemented as the section already specified, with the one open decision recorded: the header carries a token bound to the session, derived from the stored hash rather than stored beside it. The last 16.1 entry discharged. | A plain double submit is satisfied by anyone who can write a cookie for the site, and the contract named the header and the origin check without saying what the header should carry |
-| 2026-09-11 | 2.9, 9.7 | The authoritative tax rate ruled to be a standard rate per company, beside the other fiscal settings, with the rate snapshotted onto each document line and resolved through one function. Per-product and per-customer rates rejected with reasons. | Section 3.3 required the server to recompute tax from its own master data and no section said which master data, which blocked sales order totals and would have blocked invoice posting |
-| 2026-09-10 | 2.4, 2.5 | A third transaction local setting added for the acting person, with one policy admitting a person's own membership rows when no tenant context is set. Section 2.5 gained the two session states, the two-stage membership check, and the rule that the session stores the company and never the tenant. | Company discovery is cross-tenant by construction under 2.6, so no tenant scoped context could answer it, and the switch sequence was specified as a sentence rather than as an order of operations |
-| 2026-09-13 | 12.3 | The sales order cancellation rule written: cancellable from draft and confirmed, a cancelled draft keeps a null document number, cancelling releases every reservation the order holds through a `released_at` stamp rather than a delete, no accounting consequence, and an optional reason kept in the audit payload alone. | Section 12.3 requires the rule per document type and no such rule existed, which is why the transition table refused every cancellation and `stock_reservations` was granted no way to release |
-| 2026-09-13 | 7.1, 12.2 | Document audit recorded as beginning at confirmation. Draft creation and draft editing are pre-confirmation mutations with no side effects and stay unaudited. | Section 12.2 makes confirming the lifecycle boundary, and retrofitting audit onto a draft would record a promise nobody made |
-| 2026-09-15 | 16.1 | The clock override discharged. The application clock is the system clock, and the four fixture screens that need the anchor ask for it through `agingReference`, which replaces the old row in the table. | The trigger "when the API supplies dates" had fired. A pinned clock measured a real audit event against a date weeks in the past, so the trail read "just now" whenever it had happened |
-| 2026-09-15 | 13.1 | The authorization matrix rebuilt against the route registry, so a protected route with no matrix entry fails the build by name. | The list was hand written and held to the code only by a comparison of lengths, which adding routes satisfies. Ten protected routes had no entry and nothing went red |
-| 2026-09-15 | 10.2, 10.3 | One canonical balance lock order stated in `inventory/lock-order.ts` and followed by confirmation and cancellation, and the bounded serialization retry the contract requires added at the API boundary. | Confirmation acquired locks in line order, which orders nothing across two documents, so two orders naming the same products in opposite order could deadlock. Nothing retried afterwards either |
-| 2026-09-15 | 7.3 | Sales order audit events now record the actor roles and the request id. The other writers, role provisioning and the company switch, still record neither and are noted as outstanding. | Four of the eleven fields the clause names were never populated, which is why every real event on the trail reported no role |
-| 2026-09-15 | 8.5, 9.4, 17.5 | The first customer invoice posting ruled: the invoice is raised from one or more sales orders, and posting it writes accounts receivable, revenue and tax and nothing else. It creates no stock movement, relieves no inventory, posts no cost of goods sold and writes no delivery interim entry. An invoice may therefore be posted before delivery, and an invoiced but undelivered sales order keeps its reservation, because only delivery or cancellation releases one. Quantity and cost effects belong to the delivery and costing path when those modules exist. | Section 17.5 defines the first slice 3 capability as posting the customer invoice into the value ledger, while quantity movement belongs to `sales_delivery` and costing under 8.6 is a later implementation. Read without this ruling, the interim account clause in 9.4 suggests invoice posting must also settle goods delivered not invoiced, which no module that exists can produce |
-| 2026-09-15 | 8.4 | The timing condition in 8.4 interpreted rather than changed. Every product today carries exactly one unit, its stocking unit, and every quantity persisted so far is expressed in that unit, so no historical quantity is ambiguous. The condition is read as requiring conversion support before a product may carry a unit other than its stocking unit, and it must be satisfied before the first feature that introduces a second unit, expected to be purchasing and multiple units of measure. Conversion is therefore not a prerequisite for slice 3 and is not implemented now. When a second unit becomes possible, the factor used is persisted on the document line as 8.4 already requires. | Taken literally, "before the first stock row is persisted" had already passed, which would block slice 3 on a capability no product can yet use. The ambiguity the clause protects against is a quantity that could mean either of two units, and that cannot arise while a product has only one |
-| 2026-09-15 | 9.6, 16.2 | Accounting periods ruled out of the first invoice posting increment. The system may post without period enforcement until the period capability exists, and nothing may stand in for one in the meantime: no simulated period, no simulated close, no posting refused as though a period were closed. When periods are built they are real, and 16.2 governs them unchanged. | Section 17.5 does not place period management in the first invoice posting slice, while 9.6 states it as a production requirement without assigning it to an increment. Since 16.2 forbids a faked close, honest absence is the only other option until the capability is written |
-| 2026-09-16 | 3.3, 3.4 | The price an invoice bills ruled to be the one its source sales order line agreed. Unit price and discount are copied from the order line when the invoice draft is raised, and posting validates current state without replacing them: a catalogue price that changed after the order was agreed never moves an invoice, and a draft is not repriced because master data moved. The tax rate is deliberately not copied, because 2.9 sends every document line through one resolver and makes the rate on a draft a working figure the committing transaction recomputes. | Section 3.3 says the server recomputes every monetary figure from its own master data and no clause said which master data an invoice recomputes from. Reading it as the catalogue would bill a customer something they never agreed to and make the invoice disagree with the order it cites, which 3.4 forbids by making a document the record of a past agreement. The order line is persisted server side, so nothing here is taken from a caller |
-| 2026-09-16 | 10.2, 12.2 | Concurrency between invoice drafts ruled: raising a draft claims nothing. A draft neither consumes `invoiced_quantity` nor reserves the right to consume it, so two drafts may describe overlapping uninvoiced remainders of one order line and both are legitimate documents until one is posted. Posting is the authoritative moment: inside its transaction it re-reads each source line, validates the remainder against the stored figure rather than the one the draft was raised from, and consumes it atomically, so two postings racing for one remainder resolve to one winner and one refusal. No invoice-specific reservation is introduced. | Section 12.2 makes a draft free of side effects and posting the irreversible moment that validates against current state, which settles where the check belongs; what was unstated was whether a draft may be raised at all while another describes the same quantity. Refusing it would need a reservation mechanism the contract does not describe and 8.5 reserves for stock, and it would make an ordinary act of preparing two invoices fail for a conflict that may never happen |

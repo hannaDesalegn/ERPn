@@ -4,7 +4,7 @@
  * These are interfaces only. The implementations are not exported, and there is no exported
  * constructor, factory or raw database handle anywhere in this layer. The only way to obtain a
  * repository is to be handed one inside a `UnitOfWork` callback, which has already opened a
- * transaction and set the tenant context. Contract section 6.3: constructing an unscoped query
+ * transaction and set the tenant context. Architecture section 6.3: constructing an unscoped query
  * must not be possible through the public interface of the data layer.
  *
  * Read every signature below with that in mind. No method takes a `tenantId` or `companyId`
@@ -20,7 +20,7 @@ export interface CompanyRecord {
   legalName: string | null;
   baseCurrency: string;
   /**
-   * The company standard tax rate, per section 2.9 as amended 2026-09-11.
+   * The company standard tax rate, per section 2.9.
    *
    * The authority a document line's rate is resolved from, not the rate itself: section 3.4
    * has the line snapshot what applied when it was raised, so changing this never alters a
@@ -66,7 +66,7 @@ export interface AuditEventInput {
   requestId?: string | null;
   ipAddress?: string | null;
   userAgent?: string | null;
-  /** The actor's roles as they were at the time, per contract section 7.3. */
+  /** The actor's roles as they were at the time, per architecture section 7.3. */
   actorRoles?: string[];
 }
 
@@ -105,7 +105,7 @@ export interface CompanyRepository {
     taxRegistrationNumber?: string | null;
   }): Promise<CompanyRecord>;
   /**
-   * Optimistic locking per contract section 10.1. The caller supplies the version it read; a
+   * Optimistic locking per architecture section 10.1. The caller supplies the version it read; a
    * mismatch is a conflict rather than a silent overwrite.
    */
   rename(input: { id: string; name: string; expectedVersion: number }): Promise<CompanyRecord>;
@@ -130,7 +130,7 @@ export interface MembershipRepository {
    *
    * Available under a principal scope alone, and it takes no user id for the same reason as
    * above: the subject is the scope, not an argument a caller chooses. Cross-tenant by
-   * necessity, because a person may work for two of our customers, per section 2.6, and asking
+   * necessity, because a person may work for two customers of the product, per section 2.6, and asking
    * inside one tenant cannot discover the other.
    */
   listOwn(): Promise<MembershipRecord[]>;
@@ -138,7 +138,7 @@ export interface MembershipRepository {
 }
 
 /**
- * Global, per contract section 4.6. Users are not tenant scoped, and pretending otherwise
+ * Global, per architecture section 4.6. Users are not tenant scoped, and pretending otherwise
  * would force a user row per tenant, which section 2.6 rejected.
  *
  * Section 4.6 also says absence of a tenant column is not absence of authorization: this
@@ -167,7 +167,7 @@ export interface UserRepository {
 /**
  * Append only, and the interface says so by having nowhere to put an update.
  *
- * Contract section 7.1 revokes `UPDATE` and `DELETE` from the application database role, so a
+ * Architecture section 7.1 revokes `UPDATE` and `DELETE` from the application database role, so a
  * tampering attempt fails at the database even if code tried. This interface removes the
  * temptation one layer earlier: there is no method to call.
  */
@@ -197,7 +197,7 @@ export interface SessionRecord {
 }
 
 /**
- * Global, per contract section 4.6. A session belongs to a global user and carries the active
+ * Global, per architecture section 4.6. A session belongs to a global user and carries the active
  * company as state rather than as scope.
  *
  * NOTE WHAT IS ABSENT. There is no method that returns a token, and no field that holds one.
@@ -231,13 +231,13 @@ export interface SessionRepository {
    * Requires an actor scope for that reason.
    */
   setActiveCompany(input: { id: string }): Promise<void>;
-  /** Server side revocation. Contract section 5.3. */
+  /** Server side revocation. Architecture section 5.3. */
   revoke(id: string): Promise<void>;
   /** Revokes every live session for a user, for password change and dismissal. */
   revokeAllForUser(userId: string): Promise<number>;
 }
 
-/** What is being counted. Contract section 5.2 requires both per address and per account. */
+/** What is being counted. Architecture section 5.2 requires both per address and per account. */
 export type AuthThrottleScopeKind = 'address' | 'account';
 
 export interface AuthThrottleStatus {
@@ -246,7 +246,7 @@ export interface AuthThrottleStatus {
   lockedUntil: Date | null;
 }
 
-/** Deployment level, per contract section 5.3. Never per company at authentication time. */
+/** Deployment level, per architecture section 5.3. Never per company at authentication time. */
 export interface AuthThrottlePolicy {
   maxAttempts: number;
   windowMinutes: number;
@@ -254,7 +254,7 @@ export interface AuthThrottlePolicy {
 }
 
 /**
- * Login throttling state. Global, per contract section 4.6 as amended 2026-09-10.
+ * Login throttling state. Global, per architecture section 4.6.
  *
  * Global by necessity rather than convenience: authentication precedes tenant resolution, and
  * an attempt against an address matching no account has no user and no tenant to attribute it
@@ -419,8 +419,7 @@ export interface NewWarehouse {
  * Archiving a master data record.
  *
  * The version the caller read, per the optimistic locking in section 10.1. A stale value is a
- * conflict rather than a silent overwrite, which is the same shape `CompanyRepository.rename`
- * established in slice 1.
+ * conflict rather than a silent overwrite, the same shape as `CompanyRepository.rename`.
  */
 export interface ArchiveRequest {
   id: string;
@@ -696,9 +695,8 @@ export interface SalesOrderRepository {
    * version for that reason: there is no concurrent writer to lose an update to, because the
    * rows it is summing are not visible to anyone else yet.
    *
-   * The optimistic locking that section 10.1 requires for editing an existing draft arrives
-   * with the increment that edits one. A caller reaching for this to change a saved order is
-   * using the wrong method.
+   * Editing a saved draft goes through `updateDraft`, which carries the version section 10.1
+   * requires. A caller reaching for this to change a saved order is using the wrong method.
    */
   setTotals(input: SalesOrderTotals): Promise<SalesOrderRecord>;
   /**
@@ -967,8 +965,7 @@ export interface StockReservationRecord {
   /**
    * When the stock stopped being held, or null while it still is.
    *
-   * Section 12.3's cancellation ruling, 2026-09-13: a release stamps this rather than removing
-   * the row, so what was held and until when survives. Availability counts only the nulls.
+   * Section 12.3: a release stamps this rather than removing the row, so what was held and until when survives. Availability counts only the nulls.
    */
   releasedAt: Date | null;
   /** Section 10.1's token. Read by the release, which is the one update this table takes. */
@@ -1007,7 +1004,7 @@ export interface StockReservationRelease {
  * READS AND ONE WRITE, AND DELIBERATELY NOT THE OPERATION. There is no `reserve` here, because
  * reserving is not an insert: section 8.5 requires an order that would oversell to fail inside
  * the transaction, and section 10.2 requires the balance row to be locked while it happens. That
- * belongs to the reservation operation, in the increment that owns it, alongside the availability
+ * belongs to the reservation operation in `inventory/reservations.ts`, alongside the availability
  * check it has to make first. What is here is the record and the ability to read it.
  *
  * RELEASE IS HERE AND IS STILL NOT THE OPERATION, for the same reason. `releaseUnderBalanceLock`
@@ -1509,7 +1506,7 @@ export class UnknownPermissionError extends Error {
   }
 }
 
-/** Thrown when an optimistic locking check fails. Contract section 10.1. */
+/** Thrown when an optimistic locking check fails. Architecture section 10.1. */
 export class ConcurrencyConflictError extends Error {
   constructor(entity: string, id: string) {
     super(`${entity} ${id} was modified by someone else. Re-read it and try again.`);
@@ -1520,7 +1517,7 @@ export class ConcurrencyConflictError extends Error {
 /**
  * Thrown when a scoped operation finds nothing.
  *
- * Contract section 6.1: a failure at the tenant dimension is indistinguishable from the record
+ * Architecture section 6.1: a failure at the tenant dimension is indistinguishable from the record
  * not existing. Callers get the same error either way, so identifiers cannot be probed to learn
  * what other tenants hold.
  */

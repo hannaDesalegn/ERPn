@@ -2,7 +2,7 @@
  * Drizzle definitions for the idempotency records of section 11.
  *
  * These describe what `migrations/0010_idempotency_records.sql` creates. They do not create it:
- * contract section 1.2 ratified handwritten SQL as the only thing that changes the database, and
+ * architecture section 1.2 ratified handwritten SQL as the only thing that changes the database, and
  * `schema-drift.int.spec.ts` compares these against the live catalogue.
  */
 

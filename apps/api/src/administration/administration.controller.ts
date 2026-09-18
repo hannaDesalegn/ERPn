@@ -1,13 +1,9 @@
 /**
  * Company administration reads and role changes.
  *
- * These are the first routes in the system that require a capability rather than merely a
- * session, and they exist for that reason as much as for their own. Section 6.2 requires deny by
- * default and criterion 8 requires a 403 for an authenticated caller without the permission;
- * neither is testable against a surface where every route is open to any signed-in user.
- *
- * They are also the operations criterion 11 needs: a user must not be able to assign a role
- * carrying permissions they do not hold, which cannot be proved without a way to assign one.
+ * Section 6.2 requires deny by default, and criterion 8 requires a 403 for an authenticated caller
+ * without the permission. Criterion 11 requires that a user cannot assign a role carrying
+ * permissions they do not hold, which these routes enforce.
  *
  * TWO CAPABILITIES, NOT ONE. Membership and role administration needs `admin:users`, which only
  * the administrator template carries. Reading the company's trail needs `audit:view`, which the
@@ -15,9 +11,7 @@
  * something: with a single permission across every route, every role would sort into "all" or
  * "nothing" and a bug that granted too much would look identical to correct behaviour.
  *
- * WHAT IS NOT HERE. No company administration screens, which section 17.2 puts outside slice 1,
- * and no user creation or invitation. This is the smallest surface that makes the authorization
- * layer real rather than theoretical.
+ * WHAT IS NOT HERE. No user creation, invitation or membership management; see section 16.1.
  */
 
 import {

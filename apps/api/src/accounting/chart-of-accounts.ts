@@ -6,12 +6,10 @@
  * second. They are separate files because they answer different questions: which accounts exist,
  * and which one a particular posting uses.
  *
- * THE DEFAULT CHART IS THREE ACCOUNTS, AND THAT IS THE WHOLE POINT. Section 18.2, as amended on
- * 2026-09-15, rules that the first customer invoice posting writes receivables, revenue and tax
- * and nothing else. A bank account, an inventory account and a cost of goods sold account would
- * be accounts nothing can post to, in a chart nobody can edit yet, and section 16.1 would have
- * to carry them as temporary state until the modules that use them arrived. Three is what the
- * ruling asks for.
+ * THE DEFAULT CHART IS THREE ACCOUNTS. Customer invoice posting writes receivables, revenue and
+ * tax and nothing else (section 9.8). A bank account, an inventory account and a cost of goods
+ * sold account would be accounts nothing can post to. Each is added with the module that posts
+ * to it.
  *
  * SEEDED AT COMPANY CREATION, NEVER AT POSTING TIME. Section 2.7 seeds role templates when a
  * company is created and they belong to the company from that moment; a chart is the same shape

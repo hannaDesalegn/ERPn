@@ -23,7 +23,7 @@ import {
  * What the server says after confirming an order.
  *
  * Exactly the endpoint's response and nothing more. The status and the document number are the
- * server's to decide, per contract sections 12.2 and 10.4, so they arrive rather than being
+ * server's to decide, per architecture sections 12.2 and 10.4, so they arrive rather than being
  * worked out here.
  */
 export interface ConfirmationResult {
@@ -38,7 +38,7 @@ export interface ConfirmationResult {
  * What the server says after cancelling an order.
  *
  * Exactly the endpoint's response. `docNumber` is nullable where the confirmation's is not,
- * because a cancelled draft keeps its null number: contract section 12.3 does not issue one to a
+ * because a cancelled draft keeps its null number: architecture section 12.3 does not issue one to a
  * document the business never raised.
  */
 export interface CancellationResult {
@@ -53,7 +53,7 @@ export interface CancellationResult {
 /**
  * A sales order as the backend holds it.
  *
- * Exactly the endpoint's response. Figures are decimal strings because contract section 4.3 keeps
+ * Exactly the endpoint's response. Figures are decimal strings because architecture section 4.3 keeps
  * them exact on the server, and converting them to whatever this application renders is this
  * layer's job rather than a component's.
  */
@@ -139,9 +139,9 @@ export interface SalesOrderDetailLine {
 /**
  * A decimal string into the minor units this application counts in.
  *
- * The server keeps four decimal places and this rounds to two, which is the representation
- * section 16.1 already records as temporary pending a shared contracts package. Rounding here
- * rather than anywhere else keeps the loss in one place, at the seam, where it can be removed.
+ * The server keeps four decimal places and this rounds to two, the frontend's money
+ * representation (a known limitation in architecture section 16.1). Rounding here rather than
+ * anywhere else keeps the loss in one place, at the seam, where it can be removed.
  */
 export function toMoney(value: string, currency: string): Money {
   return { amount: Math.round(Number(value) * 100), currency: currency as Money['currency'] };
@@ -397,9 +397,8 @@ export const salesService = {
   /**
    * One sales order, from the backend.
    *
-   * Section 16.1 removes the fixture layer per module as endpoints land, and the sales order
-   * document has landed: this and the list above both read the backend, so an identifier from one
-   * is an identifier the other serves.
+   * This and the list above both read the backend, so an identifier from one is an identifier the
+   * other serves.
    *
    * `db.salesOrders` survives below for the dashboard's recent orders and for resolving document
    * references, neither of which has an endpoint. Those are other modules' fixtures, not this

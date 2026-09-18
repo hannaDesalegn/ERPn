@@ -13,9 +13,8 @@
  * a mocked lock always holds, so the test that matters holds one transaction open and proves a
  * second blocks on the same key and does not block on a different one.
  *
- * WHAT IS NOT TESTED HERE, BECAUSE IT DOES NOT EXIST. No reservation, no oversell refusal, no
- * last unit race, no release. This increment reads a number. A test for behaviour that has not
- * been written would pass for the wrong reason.
+ * WHAT IS NOT TESTED HERE. No reservation, no oversell refusal, no last unit race: this file
+ * covers the availability read. Those are tested in `inventory/reservations.int.spec.ts`.
  *
  * Requires `npm run db:up` and `npm run db:migrate`.
  */
@@ -287,7 +286,7 @@ describe('Stock availability', () => {
       }),
     );
 
-  /** Holds stock against a line, without any of the checks the reservation increment will add. */
+  /** Holds stock against a line, without any of the checks the reservation operation makes. */
   const hold = (
     scope: ActorScope,
     quantity: string,
@@ -312,7 +311,7 @@ describe('Stock availability', () => {
     );
 
 // -------------------------------------------------------------------------------------
-  // Released reservations, per section 12.3 as ruled 2026-09-13.
+  // Released reservations, per section 12.3.
   // -------------------------------------------------------------------------------------
 
   describe('a released reservation holds nothing', () => {
@@ -774,7 +773,7 @@ describe('Stock availability', () => {
 
     it('offers no reservation or confirmation operation beside it', async () => {
       // The read primitive and nothing more. Reserving is an availability check followed by a
-      // write, and this increment deliberately owns only the first half.
+      // write, and this repository deliberately owns only the first half.
       const methods = await uow.inActorScope(IN_A1, async (repositories) =>
         Object.getOwnPropertyNames(Object.getPrototypeOf(repositories.stockLedger)),
       );

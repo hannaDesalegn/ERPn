@@ -381,7 +381,7 @@ describe('Creating a customer invoice draft', () => {
     });
 
     it('writes no journal entry', async () => {
-      // Section 18.2 as amended 2026-09-15 makes receivables, revenue and tax the posting's work.
+      // Section 9.8 makes receivables, revenue and tax the posting's work.
       const order = await confirmedOrder();
 
       await draft({ salesOrderIds: [order.id], invoiceDate: '2026-09-15' });
@@ -618,7 +618,7 @@ describe('Creating a customer invoice draft', () => {
 
     it('bills part of a line when a smaller quantity is given', async () => {
       // Section 8.5 and the domain model both permit partial invoicing, and it does not require a
-      // delivery: an invoice may be raised before one, per section 18.2 as amended 2026-09-15.
+      // delivery: an invoice may be raised before one, per section 9.8.
       const order = await confirmedOrder({ lines: [{ quantity: '10.000000' }] });
 
       const created = await draft({
@@ -1131,11 +1131,9 @@ describe('Creating a customer invoice draft', () => {
 
   describe('two drafts of the same order', () => {
     it('both succeed, because a draft reserves nothing', async () => {
-      // RECORDED RATHER THAN RULED. Nothing is consumed until posting, so two drafts raised at
-      // once can each claim the whole remainder, and the architecture does not say whether that
-      // is allowed. Section 12.2 makes posting the moment that validates against current state,
-      // which is where the question belongs. This test pins the behaviour as it is today so that
-      // a later ruling is a visible change rather than a silent one.
+      // Nothing is consumed until posting, so two drafts raised at once can each claim the whole
+      // remainder, which section 12.2 permits: posting validates against current state and
+      // consumes the remainder. This test pins that behaviour.
       const order = await confirmedOrder({ lines: [{ quantity: '10.000000' }] });
 
       const first = await draft({ salesOrderIds: [order.id], invoiceDate: '2026-09-15' });

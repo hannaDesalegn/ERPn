@@ -1,11 +1,10 @@
 /**
  * The sales order list, reading the backend.
  *
- * WHAT THIS IS FOR. Until now the list came from fixtures whose identifiers exist nowhere in the
- * database, so clicking a row reached a detail screen that answered not found. The regression at
- * the bottom of this file is the one that matters: an identifier the list hands back has to be
- * one the detail route serves, or the navigation is broken again and nothing else here would
- * notice.
+ * WHAT THIS IS FOR. A list read from fixtures would hand back identifiers that exist nowhere in the
+ * database, so clicking a row would reach a detail screen that answered not found. The regression
+ * at the bottom of this file is the one that matters: an identifier the list hands back has to be
+ * one the detail route serves.
  *
  * `fetch` is stubbed per test and records every call, so an assertion can be about which endpoint
  * was reached and with what query, rather than only about what ended up on screen.
@@ -314,7 +313,7 @@ describe('the query it sends', () => {
   });
 });
 
-describe('the navigation this work package exists for', () => {
+describe('navigating from the list to an order', () => {
   it('clicks through to the detail route with the identifier the server gave', async () => {
     // The regression. A fixture identifier would route to a detail screen the backend does not
     // serve, which is the state this replaced.

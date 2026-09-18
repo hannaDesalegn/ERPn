@@ -1,15 +1,15 @@
 /**
  * The catalogue, and its agreement with the vocabulary it came from.
  *
- * Contract section 6.2 carries the permission strings forward from the existing model, and
+ * Architecture section 6.2 carries the permission strings forward from the existing model, and
  * section 2.7 names the six role shapes. Until the frontend consumes `/me`, both definitions
  * exist in two places: the backend catalogue, which is authoritative under section 3.1, and the
  * frontend copy that predates it.
  *
  * Two copies of a security vocabulary is exactly the sort of thing that agrees on the day it is
  * written and disagrees six months later, in a way nobody notices because each side is
- * internally consistent. So the comparison is a test rather than a convention. The frontend copy
- * is registered as temporary in section 16.1; this keeps it honest until it is deleted.
+ * internally consistent. So the comparison is a test rather than a convention, and it keeps the
+ * frontend copy honest until that copy is deleted.
  */
 
 import { readFileSync } from 'node:fs';
@@ -130,7 +130,7 @@ describe('The default role templates', () => {
   });
 
   it('makes the administrator a superset of every other template', () => {
-    // Not a rule the contract states, and true of the shapes it names. Pinned so that adding a
+    // Not a rule the architecture states, and true of the shapes it names. Pinned so that adding a
     // capability to one role and forgetting the administrator shows up here rather than as a
     // support ticket about an administrator who cannot do something.
     const administrator = templatePermissions('administrator');

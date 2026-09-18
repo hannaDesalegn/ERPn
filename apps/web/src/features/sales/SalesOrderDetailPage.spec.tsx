@@ -11,9 +11,6 @@
  * was reached and what was sent, rather than only about what ended up on screen. The session comes
  * from a real `/me` response through the real provider, because the permission gate is part of
  * what is being exercised.
- *
- * The order itself still comes from the fixture layer. That is the honest state of a half
- * migrated module under section 16.1: confirmation has an endpoint and reading an order does not.
  */
 
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
@@ -476,15 +473,14 @@ describe('when the server refuses', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 13. The placeholder this increment supersedes.
+// 13. No placeholder survives.
 // ---------------------------------------------------------------------------
 
 describe('the fixture placeholder', () => {
-  it('is gone, so the action is no longer a disabled promise', async () => {
-    // What this increment actually replaced. There was never a fixture function for confirming;
-    // the placeholder was a permanently disabled button titled "Write actions arrive with the
-    // backend". A button that cannot be pressed is exactly the fake functionality the project
-    // rules forbid, and this asserts it did not survive.
+  it('offers a working action rather than a disabled promise', async () => {
+    // A permanently disabled button titled "Write actions arrive with the backend" would be a
+    // control that cannot be pressed, which is fake functionality. This asserts the confirm
+    // action is real.
     renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
     await waitForPage();
 
@@ -495,8 +491,7 @@ describe('the fixture placeholder', () => {
   });
 
   it('reaches the network rather than the fixture layer', async () => {
-    // The order still comes from fixtures and the confirmation does not. This is the per module
-    // removal of section 16.1 rather than a broad cleanup.
+    // Confirmation goes to the API, never to the fixture layer.
     renderPage(SELLER, () => ({ status: 200, body: CONFIRMED }));
     await waitForPage();
 
@@ -659,7 +654,7 @@ describe('the history it shows', () => {
     expect(screen.getByText(/Sales, Warehouse/)).toBeDefined();
   });
 
-  it('shows no fixture activity, because it no longer reads the fixture', async () => {
+  it('shows no fixture activity, because it reads the real trail', async () => {
     // `so-055` has a generated trail in the fixture layer, headed by "Created sales order". The
     // real endpoint answers a draft with nothing, so that sentence appearing would mean this
     // screen had gone back to reading `db.auditEvents`.
@@ -786,7 +781,7 @@ describe('the history it shows', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cancelling, per section 12.3 as ruled 2026-09-13.
+// Cancelling, per section 12.3.
 // ---------------------------------------------------------------------------
 
 /** Holds sales:cancel as well, which the seller deliberately does not. */
@@ -1055,11 +1050,9 @@ describe('cancelling an order', () => {
     await waitFor(() => expect(calls.filter((c) => c.url === AUDIT_URL).length).toBeGreaterThan(1));
   });
 
-  it('no longer claims a rule nobody had ruled on', async () => {
-    // The button used to be permanently disabled with the title "Cancelling releases reserved
-    // stock", written before section 12.3 said anything of the kind. It turned out to be right,
-    // and it was still a claim the product was making on its own. A disabled control that
-    // asserts a rule is exactly the fake functionality the project rules forbid.
+  it('does not assert a rule through a disabled control', async () => {
+    // A permanently disabled button whose title states a business rule is a claim the product
+    // makes without the server behind it, which is fake functionality.
     renderFor(MANAGER, DRAFT_RESPONSE);
     await waitForPage();
 
@@ -1092,10 +1085,10 @@ describe('how recently the history says things happened', () => {
   };
 
   it('measures a real event against real time, not against the fixture anchor', async () => {
-    // THE REGRESSION TEST FOR THE PINNED CLOCK. The fixture layer used to point the application
-    // clock at 2026-08-14, so an event the server recorded a minute ago was measured against a
-    // date weeks in the past. The interval came out negative and every real event on the trail
-    // read "just now", forever, whenever it had happened.
+    // THE REGRESSION TEST FOR A PINNED CLOCK. Pointing the application clock at the fixture
+    // anchor would measure an event the server recorded a minute ago against a date weeks in the
+    // past. The interval would come out negative and every real event on the trail would read
+    // "just now", forever.
     showing(SELLER, [minutesAgo(15)]);
     await waitForPage();
 
@@ -1156,10 +1149,9 @@ describe('the customer panel', () => {
   });
 
   it('asks no other service for the party on this page', () => {
-    // THE REGRESSION TEST FOR THE FIXTURE LEAK, and it reads the source rather than the screen
-    // on purpose. The page used to ask the fixture customer layer about a real backend
-    // identifier. That lookup could never match, so the panel drew its header over nothing and
-    // the payment terms field held a skeleton that never resolved.
+    // THE REGRESSION TEST FOR A FIXTURE LEAK, and it reads the source rather than the screen on
+    // purpose. Asking the fixture customer layer about a real backend identifier could never
+    // match, so the panel would draw its header over nothing.
     //
     // A behavioural test cannot catch it coming back. The fixture layer answers from memory, so
     // a reintroduced call makes no request to observe and changes nothing on screen until

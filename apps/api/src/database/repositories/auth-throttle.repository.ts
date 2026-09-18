@@ -1,7 +1,7 @@
 /**
  * Login throttling. INTERNAL, like every other repository implementation here.
  *
- * Contract section 5.2: login is rate limited per address and per account, with progressive
+ * Architecture section 5.2: login is rate limited per address and per account, with progressive
  * backoff and lockout, and every failure is recorded.
  *
  * THE ONE THING THIS FILE HAS TO GET RIGHT is that recording a failure is a single statement.
@@ -10,8 +10,9 @@
  * the limiter has been bypassed by the only attacker who would bother. `INSERT ... ON CONFLICT
  * DO UPDATE` takes a row lock, so the ten attempts serialise and the tenth sees nine.
  *
- * State lives in PostgreSQL rather than in memory because contract section 1.2 defers Redis out
- * of slice 1, and because in-memory counters reset on deploy and do not exist across replicas,
+ * State lives in PostgreSQL rather than in memory because architecture section 1.2 introduces Redis
+ * only where it earns its place, and because in-memory counters reset on deploy and do not exist
+ * across replicas,
  * which makes them a limiter an attacker can clear by waiting for a release.
  */
 
@@ -43,7 +44,7 @@ type ThrottleRow = Record<string, unknown> & {
 
 export class DrizzleAuthThrottleRepository implements AuthThrottleRepository {
   /**
-   * No scope parameter. This table is global by necessity, per contract section 4.6: it is
+   * No scope parameter. This table is global by necessity, per architecture section 4.6: it is
    * written before any tenant exists to scope it to.
    */
   constructor(private readonly db: Db) {}

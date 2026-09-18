@@ -3,7 +3,7 @@
  *
  * These describe what `migrations/0008_stock_ledger.sql` and `0009_stock_reservations.sql`
  * create. They do not create it:
- * contract section 1.2 ratified handwritten SQL as the only thing that changes the database, and
+ * architecture section 1.2 ratified handwritten SQL as the only thing that changes the database, and
  * `schema-drift.int.spec.ts` compares these against the live catalogue.
  *
  * Section 8.1 makes the ledger the truth and section 8.2 makes the balance a maintained
@@ -72,9 +72,8 @@ export const stockMovements = pgTable('stock_movements', {
  * changes it. The ledger remains the source of truth and this is the read path, with a rebuild
  * and verify job to come that recomputes it and reports drift.
  *
- * No reserved quantity yet. Section 8.5 defines available as on hand minus reserved, but a
- * reservation is not a movement, so where reserved lives is the reservation increment's
- * question rather than a column guessed at now.
+ * No reserved quantity. Section 8.5 defines available as on hand minus reserved, but a
+ * reservation is not a movement: reserved is derived from `stock_reservations` instead.
  */
 export const stockBalances = pgTable('stock_balances', {
   id: uuid('id').primaryKey(),
@@ -98,9 +97,9 @@ export const stockBalances = pgTable('stock_balances', {
  * reserved lives here and is derived from these rows rather than held as a counter beside
  * `onHand`.
  *
- * No status, because section 12.3 has not ruled what cancelling does to reserved stock. No
- * `version`, because nothing updates a row here yet, which is section 4.2's second exempt
- * shape. Quantity is positive rather than signed: a movement records a direction, a reservation
+ * No status: a reservation is active until `released_at` is stamped, per section 12.3. It carries
+ * `version` because a release updates the row, see below. Quantity is positive rather than
+ * signed: a movement records a direction, a reservation
  * records an amount set aside, and it is subtracted wherever availability is computed.
  */
 export const stockReservations = pgTable('stock_reservations', {
@@ -118,7 +117,7 @@ export const stockReservations = pgTable('stock_reservations', {
   /**
    * When the stock stopped being held. Null while the reservation is active.
    *
-   * Section 12.3's cancellation ruling: reservations are released, never deleted, so what was
+   * Section 12.3: reservations are released, never deleted, so what was
    * held and until when survives. Availability sums only the rows where this is null.
    */
   releasedAt: timestamp('released_at', { withTimezone: true }),
@@ -149,8 +148,8 @@ export const INVENTORY_COMPANY_PARTITIONED_TABLES = [
 /**
  * The ledger is append only, which is section 4.2's second exempt shape.
  *
- * `stock_reservations` left it in migration 0012. Section 12.3 ruled that cancelling releases
- * a reservation by stamping `released_at`, which makes the row updatable, which is the only
+ * `stock_reservations` left it in migration 0012. Section 12.3 has cancelling release a
+ * reservation by stamping `released_at`, which makes the row updatable, which is the only
  * circumstance in which a lost update is possible. None of section 4.2's four exemptions fits a
  * table availability is computed from, so it carries `version` under the main rule and the
  * release predicate reads it.

@@ -1,16 +1,15 @@
 /**
  * The database connection.
  *
- * One pool for the process, created at startup and closed on shutdown. Contract section
+ * One pool for the process, created at startup and closed on shutdown. Architecture section
  * 15.6 wants application processes stateless and horizontally scalable, which means the pool
  * is per process and nothing is cached across requests here.
  *
  * WHAT THIS MODULE DELIBERATELY DOES NOT DO. It exposes a raw Drizzle handle, and that handle
- * is not what feature code will use. Contract section 6.3 requires every query to be scoped by
+ * is not what feature code will use. Architecture section 6.3 requires every query to be scoped by
  * tenant, company and actor, and requires that an unscoped query cannot be constructed through
- * the data layer's public interface. The scoped repository that enforces that is the next
- * increment. Until it exists, this handle is used only by infrastructure concerns such as the
- * readiness check and migrations.
+ * the data layer's public interface. `UnitOfWork` and the scoped repositories enforce that; this
+ * handle is used only by infrastructure concerns such as the readiness check.
  */
 
 import { Global, Inject, Module, type OnApplicationShutdown } from '@nestjs/common';
@@ -55,7 +54,7 @@ export class DatabaseModule implements OnApplicationShutdown {
 
   /**
    * Closes the pool on SIGTERM so in-flight queries finish and connections are returned
-   * rather than dropped. Contract section 15.4 expects a rolling deploy not to sever work.
+   * rather than dropped. Architecture section 15.4 expects a rolling deploy not to sever work.
    */
   async onApplicationShutdown(): Promise<void> {
     await this.pool.end();

@@ -6,7 +6,7 @@
  * never resolves a session, never chooses a company, and never accepts either as an argument it
  * has not been handed by the layer that owns it.
  *
- * Contract section 6.1 orders the four dimensions, and the order matters. Company scope is
+ * Architecture section 6.1 orders the four dimensions, and the order matters. Company scope is
  * evaluated first and is not a permission a role can grant, so nothing in this file can widen
  * the boundary. It receives a `CompanyContext` that was already verified against a live
  * membership, and every read it performs runs inside that context.

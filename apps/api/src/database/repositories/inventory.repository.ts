@@ -17,12 +17,11 @@
  * LOCK ORDER. Section 10.2 requires the acquisition order to be documented and followed. This
  * operation takes exactly one lock, on the balance row for its own key, and takes it before the
  * movement is written. A caller moving several products in one transaction therefore acquires
- * locks in the order it presents them, and the rule when that arrives is to sort by product then
- * warehouse, so two transactions touching the same pair of keys cannot deadlock against each
- * other. Nothing here takes a second lock, so nothing here can deadlock yet.
+ * locks in the order it presents them, and must present them in the order `inventory/lock-order.ts`
+ * states, product then warehouse, so two transactions touching the same keys cannot deadlock.
  *
  * NO ON HAND CHECK. Section 8.5 makes negative stock a policy per warehouse defaulting to deny,
- * and refusing an oversell is the reservation increment's work, where the policy is read and the
+ * and refusing an oversell is the reservation operation's work, where the policy is read and the
  * order is the thing being refused. A movement that takes a balance negative is recorded here,
  * because the ledger records what happened.
  */
@@ -109,7 +108,7 @@ export class DrizzleStockLedgerRepository implements StockLedgerRepository {
    *
    * THE BALANCE ROW IS THE ONLY LOCK, AND RESERVATIONS ARE NOT LOCKED. That is a deliberate
    * reading of section 10.2, which names stock balance rows and not reservation rows. It works
-   * because of an invariant this operation establishes and the reservation increment must keep:
+   * because of an invariant this operation establishes and every reservation writer keeps:
    *
    *     every transaction that writes a reservation for a key first takes that key's balance
    *     row lock, by calling this
@@ -133,7 +132,7 @@ export class DrizzleStockLedgerRepository implements StockLedgerRepository {
    * about to write a reservation has to ensure the row first, the way `record` does.
    *
    * THIS WRITES NOTHING. Not the balance, not a reservation, not even the empty balance row for
-   * a key that has none. Reserving is a separate increment, and creating a row here to have
+   * a key that has none. Reserving is a separate operation, and creating a row here to have
    * something to lock would make a read that quietly writes.
    */
   async availabilityForUpdate(

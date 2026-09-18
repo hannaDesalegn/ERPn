@@ -1,13 +1,13 @@
 /**
  * Environment configuration, validated once at startup.
  *
- * Architecture contract section 15.2: configuration comes from the environment, a single
+ * Architecture section 15.2: configuration comes from the environment, a single
  * module reads and validates it at startup, and the process fails fast on anything missing
  * or malformed. A server that boots with a half valid configuration fails later, in
  * production, under load, in a way nobody can attribute.
  *
  * Nothing in this file has a production default. Defaults exist only for values that are
- * genuinely safe to assume in development. Secrets never appear here at all: contract
+ * genuinely safe to assume in development. Secrets never appear here at all: architecture
  * section 15.5 keeps them in the secret store, injected at runtime.
  */
 
@@ -34,7 +34,7 @@ export const envSchema = z.object({
   /**
    * PostgreSQL connection string for the RESTRICTED APPLICATION ROLE.
    *
-   * Contract sections 2.4 and 7.1: the API never connects as the role that owns objects.
+   * Architecture sections 2.4 and 7.1: the API never connects as the role that owns objects.
    * The owning role runs migrations and is configured separately, so a misconfigured API
    * cannot issue DDL or escape row level security even if someone points it at the wrong
    * database.
@@ -56,7 +56,7 @@ export const envSchema = z.object({
   // -----------------------------------------------------------------------------------
   // Authentication policy.
   //
-  // Contract section 5.3, ratified 2026-09-10: authentication-time policy is deployment
+  // Architecture section 5.3: authentication-time policy is deployment
   // level configuration, not per company, because authentication happens before any company
   // is known. Per-company overrides are a recorded future consideration.
   //
@@ -110,7 +110,7 @@ export const envSchema = z.object({
   // -----------------------------------------------------------------------------------
   // Session cookie.
   //
-  // Contract section 5.1: the client receives an opaque session identifier in an HttpOnly,
+  // Architecture section 5.1: the client receives an opaque session identifier in an HttpOnly,
   // Secure, SameSite cookie. Only the Secure attribute is configurable, and only because a
   // browser will not send a Secure cookie over plain HTTP, which would make local
   // development impossible without a certificate.

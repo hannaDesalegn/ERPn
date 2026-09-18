@@ -24,11 +24,9 @@
  * tokens, where `secret-handling.spec.ts` forbids a logger outright. A count is harmless, but an
  * exception carved into that control for a harmless case is how the control stops holding.
  *
- * NO SCHEDULER, AND THAT IS DELIBERATE. The repository carries no scheduling dependency and the
- * contract names none. Adding one would be building deployment infrastructure inside a business
- * increment. What exists here is an operation with a single clear entry point, callable by a
- * deployment's scheduler, by an operator, or by a test. What remains is wiring it to whatever
- * runs it in production.
+ * NO SCHEDULER, AND THAT IS DELIBERATE. The repository carries no scheduling dependency, and
+ * scheduling is deployment infrastructure. What exists here is an operation with a single clear
+ * entry point, callable by a deployment's scheduler, by an operator, or by a test.
  */
 
 import { Injectable } from '@nestjs/common';

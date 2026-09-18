@@ -1,7 +1,7 @@
 /**
  * Retrying a transaction the database refused for a concurrency reason.
  *
- * Contract section 10.3: serialization failures are retried at the API boundary with bounded
+ * Architecture section 10.3: serialization failures are retried at the API boundary with bounded
  * backoff, and it says why that is safe here and nowhere else, "only because of idempotency per
  * section 11". A retried request re-claims the same key in a fresh transaction, so the work
  * happens once however many attempts it took.

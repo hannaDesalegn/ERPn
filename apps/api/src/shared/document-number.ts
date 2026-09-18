@@ -13,9 +13,9 @@
  * that grows.
  *
  * The width is not configurable. Section 10.4 makes the prefix and the gapless choice per
- * sequence settings and says nothing about padding, and a setting the contract does not ask for
- * would need a column in the sequence table to live in. If a tenant ever needs it, that is a
- * migration and an amendment, not a constant quietly changed here.
+ * sequence settings and says nothing about padding, and a configurable width would need a column
+ * in the sequence table to live in. If a tenant ever needs it, that is a migration, not a constant
+ * quietly changed here.
  */
 
 /** Matches the width the rest of the system already prints, for example `SO-0001`. */

@@ -1,7 +1,7 @@
 /**
  * What states a sales order can be in, and which moves between them are legal.
  *
- * Contract section 12.1 requires the legal transitions to be declared in an explicit transition
+ * Architecture section 12.1 requires the legal transitions to be declared in an explicit transition
  * table, enforced server side, with an illegal transition answering a domain error that names
  * the current state and the attempted one rather than a generic failure. This file is that
  * table. It is the first thing section 12.2's confirming transaction needs, because step one is
@@ -11,23 +11,15 @@
  * allocating the number, reserving the stock and recording the audit are the confirming
  * transaction's work, and section 12.2 is emphatic that it does all of them or none.
  *
- * WHY ONLY ONE TRANSITION IS DECLARED. The contract states the states and requires the table,
- * but nowhere states the sales order's own transitions. What it does state is that confirming
- * takes a draft and makes it a commitment, so `draft` to `confirmed` is the one move the
- * contract itself describes. The rest are driven by documents that do not exist yet: an order
- * becomes partially delivered because a delivery was posted against it, invoiced because an
- * invoice was. Declaring those now would be declaring transitions nothing can perform, and
- * guessing at rules the contract has not made.
+ * WHICH TRANSITIONS ARE DECLARED. Only those the architecture specifies. Confirming takes a draft
+ * and makes it a commitment, section 12.2. Section 12.3 makes an order cancellable from `draft`
+ * and from `confirmed`: cancelling releases every reservation the order holds, a cancelled draft
+ * keeps a null document number, and there is no accounting consequence. The delivery states are
+ * driven by a delivery document that does not exist, so no transition into them is declared.
  *
- * Cancellation was the deliberate omission here until the rule existed. Section 12.3 now carries
- * it, ruled 2026-09-13: a sales order may be cancelled from `draft` and from `confirmed`,
- * cancelling releases every reservation the order holds, a cancelled draft keeps a null document
- * number, and there is no accounting consequence. Those two moves are declared below because the
- * contract states them, which is the same bar draft to confirmed had to meet.
- *
- * `partially_delivered` is still refused, and still for a reason rather than an oversight. Goods
+ * Cancelling a `partially_delivered` order is refused for a reason rather than an oversight. Goods
  * are with a customer by then and undoing that is a return, which section 12.3 makes a new
- * document rather than a status change. Nothing can reach that state until deliveries exist.
+ * document rather than a status change.
  *
  * DENY BY DEFAULT. A pair that is not listed is illegal, in the same posture section 6.2 takes
  * for authorization. Adding a document type later means adding its transitions here, and

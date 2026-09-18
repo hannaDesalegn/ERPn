@@ -30,7 +30,7 @@ describe('extendIdleWindow', () => {
 
   it('never pushes past the absolute expiry', () => {
     // Without this clamp, a session used once a minute would live forever, and every single
-    // extension would look reasonable in isolation. Contract section 5.3.
+    // extension would look reasonable in isolation. Architecture section 5.3.
     const absolute = minutesFrom(NOW, 720);
     const nearTheEnd = minutesFrom(NOW, 700);
 

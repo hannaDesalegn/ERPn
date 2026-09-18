@@ -1,7 +1,7 @@
 /**
  * Password hashing.
  *
- * Contract section 5.2: passwords hashed with argon2id, with parameters recorded in
+ * Architecture section 5.2: passwords hashed with argon2id, with parameters recorded in
  * configuration and reviewed periodically.
  *
  * `@node-rs/argon2` rather than the node-gyp based `argon2` package. Both implement the same

@@ -1,7 +1,7 @@
 /**
  * Migration entry point. Run with `npm run db:migrate`.
  *
- * A separate process from the API on purpose. Contract section 15.4: migrations run as a
+ * A separate process from the API on purpose. Architecture section 15.4: migrations run as a
  * gated deployment step, never automatically at application start, so that a rolling restart
  * cannot race a schema change.
  *

@@ -1,9 +1,9 @@
 /**
  * Double-entry accounting.
  *
- * WE ARE NOT IMPLEMENTING THE ACCOUNTING ENGINE TODAY.
- * We are defining the shapes the UI must be able to display, so that when a real
- * ledger exists behind it the frontend does not need restructuring.
+ * These are the shapes the accounting screens display. The backend ledger lives
+ * in `apps/api`; the frontend reads only an invoice's own journal entry from it,
+ * and the remaining accounting screens render fixtures.
  *
  * ============================================================================
  * DOUBLE-ENTRY IN FIVE MINUTES

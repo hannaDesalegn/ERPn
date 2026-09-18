@@ -489,7 +489,7 @@ describe('Posting a customer invoice', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // 2. The journal entry, which is what slice 3 is for.
+  // 2. The journal entry.
   // -------------------------------------------------------------------------------------
 
   describe('the journal entry', () => {
@@ -651,7 +651,7 @@ describe('Posting a customer invoice', () => {
     });
 
     it('refuses a posting whose remainder was consumed after the draft was raised', async () => {
-      // THE CASE THE RULING IS ABOUT. Both drafts are legitimate when raised; the second is
+      // THE CASE SECTION 12.2 DESCRIBES. Both drafts are legitimate when raised; the second is
       // refused at posting, which is where section 12.2 puts validation against current state.
       const order = await confirmedOrder({ lines: [{ quantity: '10.000000' }] });
       const first = await draftFor({ salesOrderIds: [order.id], invoiceDate: '2026-09-16' });
@@ -680,7 +680,7 @@ describe('Posting a customer invoice', () => {
     });
 
     it('leaves the delivered quantity alone', async () => {
-      // Section 18.2: quantity movement belongs to the delivery path. Invoicing is not delivering.
+      // Section 9.8: quantity movement belongs to the delivery path. Invoicing is not delivering.
       const { order, draft } = await draftOfWholeOrder();
 
       await post(draft.invoice.id);
@@ -766,7 +766,7 @@ describe('Posting a customer invoice', () => {
 
       // AND THE LOSER LOST FOR THE RIGHT REASON. A deadlock or a serialization failure would also
       // leave one rejection, and would mean this test was passing while proving nothing about the
-      // remainder. The refusal has to be the one the ruling describes.
+      // remainder. The refusal has to be the one section 12.2 describes.
       const rejected = results.find((result) => result.status === 'rejected');
       expect((rejected as PromiseRejectedResult).reason).toMatchObject({
         reason: 'quantity_exceeded',
@@ -1193,8 +1193,8 @@ describe('Posting a customer invoice', () => {
 
   describe('the trail', () => {
     it('records the posting, and only the posting', async () => {
-      // Draft creation and editing are unaudited by the ruling of 2026-09-13: document audit
-      // begins at the irreversible moment. One event, and it is this one.
+      // Draft creation and editing are unaudited, per section 7.1: document audit begins at the
+      // irreversible moment. One event, and it is this one.
       const { draft } = await draftOfWholeOrder();
 
       const posted = await post(draft.invoice.id);

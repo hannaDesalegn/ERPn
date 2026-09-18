@@ -1,10 +1,9 @@
 /**
  * Confirming a sales order.
  *
- * Section 12.2's irreversible moment, and the first operation in this system that is entirely
- * composition. Every mechanism it uses was built and proved on its own: the transition table, the
- * grants read, the reservation under its balance row lock, the gapless allocator, the audit
- * append. Nothing is reimplemented here, and that is the point of the increment.
+ * Section 12.2's irreversible moment for the sales order, built entirely by composition. Every
+ * mechanism it uses is proved on its own: the transition table, the grants read, the reservation
+ * under its balance row lock, the gapless allocator, the audit append. Nothing is reimplemented.
  *
  * THE SIX STEPS, IN THE ORDER SECTION 12.2 GIVES THEM:
  *
@@ -200,8 +199,8 @@ export async function confirmSalesOrder(
   // work is one connection and because the locks have to be taken in a stated order.
   //
   // IN CANONICAL LOCK ORDER, NOT LINE ORDER. Section 10.2 requires the acquisition order to be
-  // documented and followed, and this loop used to claim line order satisfied it. It does not.
-  // Line order is an order within one document and nothing across two: an order listing widget
+  // documented and followed, and line order does not satisfy it. Line order is an order within one
+  // document and nothing across two: an order listing widget
   // then gadget and another listing gadget then widget acquire the same two locks in opposite
   // sequences, and deadlock. `inLockOrder` sorts by the balance key itself, which is the same
   // sequence for every transaction in the system touching the same rows.

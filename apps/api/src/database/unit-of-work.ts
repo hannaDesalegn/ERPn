@@ -4,9 +4,9 @@
  * This is what makes tenant scope mandatory rather than merely conventional. Repositories are
  * never exported as constructible classes and never handed a raw database handle by a caller.
  * The only way to obtain one is to be given it inside a callback that this class has already
- * wrapped in a transaction with the tenant context set. Contract section 6.3.
+ * wrapped in a transaction with the tenant context set. Architecture section 6.3.
  *
- * WHY A TRANSACTION IS NOT OPTIONAL. Contract section 2.4 rules that context reaches the
+ * WHY A TRANSACTION IS NOT OPTIONAL. Architecture section 2.4 rules that context reaches the
  * database as transaction local settings. `SET LOCAL` outside a transaction does nothing, the
  * setting stays empty, and every policy comparison against an empty setting is false. The
  * result would be a silent, total denial rather than a leak, which is the safe direction, but it
@@ -71,7 +71,7 @@ export class UnitOfWork {
   /**
    * Runs work as a real person inside one company.
    *
-   * The scope comes from the server side session, per contract section 2.5. It is never built
+   * The scope comes from the server side session, per architecture section 2.5. It is never built
    * from anything the client sent.
    */
   async inActorScope<T>(
@@ -85,7 +85,7 @@ export class UnitOfWork {
    * Runs work for an authenticated person who has not entered a company.
    *
    * The narrowest scope there is. It reaches the global tables and the reader's own membership
-   * rows, which is exactly what resolving company context needs and nothing more. Contract
+   * rows, which is exactly what resolving company context needs and nothing more. Architecture
    * section 2.5: the answer to "which companies may I enter" is computed here, from membership
    * rows, and never taken from the request.
    */
@@ -122,7 +122,7 @@ export class UnitOfWork {
       // `set_config(name, value, true)` is SET LOCAL: it lives for this transaction and is
       // discarded on commit or rollback, so nothing survives onto the pooled connection.
       //
-      // Parameterised, not interpolated. Contract section 14.2 permits no SQL assembled by
+      // Parameterised, not interpolated. Architecture section 14.2 permits no SQL assembled by
       // string concatenation, and a context value spliced into a statement would be the one
       // place an injection could rewrite the tenant boundary itself.
       await client.query('SELECT set_config($1, $2, true)', [

@@ -1,7 +1,7 @@
 /**
  * The session cookie.
  *
- * Contract section 5.1: the client receives an opaque session identifier in a cookie. Criterion
+ * Architecture section 5.1: the client receives an opaque session identifier in a cookie. Criterion
  * 3 fixes the attributes: HttpOnly, Secure, SameSite. Everything about how that cookie is named,
  * written and cleared lives here, so there is one place to review and no second opinion
  * elsewhere in the codebase.

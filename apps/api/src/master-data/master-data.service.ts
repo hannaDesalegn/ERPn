@@ -3,8 +3,8 @@
  *
  * THREE LISTS AND NOTHING ELSE. Customers, products and warehouses, each as a picker needs them.
  * There is no create, no edit and no archive here: section 2.9 makes master data something a
- * company administers, and those screens are their own work. What these exist for is that a sales
- * order names a customer, a warehouse and a product, and until now nothing could offer a real one.
+ * company administers, and those screens are not implemented. What these exist for is that a sales
+ * order names a customer, a warehouse and a product.
  *
  * WHY ONE MODULE FOR THREE THINGS. Section 15.7 makes a module a business boundary rather than a
  * folder, and customers, products and warehouses are eventually three: parties, the catalogue, and

@@ -3,12 +3,11 @@
  *
  * These assert two different things, and both matter.
  *
- * First, that the application can reach a real PostgreSQL. That is the harness the rest of
- * slice 1 is built on, and it replaces the shell level reachability check that CI used before
- * this module existed.
+ * First, that the application can reach a real PostgreSQL, which every other integration test
+ * depends on.
  *
  * Second, and more importantly, that the role the application connects as is genuinely
- * restricted. Contract sections 2.4 and 7.1 ratified a two role setup where the API can never
+ * restricted. Architecture sections 2.4 and 7.1 require a two role setup where the API can never
  * own an object or issue DDL. That is a security boundary, and section 14.9 requires a test
  * proving the control works and a test proving its absence fails. Asserting that a privileged
  * operation is refused is the second of those.
@@ -76,7 +75,7 @@ describe('Database connection', () => {
 
     expect(role).toBeDefined();
     // A superuser or a BYPASSRLS role would be exempt from the policies that are the second
-    // isolation layer, which contract section 2.4 forbids.
+    // isolation layer, which architecture section 2.4 forbids.
     expect(role?.superuser).toBe(false);
     expect(role?.bypassrls).toBe(false);
   });

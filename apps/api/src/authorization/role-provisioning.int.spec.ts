@@ -1,7 +1,7 @@
 /**
  * Seeding a company's roles, changing who holds them, and the startup catalogue check.
  *
- * Contract sections 2.7 and 6.6, and criterion 11. The test that matters most here is the
+ * Architecture sections 2.7 and 6.6, and criterion 11. The test that matters most here is the
  * escalation one: an administrator of a company must not be able to mint authority they do not
  * hold by assigning a role that carries it, which is the classic way a role model becomes a way
  * around itself.

@@ -1,17 +1,18 @@
-# ERP (internship project)
+# ERP
 
-A multi-tenant ERP for a wholesale distribution business, built as an internship project. It is
-**not a complete ERP product.** The scope is deliberately small: a few workflows built for real,
-with the security properties a real system needs, instead of many modules that only look
-finished.
+A multi-tenant ERP for wholesale distribution. It covers a deliberately small scope, sales orders
+through to posted customer invoices, and implements it with the controls a real multi-tenant
+financial system needs: tenant isolation enforced in the database, server-side authorization,
+transactional posting with gapless numbering, stock reservation under concurrency, idempotent
+retries, and an append-only audit trail. It is **not a complete ERP product**; see
+[What is real, and what is not](#what-is-real-and-what-is-not).
 
-It is meant to be run from an empty database, demonstrated in a browser, and handed to a
-security team for testing.
+It runs from an empty database with one seed command and a set of demo accounts.
 
 **Stack:** NestJS 12 on Fastify, PostgreSQL 17 with row level security, Drizzle, React 19, Vite,
 Tailwind, TanStack Query.
 
-`docs/ARCHITECTURE.md` is the design contract the code is built against. You do not need to
+`docs/ARCHITECTURE.md` is the design specification the code is built against. You do not need to
 read it to run the system.
 
 ---
@@ -237,6 +238,37 @@ saved.
 
 ---
 
+## Security model
+
+- **Tenant and company isolation.** The active company comes from the server-side session, never
+  from a request. Every query is scoped by tenant and company in the data layer, and PostgreSQL
+  row level security enforces the same boundary as a second layer. A record in another company or
+  tenant answers `404`, exactly as a missing one does.
+- **Authorization.** Deny by default: every route declares public, authenticated, or a required
+  permission, and the API refuses to start if one declares nothing. Permissions are re-derived
+  from the database on every request. The browser's permission checks only decide what to draw.
+- **Sessions.** Opaque random tokens, stored only as SHA-256 hashes, in an `HttpOnly`,
+  `SameSite=Strict` cookie with idle and absolute expiry. Logout revokes the session server-side.
+  Passwords are hashed with argon2id, and failed logins are throttled per address and per account.
+- **Cross-site request forgery.** Every mutating request must carry an `X-CSRF-Token` header whose
+  value is bound to the session and read from the `erp_csrf` cookie, and the request's `Origin` is
+  checked server-side.
+- **Idempotency.** Mutating document endpoints require an `Idempotency-Key` header. A retry with
+  the same key replays the stored result; the same key with a different request is refused.
+- **Trust boundary.** Prices, totals, tax, statuses, document numbers and company identifiers are
+  never accepted from a request. Request bodies are validated strictly and unknown fields are
+  rejected.
+- **Audit.** Audit records are written in the same transaction as the change they describe, and
+  the application's database role cannot update or delete them.
+- **Response codes.** `401` not signed in, `403` signed in without the capability or a failed
+  forgery check, `404` not found or not yours, `409` a conflicting state or version, `422` a
+  well-formed request the business rules refuse.
+
+Section 17 of `docs/ARCHITECTURE.md` lists the security properties that automated tests prove,
+and section 16 lists the known limitations.
+
+---
+
 ## Configuration
 
 `apps/api/.env.example` lists every variable with a comment. The ones that matter to run the demo:
@@ -316,6 +348,6 @@ apps/api/            NestJS API
 apps/web/            React frontend
   src/services/      The only code that fetches data, real or fixture
   src/mocks/         Fixture data behind the Sample screens
-docs/ARCHITECTURE.md Design contract
+docs/ARCHITECTURE.md Design specification
 docker-compose.yml   PostgreSQL only
 ```

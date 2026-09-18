@@ -1,8 +1,8 @@
 /**
  * Identity and company context.
  *
- * Authentication answered who someone is. This answers where they are working, which contract
- * section 5.4 keeps as a separate question, and it is the last question before authorization.
+ * Authentication answered who someone is. This answers where they are working, which
+ * architecture section 5.4 keeps as a separate question, and it is the last question before authorization.
  * Nothing here decides what anyone may do.
  *
  * THE RULE THIS FILE EXISTS TO ENFORCE, from section 2.5: the active company is held in the

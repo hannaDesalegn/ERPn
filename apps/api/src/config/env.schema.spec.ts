@@ -69,7 +69,7 @@ describe('validateEnv', () => {
   });
 
   describe('authentication policy', () => {
-    // Contract section 5.3: deployment level, validated at startup so a malformed security
+    // Architecture section 5.3: deployment level, validated at startup so a malformed security
     // setting fails the boot rather than the first login.
     it('applies the documented defaults', () => {
       const env = validateEnv({ ...REQUIRED });

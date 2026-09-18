@@ -6,7 +6,7 @@
  * memberships to answer those questions for itself.
  *
  * It does not own authorization. What a role permits, and the refusal of a request that lacks
- * it, is a separate module in a separate increment.
+ * it, belongs to the authorization module.
  */
 
 import { Module } from '@nestjs/common';

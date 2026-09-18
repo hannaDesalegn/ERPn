@@ -2,8 +2,8 @@
  * Reserving stock, against a real PostgreSQL.
  *
  * Section 8.5 requires an order that would oversell to fail inside the transaction, and section
- * 10.2 gives the mechanism. The test that matters is the one the contract itself names in
- * section 13.1: two parallel confirmations of the last unit. Everything else here supports it.
+ * 10.2 gives the mechanism. The test that matters is the one the architecture names in section
+ * 13.1: two parallel confirmations of the last unit. Everything else here supports it.
  *
  * WHY THE RACE IS COORDINATED RATHER THAN TIMED. A test that fires two transactions and hopes
  * they overlap proves nothing on a fast machine. These hold the first transaction open at a known
@@ -417,7 +417,7 @@ describe('Reserving stock', () => {
     it('is refused even where the warehouse permits negative stock', async () => {
       // Section 8.5's requirement that an overselling order fails carries no exception, and its
       // negative stock policy is about stock rather than availability: reserving does not move
-      // anything off the shelf. The flag governs the movement, which is a later increment.
+      // anything off the shelf. The flag governs stock movements, not reservations.
       await stock(IN_A1, '2', PERMISSIVE_WAREHOUSE);
 
       const permissiveOrder = nextId('fc');
@@ -591,7 +591,7 @@ describe('Reserving stock', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // 11 to 14. The races, which are the point of the increment.
+  // 11 to 14. The races, which are the point of this suite.
   // -------------------------------------------------------------------------------------
 
   describe('two users racing for the last unit', () => {
@@ -774,7 +774,7 @@ describe('Reserving stock', () => {
       expect(reserveForOrderLine.length).toBe(2);
     });
 
-    it('implements no release, which section 12.3 has not ruled on', async () => {
+    it('grants no delete, so a reservation can be released but never removed', async () => {
       await stock(IN_A1, '10');
       await reserve(IN_A1, '4');
 

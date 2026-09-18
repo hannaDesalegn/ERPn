@@ -2,7 +2,7 @@
  * Drizzle definitions for the sales schema.
  *
  * These describe what `migrations/0005_sales_orders.sql` creates. They do not create it:
- * contract section 1.2 ratified handwritten SQL as the only thing that changes the database.
+ * architecture section 1.2 ratified handwritten SQL as the only thing that changes the database.
  * `schema-drift.int.spec.ts` reads the live catalogue and compares it against what is declared
  * here, so a change to either side that the other does not match fails the build.
  *

@@ -19,7 +19,7 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
 /**
  * Root module.
  *
- * Modules here are business boundaries, not folders. Contract section 15.7: a module never
+ * Modules here are business boundaries, not folders. Architecture section 15.7: a module never
  * reaches into another module's tables, it calls the owning module's service. Identity,
  * sales, purchasing, inventory and accounting each become a module as they are built.
  */
@@ -45,15 +45,15 @@ import { RouteDeclarationAudit } from './http/route-declarations.js';
     // forgotten on the two hundredth route, and the shape where forgetting produces a refusal
     // rather than an opening is the only one worth having.
     //
-    // Order matters and is the order of the questions. Did this come from our own page, section
-    // 14.4. Is there a live session, section 5. May this person do this here, section 6. A
+    // Order matters and is the order of the questions. Did this come from the application's own
+    // page, section 14.4. Is there a live session, section 5. May this person do this here, section 6. A
     // forged request is turned away before anything touches the database.
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: AccessGuard },
     RouteDeclarationAudit,
     // Section 11's retention job. Registered here rather than behind a scheduler because the
-    // repository carries no scheduling dependency and the contract names none; what a deployment
-    // runs it from is section 15's business. Exported so an operator or a scheduler can reach it.
+    // repository carries no scheduling dependency; what a deployment runs it from is section 15's
+    // concern. Exported so an operator or a scheduler can reach it.
     IdempotencyExpiryService,
   ],
   exports: [IdempotencyExpiryService],

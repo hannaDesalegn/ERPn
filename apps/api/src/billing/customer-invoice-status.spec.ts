@@ -24,8 +24,8 @@ describe('the customer invoice status union', () => {
   it('holds the two states a document actually moves between, and no derived ones', () => {
     // `paid`, `partially_paid` and `overdue` are conclusions drawn from payment allocations and
     // the clock, not states somebody moves an invoice into, and section 9.2 refuses a stored
-    // figure that duplicates a derivable one. `cancelled` is absent because section 12.3 has not
-    // ruled what cancelling an invoice means.
+    // figure that duplicates a derivable one. `cancelled` is absent because no cancellation rule
+    // exists for the invoice under section 12.3.
     expect([...CUSTOMER_INVOICE_STATUSES]).toEqual(['draft', 'posted']);
   });
 
@@ -50,7 +50,7 @@ describe('the customer invoice status union', () => {
 });
 
 describe('the transition table', () => {
-  it('declares posting, which section 17.5 states in as many words', () => {
+  it('declares posting, the transition section 12.2 describes', () => {
     expect(CUSTOMER_INVOICE_TRANSITIONS.draft).toEqual(['posted']);
     expect(canTransition('draft', 'posted')).toBe(true);
   });

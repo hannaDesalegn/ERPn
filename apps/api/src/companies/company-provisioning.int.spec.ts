@@ -524,7 +524,7 @@ describe('Company provisioning', () => {
     });
 
     it('lets a brand new company confirm its first order without a manual step', async () => {
-      // The whole point of the increment. Before it, this sequence of calls threw.
+      // The reason provisioning exists: a bare company row could not confirm an order.
       const { company } = await provisionA1();
 
       const allocated = await uow.inActorScope(

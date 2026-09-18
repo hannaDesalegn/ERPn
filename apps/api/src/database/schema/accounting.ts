@@ -2,7 +2,7 @@
  * Drizzle definitions for the chart of accounts and the value ledger.
  *
  * These describe what `migrations/0013_chart_of_accounts.sql` and `0014_journal_entries.sql`
- * create. They do not create it: contract section 1.2 ratified handwritten SQL as the only thing
+ * create. They do not create it: architecture section 1.2 ratified handwritten SQL as the only thing
  * that changes the database, and `schema-drift.int.spec.ts` compares these against the live
  * catalogue, so a change to either side that the other does not match fails the build.
  *

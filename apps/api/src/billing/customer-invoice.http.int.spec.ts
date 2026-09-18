@@ -942,7 +942,7 @@ describe('The customer invoice endpoints', () => {
       });
 
       // Receivables debited the total and revenue credited the net. The company charges no tax,
-      // so there is no third line: a zero tax line is omitted, which is the posting ruling.
+      // so there is no third line: a zero tax line is omitted, per section 9.8.
       const sides = entry.lines.map(
         (line: { account: { type: string; code: string; name: string }; debit: string; credit: string }) => ({
           type: line.account.type,

@@ -1,5 +1,5 @@
 /**
- * Building the internship demo environment on a freshly migrated database.
+ * Building the demo environment on a freshly migrated database.
  *
  * NOT A SECOND PROVISIONING PATH. Every company is created by `CompanyProvisioningService`, so it
  * gets its roles, both numbering sequences, its chart of accounts, its posting account mapping
@@ -154,8 +154,8 @@ export class DemoSeedService {
   /**
    * Admits each further member, and has the administrator give them their role.
    *
-   * The membership is written under the provisioning scope because no endpoint creates one yet:
-   * invitations are outside this work per section 17.2. The role is not. It goes through the
+   * The membership is written under the provisioning scope because no endpoint creates one:
+   * invitations are not implemented. The role is not. It goes through the
    * same service the administration endpoint calls, as the company's administrator, so a role
    * this dataset tried to hand out beyond the administrator's own authority would be refused
    * here exactly as it would be over HTTP.

@@ -1,7 +1,7 @@
 /**
  * Refuses to start with a route that declares no access rule.
  *
- * Contract section 6.2 and criterion 7: every registered route declares the permission it
+ * Architecture section 6.2 and criterion 7: every registered route declares the permission it
  * requires, and a route that declares none fails to register. The guard already denies such a
  * route at request time, so nothing is exposed either way. The reason to fail the boot as well
  * is that a silent denial is discovered by a user hitting a 403 on a feature that was supposed

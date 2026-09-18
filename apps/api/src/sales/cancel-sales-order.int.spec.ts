@@ -1,7 +1,7 @@
 /**
  * Cancelling a sales order, against a real PostgreSQL.
  *
- * Section 12.3's ruling of 2026-09-13 makes cancelling three things at once: a status change, a
+ * Section 12.3 makes cancelling three things at once: a status change, a
  * release of everything the order holds, and an audit record. Section 12.2's shape applies to it
  * whole: all of them or none. Most of what follows is an attempt to get one of the three without
  * the others, and what must be true afterwards is always the same, that nothing survives.
@@ -539,7 +539,7 @@ describe('Cancelling a sales order', () => {
 
   describe('a draft', () => {
     it('becomes cancelled and stays unnumbered', async () => {
-      // The half of section 12.3's ruling that needed migration 0012. A draft raised nothing,
+      // The half of section 12.3 that needed migration 0012. A draft raised nothing,
       // so it is not given a number on the way out.
       const orderId = await draft(TENANT_A, COMPANY_A1, [
         { productId: WIDGET[COMPANY_A1]!, quantity: '10' },
@@ -751,7 +751,7 @@ it('records the roles the actor held at the time', async () => {
     });
 
     it('writes no reason column on the order, because there is none', async () => {
-      // Section 12.3's ruling puts the reason in the payload alone. A column would make it a
+      // Section 12.3 puts the reason in the payload alone. A column would make it a
       // property of the order that a later edit could rewrite.
       await ownerContext(TENANT_A, COMPANY_A1);
       const columns = await owner.query<{ column_name: string }>(

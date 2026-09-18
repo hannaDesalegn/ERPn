@@ -1,5 +1,5 @@
 /**
- * The startup half of the two checks in contract section 2.7.
+ * The startup half of the two checks in architecture section 2.7.
  *
  * There is no `permissions` table and therefore no foreign key. Section 2.7 replaces it with two
  * checks that catch different failures. The write-time check lives in the role repository and

@@ -23,9 +23,9 @@
  * nothing else is locked, which is the invariant that makes the balance row a sufficient
  * serialisation point for reservations: every writer of a reservation passes through here first.
  *
- * WHAT THIS DOES NOT DO. No release, no cancellation, no delivery, no status, and no idempotency.
- * Section 12.3 has not ruled what cancelling does to reserved stock, and section 11's idempotency
- * belongs at the endpoint rather than here.
+ * WHAT THIS DOES NOT DO. No release, no delivery, no status, and no idempotency. Releasing is part
+ * of cancelling an order (`sales/cancel-sales-order.ts`), and section 11's idempotency belongs at
+ * the endpoint rather than here.
  */
 
 import { randomUUID } from 'node:crypto';

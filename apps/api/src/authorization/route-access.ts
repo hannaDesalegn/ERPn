@@ -1,7 +1,7 @@
 /**
  * How a route declares what it requires.
  *
- * Contract section 6.2: deny by default, every route declares the permission it requires, and a
+ * Architecture section 6.2: deny by default, every route declares the permission it requires, and a
  * route that declares none fails to register. This file is the declaration vocabulary. The guard
  * enforces it per request and the startup audit enforces the "fails to register" half.
  *

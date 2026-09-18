@@ -1,7 +1,7 @@
 /**
  * The public surface of the data layer, asserted rather than assumed.
  *
- * Contract section 6.3: "Constructing an unscoped query must not be possible through the public
+ * Architecture section 6.3: "Constructing an unscoped query must not be possible through the public
  * interface of the data layer." That is a property of what the module exports, so it is tested
  * by inspecting the exports rather than by reading the code and trusting it.
  *

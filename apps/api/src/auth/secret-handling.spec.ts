@@ -87,10 +87,10 @@ describe('Secret handling in the authentication files', () => {
   it.each(sourceFiles)('%s embeds no credential shaped literal', (_name, source) => {
     const code = withoutComments(source);
 
-    // A hard coded argon2 hash is the specific mistake this catches. The decoy hash used to
-    // equalise timing for a nonexistent account was written as a literal once, which made it
-    // both a fake credential in source and a value argon2 rejects while parsing, so it returned
-    // immediately and defeated the very timing defence it was there to provide.
+    // A hard coded argon2 hash is the specific mistake this catches. A literal decoy hash, used
+    // to equalise timing for a nonexistent account, is both a fake credential in source and a
+    // value argon2 rejects while parsing, so it returns immediately and defeats the very timing
+    // defence it is there to provide.
     //
     // Matched inside quotes only. The PHC parser in password-hasher.ts holds the same prefix in
     // a regular expression, which is a reader of hashes rather than one of them, and a rule that

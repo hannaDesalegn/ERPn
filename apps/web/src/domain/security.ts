@@ -12,12 +12,12 @@
  * on every request. If the backend trusts a role sent by the client, the system
  * has no access control at all.
  *
- * We build it now anyway, because retrofitting permission awareness into an
- * existing UI means touching every screen. Designing the seam early is cheap.
+ * It exists anyway, because retrofitting permission awareness into an existing
+ * UI means touching every screen. Designing the seam early is cheap.
  * ============================================================================
  *
  * MODEL: role-based access control (RBAC). Users hold roles; roles grant
- * permissions; permissions are checked. We use `resource:action` strings, which
+ * permissions; permissions are checked. Permissions are `resource:action` strings, which
  * is the same shape most backends (Django guardian, Odoo groups, Casbin) can map
  * onto.
  */

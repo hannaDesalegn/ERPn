@@ -4,7 +4,7 @@ import { swcPlugin } from './vitest.shared.js';
 /**
  * Integration tests. These require a real PostgreSQL and will fail loudly without one.
  *
- * Contract section 13.2: the database is never mocked in a test that asserts a business
+ * Architecture section 13.2: the database is never mocked in a test that asserts a business
  * invariant. Constraints, grants and row level security policies are the logic, and a fake
  * proves nothing about any of them.
  *

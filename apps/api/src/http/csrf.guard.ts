@@ -7,8 +7,8 @@
  * forgetting produces a refusal.
  *
  * IT AUTHENTICATES NOTHING AND AUTHORIZES NOTHING. It never looks a session up, never reads a
- * role, and never decides who anyone is. It answers one question: did this request come from our
- * own page rather than from someone else's. A request that passes here is still refused by the
+ * role, and never decides who anyone is. It answers one question: did this request come from the
+ * application's own page rather than from someone else's. A request that passes here is still refused by the
  * access guard if there is no live session, and still refused again if the session lacks the
  * capability. Three guards, three questions, and none of them standing in for another.
  *

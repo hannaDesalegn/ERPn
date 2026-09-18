@@ -54,7 +54,7 @@ export interface Warehouse extends Stamps {
  * whole system becomes double-entry for goods — quantities are conserved, they
  * only move. Odoo works exactly this way.
  *
- * We model a single warehouse plus a signed quantity today, which is simpler to
+ * The model uses a single warehouse plus a signed quantity, which is simpler to
  * read. `MovementReason` below preserves the information that a full
  * source/destination model would carry, so upgrading later is a migration of
  * this one type rather than a rewrite of the whole module.

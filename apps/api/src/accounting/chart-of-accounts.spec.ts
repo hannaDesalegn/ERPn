@@ -52,8 +52,8 @@ describe('the normal balance of an account', () => {
 
 describe('the default chart of accounts', () => {
   it('holds the three accounts the first invoice posting writes, and no more', () => {
-    // Section 18.2 as amended 2026-09-15: receivables, revenue and tax, and nothing else. A
-    // fourth account here would be one nothing can post to.
+    // Section 9.8: receivables, revenue and tax, and nothing else. A fourth account here would
+    // be one nothing can post to.
     expect(DEFAULT_CHART_OF_ACCOUNTS.map((account) => account.name)).toEqual([
       'Accounts Receivable',
       'Tax Payable',

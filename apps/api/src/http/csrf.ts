@@ -1,7 +1,7 @@
 /**
  * Cross site request forgery: the token, the cookie, and the origin check.
  *
- * Contract section 14.4, which is specific about the model and worth quoting: "Because
+ * Architecture section 14.4, which is specific about the model and worth quoting: "Because
  * authentication uses cookies, every mutating request additionally requires a custom header that
  * a cross origin form cannot set, and the origin is checked server side. `SameSite` alone is
  * defence in depth, not the whole control."
@@ -27,8 +27,8 @@
  * value to the session closes that, because a planted pair does not match what this session's
  * token must be.
  *
- * It is derived rather than stored because the alternative is a column on `sessions`, and the
- * session store is not this increment's to change. HMAC keyed by the stored token hash gives a
+ * It is derived rather than stored because the alternative is another column on `sessions` to
+ * keep in step with the token. HMAC keyed by the stored token hash gives a
  * value that is deterministic for one session, different for every other, and unguessable
  * without the raw token. An attacker who has the raw token does not need forgery; they have the
  * session.

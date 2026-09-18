@@ -4,8 +4,8 @@
  * ERP CONCEPT — "party":
  * Many ERPs (Odoo especially) model customers and suppliers as ONE entity
  * (`res.partner`) with flags, because the same company can be both: you sell to
- * them and you also buy from them. We keep them as separate types here for
- * clarity, but both extend a common `PartyBase`, so merging them later is cheap.
+ * them and you also buy from them. They are separate types here for clarity,
+ * but both extend a common `PartyBase`, so merging them later is cheap.
  */
 
 import type { Address, ID, ISODate, Money, PartyType, Stamps } from './primitives';

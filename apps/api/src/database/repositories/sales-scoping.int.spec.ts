@@ -2,7 +2,7 @@
  * The sales repositories, against a real PostgreSQL.
  *
  * The schema suite already proved what the database refuses. This proves the layer above it
- * refuses the same things, which contract section 2.4 requires as the first of two layers and
+ * refuses the same things, which architecture section 2.4 requires as the first of two layers and
  * permits neither to stand alone. Everything here goes through the public data layer API rather
  * than through raw SQL, because that is the surface a future service will actually hold.
  *

@@ -1,7 +1,7 @@
 /**
  * The order balance rows are locked in, stated once.
  *
- * Contract section 10.2 requires a lock acquisition order to be documented and followed, so that
+ * Architecture section 10.2 requires a lock acquisition order to be documented and followed, so that
  * deadlocks are designed out rather than retried around. This file is that order. Every operation
  * that locks more than one balance row sorts its work through `byBalanceKey` first, and none of
  * them decides the order for itself.

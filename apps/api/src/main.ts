@@ -14,7 +14,7 @@ import { registerHttpPlugins } from './http/plugins.js';
  *
  * Fastify rather than Express. The deciding factor was not performance: the Express platform
  * package depends on multer, which carries unpatched denial of service advisories, and npm
- * overrides did not resolve them in this workspace. Contract section 14.8 requires the
+ * overrides did not resolve them in this workspace. Architecture section 14.8 requires the
  * dependency audit to pass, and section 14.9 says a control for a feature that does not exist
  * should be handled by not carrying the dependency at all. This application has no upload
  * surface, so the correct fix was to remove the dependency path rather than patch it.
@@ -34,7 +34,7 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
 
   // Terminates in-flight work on SIGTERM rather than dropping connections, which is what a
-  // container platform sends during a rolling deploy. Contract section 15.4.
+  // container platform sends during a rolling deploy. Architecture section 15.4.
   app.enableShutdownHooks();
 
   const config = app.get(ConfigService<Env, true>);

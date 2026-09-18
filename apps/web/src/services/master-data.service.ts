@@ -7,9 +7,8 @@
  * at the backend would give those screens a filter listing real warehouses that match none of the
  * rows beneath them.
  *
- * So the real read lives here and the fixture one stays where its remaining consumers are. Section
- * 16.1 removes the fixture layer per module as endpoints land, and inventory's has not. When it
- * does, that function goes and its callers come here.
+ * So the real read lives here and the fixture one stays where its remaining consumers are, until
+ * the inventory screens read the API and its callers come here.
  */
 
 import { request } from './client';

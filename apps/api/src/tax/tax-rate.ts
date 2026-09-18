@@ -1,9 +1,9 @@
 /**
  * The single place a tax rate is resolved.
  *
- * Contract section 2.9, as amended on 2026-09-11: the authoritative rate is a standard rate held
- * per company, and resolving one is one function that every document line goes through. That
- * last part is the whole reason this file exists on its own for three lines of code.
+ * Architecture section 2.9: the authoritative rate is a standard rate held per company, and
+ * resolving one is one function that every document line goes through. That last part is the
+ * whole reason this file exists on its own for three lines of code.
  *
  * WHAT IT BUYS. Section 9.7 puts a real tax engine in the future: jurisdictions, exemptions, and
  * reverse charge for cross border trade. When that arrives it replaces the body of this function

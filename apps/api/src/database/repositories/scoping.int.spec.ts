@@ -4,7 +4,7 @@
  * Two tenants are seeded with deliberately colliding data, and every assertion runs through the
  * public data layer API rather than through raw SQL. That is the point: the earlier isolation
  * tests proved the database refuses cross-tenant access, and these prove the application layer
- * above it does too, which contract section 2.4 requires as the first of two layers.
+ * above it does too, which architecture section 2.4 requires as the first of two layers.
  *
  * Everything here runs as the application role, so row level security applies throughout.
  */
@@ -118,7 +118,7 @@ describe('Scoped repositories', () => {
    * owning role. TRUNCATE is a privilege the owner holds by owning the table and that the
    * application role does not hold at all, which a test below proves.
    *
-   * No superuser is involved. Contract section 7.1 says a superuser exists to provision the
+   * No superuser is involved. Architecture section 7.1 says a superuser exists to provision the
    * two roles and is used for nothing else, and that is still true.
    */
   async function purge(): Promise<void> {
@@ -164,7 +164,7 @@ describe('Scoped repositories', () => {
     });
 
     it('makes a foreign identifier indistinguishable from a missing one', async () => {
-      // Contract section 6.1: a failure at the tenant dimension returns the same response as a
+      // Architecture section 6.1: a failure at the tenant dimension returns the same response as a
       // genuine miss, so identifiers cannot be probed.
       const [foreign, absent] = await uow.inActorScope(scopeA(), async (r) => [
         await r.companies.findById(COMPANY_B1),
@@ -296,7 +296,7 @@ describe('Scoped repositories', () => {
 
   describe('global tables', () => {
     it('finds a user from either tenant, because users are global', async () => {
-      // Contract section 4.6: users are not tenant scoped, and pretending otherwise would force
+      // Architecture section 4.6: users are not tenant scoped, and pretending otherwise would force
       // a user row per tenant, which section 2.6 rejected.
       const fromA = await uow.inActorScope(scopeA(), (r) => r.users.findById(USER_B));
       const fromB = await uow.inActorScope(scopeB(), (r) => r.users.findById(USER_A));
@@ -337,7 +337,7 @@ describe('Scoped repositories', () => {
     });
 
     it('does not expose any way to update or delete an audit row', () => {
-      // Contract section 7.1. The grant refuses it at the database; the interface removes the
+      // Architecture section 7.1. The grant refuses it at the database; the interface removes the
       // temptation one layer earlier by having no such method.
       const methods = ['append', 'listForEntity'];
 

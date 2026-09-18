@@ -1,12 +1,12 @@
 /**
  * Tenant isolation, verified through the application role. Criterion 31, and the negative
- * requirements in contract section 2.10.
+ * requirements in architecture section 2.10.
  *
  * Every assertion here runs as `erp_app`, and the first test proves that. This matters more
  * than it looks: an earlier round of these checks was written against the provisioning
  * superuser and reported that cross-tenant inserts succeeded. A superuser bypasses row level
  * security entirely, so that suite could not have failed no matter how broken the policies
- * were. Contract section 7.1 now forbids a superuser for exactly this reason, and the check
+ * were. Architecture section 7.1 now forbids a superuser for exactly this reason, and the check
  * below keeps the guarantee visible in the test output.
  *
  * Seed data is created by the owning role, asserted against, and removed afterwards, so the
@@ -161,7 +161,7 @@ describe('Tenant isolation', () => {
   });
 
   it('makes another tenant record indistinguishable from one that does not exist', async () => {
-    // Contract section 6.1: a failure at the tenant dimension returns the same response as a
+    // Architecture section 6.1: a failure at the tenant dimension returns the same response as a
     // genuine miss, so identifiers cannot be probed to learn what other companies hold.
     await asTenant(TENANT_B);
 

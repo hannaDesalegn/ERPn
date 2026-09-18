@@ -1,10 +1,9 @@
 /**
  * The reservation record, against a real PostgreSQL.
  *
- * This increment persists reservations and nothing else. There is no availability calculation,
- * no oversell check, no locking and no release, so none of that is tested here: a test for
- * behaviour that does not exist would pass for the wrong reason and read as though the work were
- * done.
+ * This suite covers the reservation record itself. Availability, the oversell check and locking
+ * are tested with the reservation operation in `inventory/reservations.int.spec.ts`, and release
+ * with cancellation in `sales/cancel-sales-order.int.spec.ts`.
  *
  * What is worth proving is integrity. A reservation names four things, and every one of them is
  * an opportunity to point at another company's row. The seed therefore puts a complete order in
@@ -400,7 +399,7 @@ describe('Stock reservations', () => {
 
     it('allows a warehouse other than the order\'s, which is not yet a rule', async () => {
       // Recorded rather than enforced. An order names one warehouse today, but nothing in the
-      // contract says a reservation must be taken there, and inventing that constraint would
+      // architecture says a reservation must be taken there, and inventing that constraint would
       // decide a question about partial shipment that nobody has asked yet.
       const reservation = await reserve(IN_A1, { warehouseId: OTHER_WAREHOUSE });
 
@@ -445,7 +444,7 @@ describe('Stock reservations', () => {
         repositories.stockReservations.listForOrderLine(LINE[COMPANY_A1]!),
       );
 
-      // Several rows for one line are permitted. Nothing in the contract makes a line's
+      // Several rows for one line are permitted. Nothing in the architecture makes a line's
       // reservation a single row, and a unique key would decide partial reservation by accident.
       expect(seen).toHaveLength(2);
     });
@@ -533,15 +532,12 @@ describe('Stock reservations', () => {
   });
 
   // -------------------------------------------------------------------------------------
-  // 10. What the schema guard should see, and what this increment refuses to offer.
+  // 10. What the schema guard should see, and what the repository refuses to offer.
   // -------------------------------------------------------------------------------------
 
   describe('the shape of the table', () => {
     it('holds a release stamp and a version, and still no status', async () => {
-      // Updated deliberately when section 12.3 was ruled on 2026-09-13, not weakened to pass.
-      // This test previously pinned the absence of all three, because the ruling did not exist.
-      //
-      // `released_at` is the whole of the lifecycle: a null stamp is active and a stamp is not.
+      // `released_at` is the whole of the lifecycle, per section 12.3: a null stamp is active and a stamp is not.
       // A status column beside it would be a second way to say the same thing, and two columns
       // that can disagree about one fact is how a second source of truth starts.
       //
@@ -556,12 +552,12 @@ describe('Stock reservations', () => {
       expect(names).toContain('released_at');
       expect(names).toContain('version');
       expect(names).not.toContain('status');
-      // The reason belongs to the cancelling order's audit record, per the same ruling.
+      // The reason belongs to the cancelling order's audit record, per section 12.3.
       expect(names).not.toContain('release_reason');
     });
 
     it('left the balance alone, with no reserved column', async () => {
-      // The decision this increment implements: reserved is derived from these rows, and
+      // Reserved is derived from these rows, and
       // `on_hand` remains the projection of the movement ledger and nothing else.
       await ownerContext(TENANT_A, COMPANY_A1);
       const columns = await owner.query<{ column_name: string }>(
@@ -574,9 +570,8 @@ describe('Stock reservations', () => {
     });
 
     it('holds no delete grant, so a release can never become a delete', async () => {
-      // Also updated deliberately for the 2026-09-13 ruling, and this is the half of it the
-      // database enforces. Cancelling releases reservations, and the ruling says released and
-      // not deleted, so the UPDATE grant arrived in migration 0012 and the DELETE grant did not.
+      // The half of section 12.3 the database enforces. Cancelling releases reservations, and a
+      // release is a stamp, not a delete, so migration 0012 grants UPDATE and no DELETE.
       // Application code cannot discard the record of what was held even by mistake, which is
       // the same posture section 7.1 takes for the audit table.
       const app = new Client({ connectionString: process.env['DATABASE_URL'] });
@@ -608,8 +603,8 @@ describe('Stock reservations', () => {
       );
 
       expect(methods).toContain('createUnderBalanceLock');
-      // Release arrived with the 2026-09-13 ruling and is named the same way, for the same
-      // reason: it changes what available comes to, so it is only correct under the lock.
+      // Release is named the same way, for the same reason: it changes what available comes
+      // to, so it is only correct under the lock.
       expect(methods).toContain('releaseUnderBalanceLock');
       expect(methods).not.toContain('create');
       expect(methods).not.toContain('reserve');

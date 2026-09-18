@@ -1,7 +1,7 @@
 /**
  * Creating a company's roles, and changing who holds them.
  *
- * Contract section 2.7: default role templates are seeded into a company when it is created,
+ * Architecture section 2.7: default role templates are seeded into a company when it is created,
  * and from that moment they are that company's own. Editing one affects nobody else, which is
  * the whole reason roles are data and the catalogue is code.
  *

@@ -1,5 +1,5 @@
 /**
- * The single configuration module. Contract section 15.2.
+ * The single configuration module. Architecture section 15.2.
  *
  * Global so that no other module has to import it, and cached so that reading a value is
  * not a repeated environment lookup. `validateEnv` runs during module initialisation, so a
@@ -17,7 +17,7 @@ import { validateEnv } from './env.schema.js';
       cache: true,
       validate: validateEnv,
       // No `envFilePath` in production. A .env file is a development convenience only;
-      // deployed environments inject configuration directly. Contract section 15.5.
+      // deployed environments inject configuration directly. Architecture section 15.5.
       ignoreEnvFile: process.env['NODE_ENV'] === 'production',
     }),
   ],

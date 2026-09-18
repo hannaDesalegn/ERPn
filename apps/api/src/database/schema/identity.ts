@@ -2,7 +2,7 @@
  * Drizzle definitions for the identity schema.
  *
  * These describe the schema that `migrations/0001_identity.sql` creates. They do not create
- * it: contract section 1.2 ratified handwritten SQL as the only thing that changes the
+ * it: architecture section 1.2 ratified handwritten SQL as the only thing that changes the
  * database. What lives here is the typed view the application queries through.
  *
  * THE RULE THAT KEEPS THESE TWO HONEST. Because the SQL and these definitions are maintained
@@ -41,7 +41,7 @@ const xid8 = customType<{ data: string; driverData: string }>({
 
 // ---------------------------------------------------------------------------------------
 // Global tables. No tenant_id, no company_id, no row level security.
-// Contract section 4.6 names these three as a closed exception.
+// Architecture section 4.6 names these three as a closed exception.
 // ---------------------------------------------------------------------------------------
 
 export const tenants = pgTable('tenants', {
@@ -102,7 +102,7 @@ export const companies = pgTable('companies', {
   legalName: text('legal_name'),
   baseCurrency: char('base_currency', { length: 3 }).notNull(),
   /**
-   * The company standard tax rate, per section 2.9 as amended 2026-09-11.
+   * The company standard tax rate, per section 2.9.
    *
    * A string for the reason section 4.3 gives about doubles, and at the same precision as
    * `sales_order_lines.tax_rate_percent`, which is what a document line snapshots it into.
@@ -192,7 +192,7 @@ export const membershipRoles = pgTable(
 
 /**
  * Append only. Scope columns are nullable here alone, constrained to the authentication
- * actions, because a failed login precedes any company. Contract section 7.3.
+ * actions, because a failed login precedes any company. Architecture section 7.3.
  *
  * No `version`: rows are never updated, and section 7.1 revokes UPDATE and DELETE from the
  * application role outright.
@@ -226,7 +226,7 @@ export const auditEvents = pgTable('audit_events', {
 });
 
 /**
- * Login throttling state. Global per contract section 4.6, amended 2026-09-10 to name it.
+ * Login throttling state. Global, per architecture section 4.6.
  *
  * Global by necessity: authentication precedes tenant resolution, and an attempt against an
  * address matching no account has no user and no tenant to attribute it to. No row level
@@ -258,7 +258,7 @@ export const schemaMigrations = pgTable('schema_migrations', {
 });
 
 // ---------------------------------------------------------------------------------------
-// Classification the drift test asserts against, so the rules in contract sections 4.2 and
+// Classification the drift test asserts against, so the rules in architecture sections 4.2 and
 // 4.6 are data rather than prose repeated in a test file.
 // ---------------------------------------------------------------------------------------
 
@@ -289,7 +289,7 @@ export const COMPANY_PARTITIONED_TABLES = [
 ] as const;
 
 /**
- * Exempt from `version`. Contract section 4.2 defines four shapes, and each entry below names
+ * Exempt from `version`. Architecture section 4.2 defines four shapes, and each entry below names
  * the one it claims. Adding a table here without being able to name its shape is a defect.
  *
  * | Table | Shape |
