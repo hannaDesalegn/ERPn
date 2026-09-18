@@ -106,6 +106,15 @@ jobs:
           APP_DB_PASSWORD: erp_app_ci
         run: sh ./docker/postgres/init/01-roles.sh
 
+      # The schema, applied the way a developer applies it: the same runner, as the owning role,
+      # through the same script the README gives. The integration tests assume a migrated
+      # database, exactly as they do locally.
+      - name: Apply migrations
+        env:
+          MIGRATION_DATABASE_URL: postgresql://erp_migrator:erp_migrator_ci@localhost:5432/erp_ci
+          APP_DB_ROLE: erp_app
+        run: npm run db:migrate
+
       # Integration tests against a real PostgreSQL, as section 13.1 requires and section
       # 13.2 insists on. They connect as the restricted application role, so they also prove
       # the two role separation ratified in sections 2.4 and 7.1 actually holds.
