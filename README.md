@@ -93,7 +93,10 @@ What each role may do is defined in `apps/api/src/authorization/permissions.ts`.
   cancel an order, post an invoice or read the audit log.
 - **Accountant:** invoices, invoice posting, accounting and the audit log. Can view sales orders
   but cannot create or confirm them.
-- **Warehouse Operator:** stock and read-only sales orders. Cannot see customers or prices.
+- **Warehouse Operator:** stock and read-only sales orders. Cannot list customers, raise or post
+  invoices, or see the journal. **Can see prices:** reading a sales order returns its unit prices
+  and totals, because hiding individual fields from a role that may read the document is not
+  implemented. This is a known limitation, not an authorization bypass.
 
 Signing in is throttled per address and per account: by default 10 failed attempts within 15
 minutes lock further attempts for 15 minutes (`AUTH_*` settings in `apps/api/.env`). Keep that in
@@ -147,8 +150,9 @@ which is the point.
 **As the salesperson**
 
 1. Sign in as `demo-sales@erp.test`.
-2. Use the company selector in the top bar to switch between East and West, then choose
-   **Demo Distribution East**.
+2. This account belongs to two companies, so a **Choose a company** screen appears. Choose
+   **Demo Distribution East**. The company selector in the top bar switches between East and
+   West afterwards. An account with one company enters it directly.
 3. Open **Sales orders** and create an order for `CUST-001` with 10 of `SKU-1001`.
 4. Confirm it. It receives the number `SO-0001` and reserves 10 boxes.
 5. Create a second order for 6 of `SKU-1004` and try to confirm it. It is refused: only 5 are
@@ -162,7 +166,9 @@ which the sales role does not hold.
 6. Sign out and sign in as `demo-accountant@erp.test`. East is the only company this account
    belongs to.
 7. Open **Sales orders**, open `SO-0001`, and choose **Create invoice**. A draft invoice opens,
-   billing everything on the order at the prices the order agreed.
+   billing everything on the order at the prices the order agreed. **Copy the invoice's address
+   from the browser's address bar now:** steps 11 and 12 open it again, and nothing else links to
+   it (see the note below).
 8. Choose **Post invoice**. The invoice receives the number `INV-0001` and its status becomes
    Posted.
 9. The **Journal entry** panel shows what posting wrote: Accounts Receivable debited and Sales
@@ -172,14 +178,16 @@ which the sales role does not hold.
 
 **Checking the boundaries**
 
-11. Open the same invoice as `demo-sales@erp.test`. It can be read, there is no **Post invoice**
-    button, and the journal and history panels say the account lacks permission.
-12. Switch the salesperson to West and open the invoice's address again: it is not found. The
-    same happens for `demo-trading-admin@erp.test`, in the other tenant.
+11. Sign out, sign in as `demo-sales@erp.test`, choose East, and paste the invoice address copied
+    in step 7. The invoice can be read, there is no **Post invoice** button, and the journal and
+    history panels say the account lacks permission.
+12. Switch the salesperson to West with the top bar selector and open the same address again: the
+    invoice is not found. The same happens for `demo-trading-admin@erp.test`, in the other tenant.
 13. Sign in as `demo-admin@erp.test` to cancel an order and to see a sales order's history panel.
 
-An invoice is reached from its sales order or by its address. The invoice list is still sample
-data, so it does not list real invoices.
+An invoice opens automatically right after **Create invoice**. After that it is reachable only by
+its address: the sales order does not link to the invoices raised from it, and the invoice list
+is still sample data, so it does not list real invoices.
 
 ---
 
@@ -201,8 +209,9 @@ data, so it does not list real invoices.
   see the journal entry and audit record the posting wrote. Posting allocates a gapless invoice
   number, consumes the invoiced quantities under lock, writes a balanced entry and an audit record,
   and commits all of it or none of it. Retries are idempotent.
-- Editing an invoice draft and raising one from several orders exist over the API
-  (`PUT /api/customer-invoices/:id`), with no screen.
+- Two invoice operations exist over the API with no screen: raising one draft from several orders
+  (`POST /api/customer-invoices` with more than one order) and editing a draft
+  (`PUT /api/customer-invoices/:id`).
 
 ### Sample data only
 
@@ -223,6 +232,8 @@ saved.
   exist only through the demo seed.
 - A company tax rate other than zero. Every demo company has a standard rate of 0%, because no
   endpoint sets one yet.
+- Field level restriction, such as hiding prices from the warehouse role. A role that may read a
+  document sees all of it.
 
 ---
 
